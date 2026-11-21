@@ -1377,7 +1377,7 @@ describe("a gather shaped for Home", () => {
         expect(counting(few.calls.queries)).toEqual([]);
       });
 
-      describe("and the promote list of what it read", () => {
+      describe("and the Promote list of what it read", () => {
         /** Production as it runs: Deployment 800 of commit `e…`, committed on 2026-11-02 at 09:00, which succeeded at 09:15 and nothing has superseded. */
         const LIVE = aRawDeployment({ databaseId: 800, createdAt: "2026-11-02T09:10:00Z", commitOid: PROMOTED, commit: { committedDate: "2026-11-02T09:00:00Z" }, statuses: succeededAt("2026-11-02T09:15:00Z") });
         const numbers = (list: ReturnType<typeof promoteListOf>) => list?.entries.map(({ pullRequest }) => pullRequest);

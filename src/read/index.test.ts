@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isUi } from "../evidence/uiEvidence.ts";
 import { DEFAULT_KIT_CONFIG, type UiConfig } from "../kit/config.ts";
-import { aCheckIssue, aGateRerunDone, aLabelAdded, aMergedLastDay, anOpenPullRequest, aPassNaming, factsOf, homeFactsOf, standingFactsOf } from "./builders.ts";
+import { aCheckIssue, aGateRerunDone, aLabelAdded, aMergedLastDay, anOpenPullRequest, aPassNaming, aStagingFacts, factsOf, homeFactsOf, standingFactsOf } from "./builders.ts";
 import { A_BLOCKED_ISSUE, A_ROW_KEPT_AT_V3_4_1, A_STANDING_KEPT_AT_SCHEMA_1, EXPORT_CALLS, EXPORT_SHAPES, NOT_DATA } from "./exports.fixture.ts";
 import type { Row, Standing } from "./index.ts";
 
@@ -153,11 +153,9 @@ describe("the read library's Staging trial (#856)", () => {
     const facts = (fixLabels: readonly ReturnType<typeof aLabelAdded>[]) =>
       homeFactsOf({
         kit,
-        staging: {
+        staging: aStagingFacts({
           since: { from: "staging", deployment: 600, commit: "s".repeat(40), at: "2026-11-01T09:00:00Z", deployedAt: "2026-11-01T09:10:00Z" },
           unpromoted: [aMergedLastDay("2026-11-05T10:00:00Z")],
-          promoted: [],
-          plain: [],
           mergedSince: 1,
           trials: {
             pullRequests: [
@@ -166,9 +164,7 @@ describe("the read library's Staging trial (#856)", () => {
             ],
             problems: [{ issue: 70, pullRequest: 50, title: "The cart total reads 0", open: false, closedAs: "completed" }],
           },
-          evidenceMarkers: [],
-          shotsMarkers: [],
-        },
+        }),
       });
 
     const [found] = rowsOf(facts([]), null, null, null, "2026-11-09T12:00:00Z");
@@ -186,7 +182,7 @@ describe("the read library's Staging trial (#856)", () => {
   });
 });
 
-describe("the read library's promote list (#857)", () => {
+describe("the read library's Promote list (#857)", () => {
   const STAGED = { ...homeFactsOf().kit, config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" }, staging: { url: "https://staging.shop.example", environment: "staging" } } } } as const;
 
   it("says what a production deployment would take, from a gather's facts and a staging read: its start, each agent pull request with the result its row's Standing at Staging has, each Plain one with its kind, the count not yet accepted, and the dispatch page", async () => {
@@ -225,7 +221,7 @@ describe("the read library's promote list (#857)", () => {
     const by = { deployment: 880, commit: "p".repeat(40), at: "2026-11-09T11:00:00Z" };
     const staged = homeFactsOf({
       kit: STAGED,
-      staging: { since: { from: "production", ...by, at: "2026-11-09T10:30:00Z", deployedAt: by.at }, unpromoted: [], promoted: [{ ...merge, by }], plain: [], mergedSince: 0, trials: { pullRequests: [], problems: [] }, evidenceMarkers: [], shotsMarkers: [] },
+      staging: aStagingFacts({ since: { from: "production", ...by, at: "2026-11-09T10:30:00Z", deployedAt: by.at }, promoted: [{ ...merge, by }] }),
     });
     const names = (facts: ReturnType<typeof homeFactsOf>, deployments: Parameters<typeof rowsOf>[3], now: string) => rowsOf(facts, null, null, deployments, now).map(({ standing }) => [standing.place, standing.name, standing.since]);
 

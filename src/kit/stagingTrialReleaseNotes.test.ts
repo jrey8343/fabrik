@@ -8,9 +8,11 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { KIT, RELEASED_NOTES } from "../__fixtures__/repoScan.ts";
+import { withCarriedLines } from "../loop/carriedLines.ts";
 import { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
 import { EXPORT_CALLS, EXPORT_SHAPES } from "../read/exports.fixture.ts";
 import {
+  aStagingFacts,
   DEFAULT_KIT_CONFIG,
   type DeployOf,
   type Facts,
@@ -60,15 +62,29 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Staging trials release notes, wh
     expect(releasing).toContain("new behaviour or new Kit config fields. Every new field has a default");
     expect(releasing).toContain("the feature stays dormant until the step is done");
     expect(releasing).toContain("A new export, a new field or a new Standing name is not.");
+    expect(releasing).toContain("A new place for a Standing is counted as a new name is, and so is a name a Standing already had when it is said at the new place with a meaning of its own there");
 
     expect(why).toContain("It adds behaviour, so not a patch.");
     expect(why).toContain("two Kit config fields, `staging` and `production.workflow`, each `null` by default");
     expect(why).toContain("a new export, a new field or a new Standing name is not a major");
+    expect(why).toContain("a new place is counted as a new name is");
+    expect(why).toContain("`deploying` at Staging also says a deploy that succeeded and whose Main checks have not passed");
     expect(why).toContain("removes nothing the read library exports and changes what none of it means");
     expect(why).toContain("changes no caller or shim");
     expect(why).toContain("no new permission for the Fabrik App");
     expect(why).toContain("stays dormant until");
     expect(why).toContain("**To turn it on**");
+  });
+
+  it("say the one thing that changes with no action, and that it is the Loop's only change: a Design session's rewrite keeps a Trial problem's line, in every repo", async () => {
+    const noAction = section(await read(NOTES), "What changes with no action");
+
+    expect(noAction).toContain(`a Design session's rewrite of an issue's body now keeps a Trial problem's line, \`${trialProblemLine(50)}\``);
+    expect(noAction).toContain("In every repo, with the block or without it");
+    expect(noAction).toContain("That is the only change to the Loop.");
+    // The rewrite itself: the line outlives it, and a body with none is rewritten to exactly what was written.
+    expect(withCarriedLines("## What to build", `The cart total reads 0 on staging.\n\n${trialProblemLine(50)}`)).toBe(`## What to build\n\n${trialProblemLine(50)}`);
+    expect(withCarriedLines("## What to build", "The cart total reads 0 on staging.")).toBe("## What to build");
   });
 
   it("say how to turn it on, in three steps: declare staging in the Operator's own pull request, run Setup again for the two labels, and optionally declare production.workflow; the Pilot first", async () => {
@@ -95,7 +111,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Staging trials release notes, wh
     const notes = await read(NOTES);
     const glossary = await read("GLOSSARY.md");
 
-    for (const term of ["Staging trial", "Trial problem", "Standing", "Main check", "Plain pull request"]) {
+    for (const term of ["Staging trial", "Trial problem", "Promote list", "Standing", "Main check", "Plain pull request"]) {
       const avoid = new RegExp(`^\\*\\*${term}\\*\\*:\\n.*\\n_Avoid_: (.*)$`, "m").exec(glossary)?.[1];
       expect(avoid, term).toBeDefined();
       expect(notes, term).toContain(term);
@@ -108,7 +124,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Staging trials release notes, wh
     }
   });
 
-  it("give only the figures the code holds: the 24 hours a settled Standing lasts, the hour before No deploy seen, the 100 merges a promote list holds and the Standing's schema", async () => {
+  it("give only the figures the code holds: the 24 hours a settled Standing lasts, the hour before No deploy seen, the 100 merges a Promote list holds and the Standing's schema", async () => {
     const notes = await read(NOTES);
     const hours = [...notes.matchAll(/(\d+) hours?\b/g)].map((match) => Number(match[1]));
     const mostRecent = [...notes.matchAll(/the (\d+) most recent/g)].map((match) => Number(match[1]));
@@ -117,16 +133,11 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Staging trials release notes, wh
     const list = promoteListOf(
       homeFactsOf({
         kit: { repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, staging: { url: "https://staging.shop.example", environment: "staging" } } }, dispatch: null },
-        staging: {
+        staging: aStagingFacts({
           since: { from: "staging", deployment: 1, commit: "s".repeat(40), at: "2026-11-01T09:00:00Z", deployedAt: "2026-11-01T09:05:00Z" },
-          unpromoted: [],
-          promoted: [],
           plain: merges,
           mergedSince: merges.length,
-          trials: { pullRequests: [], problems: [] },
-          evidenceMarkers: [],
-          shotsMarkers: [],
-        },
+        }),
       }),
       null,
       NOW,
@@ -187,13 +198,13 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Staging trials release notes, wh
       expect(missingFrom(standing, [...STAGING_DETAIL, ...TRIAL, ...TRIAL_WHYS])).toEqual([]);
     });
 
-    it("every key of a row's staging, of a staging read and of a promote list, and each result an agent entry can have", () => {
+    it("every key of a row's staging, of a staging read and of a Promote list, and each result an agent entry can have", () => {
       const list = EXPORT_SHAPES["PromoteList"] as PromoteList;
       const entries = EXPORT_SHAPES["PromoteEntry"] as readonly PromoteEntry[];
       const agent = entries.flatMap((entry) => (entry.is === "agent" ? [entry] : []));
 
       expect(Object.keys(list).toSorted()).toEqual([...PROMOTE_LIST].toSorted());
-      expect(missingFrom(bullet("The promote list.**"), [...PROMOTE_LIST, ...ENTRY, ...RESULTS, ...NOT_ON_STAGING])).toEqual([]);
+      expect(missingFrom(bullet("The Promote list.**"), [...PROMOTE_LIST, ...ENTRY, ...RESULTS, ...NOT_ON_STAGING])).toEqual([]);
       expect([...new Set(agent.map(({ result }) => result.is))].toSorted()).toEqual([...RESULTS].toSorted());
       expect(Object.keys(agent[0]?.staging ?? {}).toSorted()).toEqual([...ROW_STAGING].toSorted());
       expect(missingFrom(bullet("The rows."), [...ROW_STAGING, ...STAGING_READ, "rowsOf", "Row", "staging"])).toEqual([]);
@@ -265,6 +276,9 @@ type NotOnStaging = Extract<AgentEntry["result"], { readonly is: "not-on-staging
 
 /** What the release adds to the read library's entry. */
 const NEW_EXPORTS = [
+  "aStagingFacts",
+  "aStagingRead",
+  "aMainChecksRead",
   "readMainChecks",
   "joinStaging",
   "stagingMergesToRead",
@@ -298,7 +312,7 @@ const A_NEWEST_READ = { newest: true } satisfies NonNullable<Parameters<typeof r
 const CHECK_STATES = valuesOf<MainCheckOf["is"]>()("green", "red", "undecided");
 const UNREAD = valuesOf<Extract<MainChecksRead["commits"][string], string>>()("unread");
 const PROMOTE_LIST = keysOf<PromoteList>()("repo", "start", "entries", "notAccepted", "leftOut", "dispatchPage");
-const ENTRY = [...keysOf<PromoteEntry>()("is"), ...keysOf<AgentEntry>()("result")];
+const ENTRY = [...keysOf<PromoteEntry>()("is"), ...keysOf<AgentEntry>()("result", "standing")];
 const RESULTS = valuesOf<AgentEntry["result"]["is"]>()("untried", "accepted", "problem", "no-screen", "not-on-staging");
 const NOT_ON_STAGING = keysOf<NotOnStaging>()("name", "unread");
 const FACTS = keysOf<Facts>()("staging");

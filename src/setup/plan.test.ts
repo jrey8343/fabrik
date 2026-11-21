@@ -777,6 +777,7 @@ describe("The starters the Product repo then owns", () => {
       ui: null,
       preview: { url: null },
       production: null,
+      staging: null,
       time_zone: null,
     });
     expect(resolveKitConfig({ config: written(actions, ".fabrik/config.json") ?? null })).toEqual({
@@ -1272,25 +1273,25 @@ describe("The staging block, which Setup proposes beside production's", () => {
     return resolved.ok ? resolved.config.staging : resolved.errors;
   };
 
-  it("writes the starter with a staging block Kit config accepts, and names the block and both values in the plan", () => {
+  it("writes the starter with its staging member set where it stands, a block Kit config accepts, and names the block and both values in the plan", () => {
     const { actions } = planSetup(aCleanProduct(), kit, { staging: trial });
 
     const config = written(actions, ".fabrik/config.json");
     expect(declared(config)).toEqual(trial);
     expect(config).toBe(
       kit.templates.kitConfig.replace(
-        '  "time_zone": null\n',
-        '  "time_zone": null,\n  "staging": {\n    "url": "https://staging.clinic.example.com",\n    "environment": "staging"\n  }\n',
+        '  "staging": null,\n',
+        '  "staging": {\n    "url": "https://staging.clinic.example.com",\n    "environment": "staging"\n  },\n',
       ),
     );
     expect(why(actions)).toBe(`write .fabrik/config.json (a starter Kit config with every v1 default, and ${NAMED})`);
   });
 
-  it("writes no staging member when the Operator declined, in a starter or in an existing Kit config", () => {
+  it("declares no staging when the Operator declined: the starter as it is, its staging null as every default is spelled out, and no write to an existing Kit config", () => {
     const own = '{\n  "max_in_flight": 1\n}\n';
 
     expect(written(planSetup(aCleanProduct(), kit, {}).actions, ".fabrik/config.json")).toBe(kit.templates.kitConfig);
-    expect(kit.templates.kitConfig).not.toContain("staging");
+    expect(JSON.parse(kit.templates.kitConfig)).toMatchObject({ production: null, staging: null });
     expect(written(planSetup(withConfig(own), kit, {}).actions, ".fabrik/config.json")).toBeUndefined();
   });
 

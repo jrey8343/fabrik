@@ -71,5 +71,6 @@
     "url": "https://deploy-preview-{pr}--clinic.netlify.app"
   },
   "production": null,
+  "staging": null,
   "time_zone": null
 }

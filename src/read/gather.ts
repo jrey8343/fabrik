@@ -17,12 +17,12 @@
 // (#856, ADR-0038): the agent pull requests merged since the newest
 // successful production Deployment, the 100 most recent at most, with the
 // label events a Staging trial's result is read from and the Trial problems
-// that name them; and, for the promote list and for Live counted from the
+// that name them; and, for the Promote list and for Live counted from the
 // production Deployment (#857), the Plain pull requests merged to the default
 // branch since that start, how many merged since it in all, and the agent
 // pull requests a production Deployment took in the last 24 hours. A repo
 // that declares none is asked what it ever was.
-// The rows are worked out from its facts by ./rows.ts, and the promote list
+// The rows are worked out from its facts by ./rows.ts, and the Promote list
 // by ./promoteList.ts.
 import { gatherWeeklyRunIssues, isAgent, labelEventsOf, openIssueOf, openKitIssueOf, openPullRequestOf, plainPullRequestOf } from "../github/facts.ts";
 import { pagesOf, type ReadClient, type Repo, whyUnread } from "../github/client.ts";
@@ -73,10 +73,10 @@ const STATUSES_KEPT_MS = 90 * 24 * 60 * 60 * 1000;
 
 /**
  * How many merged pull requests a gather keeps past the last day, in a repo
- * that declares `staging`: the most recent merges since the promote list's
+ * that declares `staging`: the most recent merges since the Promote list's
  * start, agent and Plain together, and, in the room those leave, of what a
  * production Deployment took in the last 24 hours. The one cap: the
- * Standings of those production has not taken and the promote list's
+ * Standings of those production has not taken and the Promote list's
  * entries, with its counts (./promoteList.ts), are all of this one set.
  */
 export const MERGES_KEPT = 100;
@@ -184,7 +184,7 @@ export interface ShotsMarkerFacts {
  * `staging` (#856): the newest successful Deployment in production's
  * environment, or, where none has ever succeeded or Kit config names no such
  * environment, the first successful Deployment in `staging.environment`. It
- * is where the promote list starts (./promoteList.ts, #857).
+ * is where the Promote list starts (./promoteList.ts, #857).
  */
 export interface StagingSince {
   /** Which environment's Deployment it is. */
@@ -211,7 +211,7 @@ export interface StagingSince {
 
 /**
  * A Plain pull request merged to the default branch, as the gather keeps one
- * merged since the promote list's start (#857): what the list names it by,
+ * merged since the Promote list's start (#857): what the list names it by,
  * and what its kind is told from (plainKindOf). It has no Standing past its
  * merge, at Staging or anywhere.
  */
@@ -241,7 +241,7 @@ export interface StagingFacts {
    * The agent pull requests merged since then, which that Deployment's
    * commit does not hold, newest first: those among the 100 most recent
    * merges of either kind since the start, so with `plain` 100 at most, and
-   * together exactly what the promote list holds. One merged in the last 24
+   * together exactly what the Promote list holds. One merged in the last 24
    * hours is in `mergedLastDay` too.
    */
   readonly unpromoted: readonly MergedLastDayFacts[];
@@ -478,12 +478,12 @@ function mergedFactsOf({ number, title, closingIssuesReferences, mergeCommit, me
 
 /**
  * How far a gather reaches past the last day, in a repo that declares
- * `staging`: where the promote list starts, and, where production was
+ * `staging`: where the Promote list starts, and, where production was
  * deployed in the last 24 hours, the Deployments that took what merged
  * before that start (#857).
  */
 interface StagingReach {
-  /** Where the reach starts (StagingSince): the promote list's start. Null when no Deployment it could start at has succeeded. */
+  /** Where the reach starts (StagingSince): the Promote list's start. Null when no Deployment it could start at has succeeded. */
   readonly since: StagingSince | null;
   /**
    * The production Deployments that succeeded in the last 24 hours, oldest
@@ -568,7 +568,7 @@ function isUnpromoted(pullRequest: MergedSinceRead, since: StagingSince | null):
 }
 
 /**
- * Whether a pull request merged since the promote list's start, to count
+ * Whether a pull request merged since the Promote list's start, to count
  * (#857): an agent one production has not taken, or a Plain one merged to
  * the default branch after the start's commit. A Plain one merged into
  * another branch reaches production only through that branch's own merge.

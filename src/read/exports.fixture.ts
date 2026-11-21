@@ -16,6 +16,7 @@ import {
   aFollowUpIssue,
   AGROUP_STATS,
   aLabelAdded,
+  aMainChecksRead,
   aMapCapRefusal,
   aMergedLastDay,
   aMergedPullRequest,
@@ -40,6 +41,8 @@ import {
   aRunInFlight,
   aRunRecord,
   aSpec,
+  aStagingFacts,
+  aStagingRead,
   aSummaryIssue,
   aTicketTimeline,
   aVerdictComment,
@@ -374,29 +377,34 @@ const A_MERGE_AT_STAGING = homeFactsOf({
   evidenceMarkers: [{ pullRequest: 50, marker: { run: 4410, artifact: 901, failure: null, routes: ["/book", "/patients/[patientId]/notes"] } }],
 });
 
-/** `owner/product`'s Deployments in `staging` read at NOW, asked for the newest success: merge `m…` deployed at 11:36, and the newest deploy that contains it, of commit `d…`, at 11:50. */
-const A_STAGING_DEPLOYMENTS_READ = {
-  repo: "owner/product",
-  environment: "staging",
-  readAt: NOW,
-  merges: {
-    ["m".repeat(40)]: {
+/** `owner/product`'s Main checks read at NOW: `e2e` green on commit `d…`. */
+const A_MAIN_CHECKS_READ = aMainChecksRead(
+  { ["d".repeat(40)]: [{ name: "e2e", is: "green", url: "https://github.com/owner/product/actions/runs/7/job/901", at: "2026-11-09T11:55:00Z" }] },
+  NOW,
+) satisfies MainChecksRead;
+
+/**
+ * What a reader read of `owner/product`'s staging at NOW: its Deployments in
+ * `staging`, asked for the newest success, with merge `m…` deployed at 11:36
+ * and the newest deploy that contains it, of commit `d…`, at 11:50; and that
+ * Main checks read.
+ */
+const A_STAGING_READ = aStagingRead(
+  {
+    ["m".repeat(40)]: aDeployOf({
       is: "succeeded",
       deployment: 900,
       commit: "m".repeat(40),
       at: "2026-11-09T11:36:00Z",
-      log: null,
       newest: { deployment: 905, commit: "d".repeat(40), at: "2026-11-09T11:50:00Z" },
-    },
+    }),
   },
-} as const satisfies DeploymentsRead;
+  A_MAIN_CHECKS_READ,
+  NOW,
+) satisfies StagingRead;
 
-/** `owner/product`'s Main checks read at NOW: `e2e` green on commit `d…`. */
-const A_MAIN_CHECKS_READ = {
-  repo: "owner/product",
-  readAt: NOW,
-  commits: { ["d".repeat(40)]: [{ name: "e2e", is: "green", url: "https://github.com/owner/product/actions/runs/7/job/901", at: "2026-11-09T11:55:00Z" }] },
-} as const satisfies MainChecksRead;
+/** That read's Deployments read of `staging`. */
+const A_STAGING_DEPLOYMENTS_READ = A_STAGING_READ.deployments satisfies DeploymentsRead;
 
 /**
  * A_MERGE_AT_STAGING's repo as a gather reads it past the last day (#857),
@@ -421,19 +429,56 @@ const A_REPO_TO_PROMOTE = {
     },
     dispatch: null,
   },
-  staging: {
+  staging: aStagingFacts({
     since: { from: "production", deployment: 880, commit: "p".repeat(40), at: "2026-11-08T09:00:00Z", deployedAt: "2026-11-08T09:15:00Z" },
     unpromoted: [aMergedLastDay("2026-11-09T11:30:00Z")],
-    promoted: [],
     plain: [{ number: 51, title: "Bump the Kit to v3.2.0", mergedAt: "2026-11-09T10:00:00Z", author: "dependabot[bot]", headRef: "dependabot/github_actions/fabrik-3.2.0", closes: [] }],
     mergedSince: 2,
-    trials: { pullRequests: [], problems: [] },
-    evidenceMarkers: [],
-    shotsMarkers: [],
-  },
+  }),
 } satisfies Facts;
 
-/** Agent pull request 50's entry in that repo's promote list: on staging, carrying UI evidence of two routes, and untried. */
+/**
+ * Agent pull request 50's Standing at Staging in that repo at NOW, with
+ * A_STAGING_READ: on staging since its first deploy at 11:36, the Operator's
+ * move and stopping no work, with no result, so with no time it stands until.
+ */
+const AN_UNTRIED_STANDING = {
+  schema: STANDING_SCHEMA,
+  repo: "owner/product",
+  issue: 7,
+  pullRequest: 50,
+  work: "ticket",
+  place: "staging",
+  name: "on-staging",
+  move: "operator",
+  yours: true,
+  stopsWork: false,
+  since: "2026-11-09T11:36:00Z",
+  stuckAt: null,
+  awaits: null,
+  subscription: null,
+  detail: {
+    mergeCommit: "m".repeat(40),
+    mergedAt: "2026-11-09T11:30:00Z",
+    environment: "staging",
+    noDeployAt: null,
+    deployment: 905,
+    log: null,
+    deploysUnread: false,
+    staging: {
+      environment: "staging",
+      production: "production",
+      trial: { needed: true, why: "ui-evidence" },
+      result: null,
+      standsUntil: null,
+      mainChecks: ["e2e"],
+      check: null,
+      checksUnread: false,
+    },
+  },
+} satisfies Standing;
+
+/** Agent pull request 50's entry in that repo's Promote list: on staging, carrying UI evidence of two routes, and untried. */
 const AN_UNTRIED_ENTRY = {
   is: "agent",
   pullRequest: 50,
@@ -464,12 +509,26 @@ const AN_UNTRIED_ENTRY = {
   },
   trial: { needed: true, why: "ui-evidence" },
   result: { is: "untried" },
+  standing: AN_UNTRIED_STANDING,
 } as const satisfies PromoteEntry;
+
+/** AN_UNTRIED_STANDING as another pull request's, for another Ticket, under another name: nobody's move, since `since`, with this of what it carries at Staging. */
+function anEntryStanding(
+  pullRequest: number,
+  issue: number,
+  name: "trial-accepted" | "trial-problem" | "deploy-failed" | "on-staging",
+  since: string,
+  staging: Partial<Extract<Standing, { readonly name: "on-staging" }>["detail"]["staging"]>,
+  deployment: number | null = null,
+): Standing {
+  const detail = { ...AN_UNTRIED_STANDING.detail, deployment, staging: { ...AN_UNTRIED_STANDING.detail.staging, ...staging } };
+  return { ...AN_UNTRIED_STANDING, pullRequest, issue, name, move: "nobody", yours: false, since, detail };
+}
 
 /** The Kit bump's entry: a Plain pull request's, with its kind and nothing more. */
 const A_PLAIN_ENTRY = { is: "plain", pullRequest: 51, title: "Bump the Kit to v3.2.0", mergedAt: "2026-11-09T10:00:00Z", kind: "kit-bump" } as const satisfies PromoteEntry;
 
-/** That repo's promote list at NOW, with A_STAGING_DEPLOYMENTS_READ and A_MAIN_CHECKS_READ. */
+/** That repo's Promote list at NOW, with A_STAGING_READ. */
 const A_PROMOTE_LIST = {
   repo: "owner/product",
   start: { from: "production", deployment: 880, commit: "p".repeat(40), deployedAt: "2026-11-08T09:15:00Z" },
@@ -1238,6 +1297,21 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   // The Standing at Staging
 
+  aMainChecksRead: () =>
+    aMainChecksRead(
+      A_MAIN_CHECKS_READ.commits,
+      NOW,
+    ),
+  aStagingFacts: () =>
+    aStagingFacts(
+      { unpromoted: [aMergedLastDay("2026-11-09T11:30:00Z")], mergedSince: 1 },
+    ),
+  aStagingRead: () =>
+    aStagingRead(
+      A_STAGING_DEPLOYMENTS_READ.merges,
+      A_MAIN_CHECKS_READ,
+      NOW,
+    ),
   commitsToCheck: () =>
     commitsToCheck(
       rowsOf(A_MERGE_AT_STAGING, null, null, null, NOW),
@@ -1246,7 +1320,7 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
   joinStaging: () =>
     joinStaging(
       rowsOf(A_MERGE_AT_STAGING, null, null, null, NOW),
-      { deployments: A_STAGING_DEPLOYMENTS_READ, mainChecks: A_MAIN_CHECKS_READ },
+      A_STAGING_READ,
       NOW,
     ),
   readMainChecks: () =>
@@ -1274,12 +1348,12 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       50,
     ),
 
-  // The promote list
+  // The Promote list
 
   promoteListOf: () =>
     promoteListOf(
       A_REPO_TO_PROMOTE,
-      { deployments: A_STAGING_DEPLOYMENTS_READ, mainChecks: A_MAIN_CHECKS_READ },
+      A_STAGING_READ,
       NOW,
     ),
 
@@ -1680,17 +1754,50 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
       ["e".repeat(40)]: "unread",
     },
   } satisfies MainChecksRead,
-  StagingRead: { deployments: A_STAGING_DEPLOYMENTS_READ, mainChecks: A_MAIN_CHECKS_READ } satisfies StagingRead,
+  StagingRead: A_STAGING_READ satisfies StagingRead,
 
-  // The promote list
+  // The Promote list
 
   PromoteList: A_PROMOTE_LIST satisfies PromoteList,
   PromoteEntry: [
     AN_UNTRIED_ENTRY,
-    { ...AN_UNTRIED_ENTRY, pullRequest: 44, ticket: 3, result: { is: "accepted", at: "2026-11-09T11:00:00Z", fix: [61], problems: [{ issue: 70, title: "The cart total reads 0", open: false }] } },
-    { ...AN_UNTRIED_ENTRY, pullRequest: 45, ticket: 4, result: { is: "problem", at: "2026-11-09T08:00:00Z", problems: [{ issue: 71, title: "The basket loses its last line", open: true }] } },
-    { ...AN_UNTRIED_ENTRY, pullRequest: 46, ticket: 5, result: { is: "not-on-staging", name: "deploy-failed", unread: false } },
-    { ...AN_UNTRIED_ENTRY, pullRequest: 47, ticket: 6, evidence: null, staging: { site: "https://staging.shop.example", pages: [], shots: [], toTry: [] }, trial: { needed: false, why: "no-screen" }, result: { is: "no-screen" } },
+    {
+      ...AN_UNTRIED_ENTRY,
+      pullRequest: 44,
+      ticket: 3,
+      result: { is: "accepted", at: "2026-11-09T11:00:00Z", fix: [61], problems: [{ issue: 70, title: "The cart total reads 0", open: false }] },
+      standing: anEntryStanding(44, 3, "trial-accepted", "2026-11-09T11:00:00Z", {
+        result: { is: "accepted", at: "2026-11-09T11:00:00Z", fix: [61], problems: [{ issue: 70, open: false }] },
+        standsUntil: "2026-11-10T11:00:00.000Z",
+      }),
+    },
+    {
+      ...AN_UNTRIED_ENTRY,
+      pullRequest: 45,
+      ticket: 4,
+      result: { is: "problem", at: "2026-11-09T08:00:00Z", problems: [{ issue: 71, title: "The basket loses its last line", open: true }] },
+      standing: anEntryStanding(45, 4, "trial-problem", "2026-11-09T08:00:00Z", {
+        result: { is: "problem", at: "2026-11-09T08:00:00Z", problems: [{ issue: 71, open: true }] },
+        standsUntil: "2026-11-10T08:00:00.000Z",
+      }),
+    },
+    {
+      ...AN_UNTRIED_ENTRY,
+      pullRequest: 46,
+      ticket: 5,
+      result: { is: "not-on-staging", name: "deploy-failed", unread: false },
+      standing: anEntryStanding(46, 5, "deploy-failed", "2026-11-09T11:38:00Z", {}, 899),
+    },
+    {
+      ...AN_UNTRIED_ENTRY,
+      pullRequest: 47,
+      ticket: 6,
+      evidence: null,
+      staging: { site: "https://staging.shop.example", pages: [], shots: [], toTry: [] },
+      trial: { needed: false, why: "no-screen" },
+      result: { is: "no-screen" },
+      standing: anEntryStanding(47, 6, "on-staging", "2026-11-09T11:36:00Z", { trial: { needed: false, why: "no-screen" }, standsUntil: "2026-11-10T11:30:00.000Z" }, 905),
+    },
     A_PLAIN_ENTRY,
   ] satisfies readonly PromoteEntry[],
 

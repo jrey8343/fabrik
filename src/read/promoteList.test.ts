@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_KIT_CONFIG, type KitConfig } from "../kit/config.ts";
+import { wordStanding } from "../kit/standingWording.ts";
 import { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
-import { aDeploymentsRead, aDeployOf, aLabelAdded, aMergedLastDay, homeFactsOf } from "./builders.ts";
+import { aDeploymentsRead, aDeployOf, aLabelAdded, aMergedLastDay, aStagingFacts, aStagingRead, homeFactsOf } from "./builders.ts";
 import type { DeploymentsRead } from "./deployments.ts";
 import type { Facts } from "./gather.ts";
 import { type PromoteEntry, promoteListOf } from "./promoteList.ts";
@@ -34,7 +35,7 @@ const SINCE = { from: "production", deployment: 800, commit: "e".repeat(40), at:
 const merged = (number: number, mergedAt: string, title = "Build the thing") => aMergedLastDay(mergedAt, { number, ticket: number - 40, mergeCommit: commit(number), title });
 const ui = (pullRequest: number, routes: readonly string[] = ["/cart"]) => ({ pullRequest, marker: { run: 4400 + pullRequest, artifact: 900 + pullRequest, failure: null, routes } });
 const byTheOperator = (label: string, at: string) => aLabelAdded(label, at, { actor: "operator" });
-const staged = (merges: DeploymentsRead["merges"]): StagingRead => ({ deployments: { ...aDeploymentsRead(merges, NOW), environment: "staging" }, mainChecks: null });
+const staged = (merges: DeploymentsRead["merges"]): StagingRead => aStagingRead(merges, null, NOW);
 const onStaging = (number: number, at: string) => aDeployOf({ is: "succeeded", deployment: 600 + number, commit: commit(number), at });
 
 /**
@@ -88,23 +89,20 @@ const facts = (staging: Partial<NonNullable<Facts["staging"]>> = {}, kit: Partia
   homeFactsOf({
     kit: declaring(kit),
     mergedLastDay: UNPROMOTED.filter(({ mergedAt }) => Date.parse(mergedAt) >= Date.parse(NOW) - 24 * 60 * 60 * 1000),
-    staging: {
+    staging: aStagingFacts({
       since: SINCE,
       unpromoted: UNPROMOTED,
-      promoted: [],
-      plain: [],
       mergedSince: UNPROMOTED.length,
       trials: TRIALS,
       evidenceMarkers: [60, 59, 58, 56, 54, 53, 52, 51].map((pullRequest) => ui(pullRequest)),
-      shotsMarkers: [],
       ...staging,
-    },
+    }),
   });
 
 const agentEntries = (entries: readonly PromoteEntry[]) => entries.flatMap((entry) => (entry.is === "agent" ? [entry] : []));
 const entryOf = (entries: readonly PromoteEntry[], pullRequest: number) => agentEntries(entries).find((entry) => entry.pullRequest === pullRequest);
 
-describe("the promote list", () => {
+describe("the Promote list", () => {
   it("is null for a repo whose Kit config declares no staging, one whose Kit config is invalid, and the store", () => {
     const merges = { mergedLastDay: [merged(60, "2026-11-09T10:00:00Z")] };
 
@@ -323,6 +321,27 @@ describe("the promote list", () => {
     expect(list?.entries.map((entry) => entry.pullRequest)).toEqual(Array.from({ length: 100 }, (_, at) => 1000 - at));
     expect(list).toMatchObject({ leftOut: 20, notAccepted: 84 });
     expect(agentEntries(list?.entries ?? []).map(({ pullRequest }) => pullRequest).toSorted()).toEqual(waiting.toSorted());
+  });
+
+  it("carries each agent entry's Standing at Staging, read at the same time, so the Kit's own words say where it is and a reader words no result itself; and none on a Plain entry", () => {
+    const rows = rowsOf(facts(), null, null, null, NOW, STAGING_READ);
+    const { entries } = promoteListOf(facts(), STAGING_READ, NOW) ?? { entries: [] };
+    const pill = (pullRequest: number) => {
+      const entry = entryOf(entries, pullRequest);
+      return entry === undefined ? undefined : wordStanding(entry.standing, NOW, "UTC").pill;
+    };
+
+    // The Standing its row has, for each that has a row: the one its result is read from.
+    for (const { standing } of rows) expect(entryOf(entries, standing.pullRequest ?? 0)?.standing).toEqual(standing);
+    expect([60, 59, 58, 56, 55, 54, 53, 52, 51].map(pill)).toEqual(["On staging", "Accepted", "Accepted", "Problem found", "On staging", "Deploy failed", "Deploying", "No deploy seen", "Merged"]);
+    expect(wordStanding(entryOf(entries, 60)!.standing, NOW, "UTC").sentence).toBe("On `staging` since 19 hours ago. It carries UI evidence, so it needs a Staging trial.");
+    expect(wordStanding(entryOf(entries, 55)!.standing, NOW, "UTC").sentence).toBe("On `staging` since 22 hours ago. It changes no screen, so it needs no Staging trial.");
+    // One whose row is at Production, or has ended, still says where it is at Staging.
+    const started = aDeploymentsRead({ [commit(60)]: aDeployOf({ is: "running", deployment: 950, commit: commit(60), at: "2026-11-09T11:58:00Z" }) }, NOW);
+    expect(rowsOf(facts(), null, null, started, NOW, STAGING_READ).find(({ standing }) => standing.pullRequest === 60)?.standing.place).toBe("production");
+    expect(entryOf(entries, 60)?.standing).toMatchObject({ place: "staging", name: "on-staging", move: "operator" });
+    const plain = [{ number: 64, title: "Bump the Kit to v3.2.0", mergedAt: "2026-11-09T11:55:00Z", author: "dependabot[bot]", headRef: "dependabot/github_actions/fabrik-3.2.0", closes: [] }];
+    expect(promoteListOf(facts({ plain }), STAGING_READ, NOW)?.entries[0]).not.toHaveProperty("standing");
   });
 
   it("is plain data: written as JSON and read back it is equal", () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_KIT_CONFIG, type KitConfig } from "../kit/config.ts";
 import { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
-import { aDeploymentsRead, aDeployOf, aLabelAdded, aMergedLastDay, anOpenIssue, factsOf, homeFactsOf } from "./builders.ts";
+import { aDeploymentsRead, aDeployOf, aLabelAdded, aMainChecksRead, aMergedLastDay, anOpenIssue, aStagingFacts, aStagingRead, factsOf, homeFactsOf } from "./builders.ts";
 import type { DeploymentsRead } from "./deployments.ts";
 import type { Facts } from "./gather.ts";
 import { joinDeployments, mergesToRead } from "./joinDeployments.ts";
@@ -56,12 +56,12 @@ const facts = (overrides: Partial<KitConfig> = {}): Facts =>
   });
 
 /** A Deployments read of the `staging` environment, holding these merges. */
-const staged = (merges: DeploymentsRead["merges"], readAt = NOW): DeploymentsRead => ({ ...aDeploymentsRead(merges, readAt), environment: "staging" });
+const staged = (merges: DeploymentsRead["merges"], readAt = NOW): DeploymentsRead => aStagingRead(merges, null, readAt).deployments;
 /** A staging deploy of the merge's own commit that succeeded, and the newest that contains it, of `commit`. */
 const succeeded = (own: string, at: string, commit = DEPLOYED, newestAt = "2026-11-12T10:00:00Z") =>
   aDeployOf({ is: "succeeded", deployment: 900, commit: own, at, newest: { deployment: 905, commit, at: newestAt } });
 const check = (is: MainCheckOf["is"], at: string | null = "2026-11-12T10:05:00Z"): MainCheckOf => ({ name: "e2e", is, url: is === "undecided" ? null : "https://github.com/owner/product/actions/runs/7/job/903", at: is === "undecided" ? null : at });
-const checked = (commits: MainChecksRead["commits"], readAt = NOW): MainChecksRead => ({ repo: "owner/product", readAt, commits });
+const checked = (commits: MainChecksRead["commits"], readAt = NOW): MainChecksRead => aMainChecksRead(commits, readAt);
 
 /** An earlier read, at the keeping: 50 and 52 on staging with `e2e` green on DEPLOYED, 51 deploying, 53 with none yet. */
 const EARLIER: StagingRead = {
@@ -396,7 +396,7 @@ describe("the joins and a Staging trial's result (#856)", () => {
   /** The facts above, with what a gather reads past the last day in a repo that declares staging: these label events on pull request 50, and no pull request production has not taken, unless a test says otherwise. */
   const tried = (labelEvents: readonly ReturnType<typeof aLabelAdded>[], staging: Partial<NonNullable<Facts["staging"]>> = {}): Facts => ({
     ...facts(),
-    staging: { since: null, unpromoted: [], promoted: [], plain: [], mergedSince: 0, trials: { pullRequests: [{ pullRequest: 50, labelEvents, closes: [] }], problems: [] }, evidenceMarkers: [], shotsMarkers: [], ...staging },
+    staging: aStagingFacts({ trials: { pullRequests: [{ pullRequest: 50, labelEvents, closes: [] }], problems: [] }, ...staging }),
   });
   const ACCEPTED = tried([added(TRIAL_ACCEPTED_LABEL, "2026-11-12T09:58:00Z")]);
   /** A later read: 50's newest deploy is of REDEPLOYED, where `e2e` is red. */

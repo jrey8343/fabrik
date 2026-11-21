@@ -971,14 +971,14 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(again.calls.some((call) => call.line.includes("deployments"))).toBe(false);
     });
 
-    it("writes no staging member when the Operator declines, and asks again on the next run", async () => {
+    it("leaves the starter's staging null when the Operator declines, and asks again on the next run", async () => {
       const world = aWorld();
       world.deployments.push({ environment: "staging", url: "https://staging.clinic.example.com" });
 
       const first = await setupOnce(world, { args: OTHERS, answers: ["none", "y"] });
 
       expect(first.code).toBe(0);
-      expect(originGit("show", `${BRANCH}:.fabrik/config.json`)).not.toContain("staging");
+      expect(JSON.parse(originGit("show", `${BRANCH}:.fabrik/config.json`))).toMatchObject({ staging: null });
       mergeTheSetupPr(world);
 
       const again = await setupOnce(world, { args: OTHERS, answers: ["none"] });

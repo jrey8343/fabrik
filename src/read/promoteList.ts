@@ -1,4 +1,4 @@
-// The promote list (#857, ADR-0038): what a production deployment would
+// The Promote list (#857, ADR-0038): what a production deployment would
 // take, in a Product repo whose Kit config declares `staging`, and which of
 // it the Operator has not accepted. It is worked out from a gather's facts
 // (./gather.ts) and a staging read, as the rows are (./rows.ts): every pull
@@ -12,7 +12,7 @@
 // address and no more. Pure, no I/O, and plain data: written as JSON and
 // read back a list is equal.
 import { productionDispatchPage } from "../kit/config.ts";
-import { type PlainKind, standingAt } from "../kit/standing.ts";
+import { type PlainKind, type Standing, standingAt } from "../kit/standing.ts";
 import { plainKindOf } from "../kit/standingPlain.ts";
 import { type StagingStanding, stagingStandingsOf, type StagingTrial } from "../kit/standingStaging.ts";
 import type { TrialProblemFacts } from "../kit/trialResult.ts";
@@ -58,7 +58,7 @@ export interface PromoteList {
   readonly dispatchPage: string | null;
 }
 
-/** The Deployment a promote list starts at. */
+/** The Deployment a Promote list starts at. */
 export interface PromoteStart {
   /** Which environment's Deployment it is: production's newest that succeeded, or staging's first. */
   readonly from: "production" | "staging";
@@ -92,6 +92,14 @@ export interface PromoteAgentEntry {
   readonly trial: StagingTrial;
   /** Its Staging trial's result, as its Standing at Staging says for the same facts. */
   readonly result: PromoteResult;
+  /**
+   * Its Standing at Staging for the same facts, read at the list's time: the
+   * one `trial` and `result` are read from, whether or not it still stands as
+   * a row and whether or not a production Deployment has started on it. The
+   * Kit's words for where it is are this Standing's (wordStanding), so a
+   * reader words no result itself (ADR-0020).
+   */
+  readonly standing: Standing;
 }
 
 /**
@@ -111,7 +119,7 @@ export interface PromotePlainEntry {
   readonly kind: PlainKind;
 }
 
-/** One of a pull request's Trial problems, as a promote list names it. */
+/** One of a pull request's Trial problems, as a Promote list names it. */
 export interface PromoteProblem {
   readonly issue: number;
   readonly title: string;
@@ -122,7 +130,7 @@ export interface PromoteProblem {
 const NOT_ON_STAGING = ["merged", "deploying", "deploy-failed", "no-deploy-seen"] as const;
 
 /**
- * An agent pull request's Staging trial result, as a promote list says it,
+ * An agent pull request's Staging trial result, as a Promote list says it,
  * read from its Standing at Staging, the first of these that holds:
  *
  * - `accepted`, since `at`: by the Operator's own label, or, with `fix` not
@@ -147,7 +155,7 @@ export type PromoteResult =
   | { readonly is: "not-on-staging"; readonly name: (typeof NOT_ON_STAGING)[number]; readonly unread: boolean };
 
 /**
- * One Product repo's promote list at `now`, ISO 8601, from a gather's
+ * One Product repo's Promote list at `now`, ISO 8601, from a gather's
  * `facts` and what a reader read of staging (`staging`, as rowsOf takes it;
  * null, every staging deploy is unread). Null for a repo whose Kit config
  * declares no `staging`, for one whose Kit config is invalid, and for the
@@ -191,6 +199,7 @@ export function promoteListOf(facts: Facts | StoreFacts, staging: StagingRead | 
         staging: tryIt,
         trial: standing.detail.staging.trial,
         result: resultOf(standing, problems, now),
+        standing: standingAt(standing, now),
       },
     ];
   });

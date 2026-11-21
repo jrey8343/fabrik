@@ -54,13 +54,13 @@ describe("the README's section on reading the Kit from another program, on Stagi
     expect(staging).toContain("with the Operator's own credential");
   });
 
-  it("names the promote list, what it is worked out from and what it holds", () => {
+  it("names the Promote list, what it is worked out from and what it holds", () => {
     for (const named of ["promoteListOf", "PromoteList", "PromoteEntry", "production.workflow"]) expect(staging, named).toContain(`\`${named}\``);
     for (const key of Object.keys(EXPORT_SHAPES["PromoteList"] as object)) expect(staging, key).toContain(`\`${key}\``);
   });
 
   it("names every export the entry has for Staging, and no export the entry lacks", () => {
-    const forStaging = ["readMainChecks", "joinStaging", "stagingMergesToRead", "commitsToCheck", "MainChecksRead", "MainCheckOf", "CommitToCheck", "StagingRead", "TRIAL_ACCEPTED_LABEL", "TRIAL_PROBLEM_LABEL", "trialProblemLine", "trialProblemIn", "promoteListOf", "PromoteList", "PromoteEntry"];
+    const forStaging = ["aStagingFacts", "aStagingRead", "aMainChecksRead", "readMainChecks", "joinStaging", "stagingMergesToRead", "commitsToCheck", "MainChecksRead", "MainCheckOf", "CommitToCheck", "StagingRead", "TRIAL_ACCEPTED_LABEL", "TRIAL_PROBLEM_LABEL", "trialProblemLine", "trialProblemIn", "promoteListOf", "PromoteList", "PromoteEntry"];
 
     expect(forStaging.filter((name) => !EXPORTED.includes(name))).toEqual([]);
     expect(forStaging.filter((name) => !staging.includes(`\`${name}\``))).toEqual([]);
@@ -134,18 +134,18 @@ describe("the README's Kit config section, on what declaring staging gets a repo
     expect(untracked).toContain("`monitor.main_checks`");
     expect(untracked).toContain("is the Operator's move until they label it");
     expect(untracked).toContain("Nothing moves it to Production");
-    expect(untracked).toContain("The promote list starts at the first successful staging Deployment");
+    expect(untracked).toContain("The Promote list starts at the first successful staging Deployment");
   });
 
-  it("says what it gets beside a tracked production: at Production from the deployment, for 24 hours from it, and a promote list from production's newest success", () => {
+  it("says what it gets beside a tracked production: at Production from the deployment, for 24 hours from it, and a Promote list from production's newest success", () => {
     const tracked = row(staging, "`staging` and `production.environment`");
 
     expect(tracked).toContain("until a production deployment that contains the pull request has started");
     expect(tracked).toContain(`for ${MERGED_STANDS_HOURS} hours from that Deployment, not from its merge`);
-    expect(tracked).toContain("The promote list starts at the newest successful production Deployment");
+    expect(tracked).toContain("The Promote list starts at the newest successful production Deployment");
   });
 
-  it("says what production.workflow gets: the promote list's dispatch page, and nothing dispatched", () => {
+  it("says what production.workflow gets: the Promote list's dispatch page, and nothing dispatched", () => {
     const workflow = row(staging, "`production.workflow` too");
 
     expect(workflow).toContain("dispatch page");

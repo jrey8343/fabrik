@@ -1,6 +1,6 @@
 // The Staging trial's words and its decision (Spec #814), written down with
-// the Kit config block and the two labels: the glossary's two terms, the ADR,
-// and the labels document's rows.
+// the Kit config block and the two labels: the glossary's three terms, the
+// ADR, and the labels document's rows.
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
@@ -9,7 +9,7 @@ const root = new URL("../../", import.meta.url);
 const read = (path: string) => readFileSync(new URL(path, root), "utf8");
 
 describe("The Staging trial's words and decision (#814)", () => {
-  it("has its two terms in the glossary, with the Evidence terms, and leaves Follow-up the Reviewer's", () => {
+  it("has its three terms in the glossary, with the Evidence terms, and leaves Follow-up the Reviewer's", () => {
     const glossary = read("GLOSSARY.md");
     const evidenceTerms = glossary.slice(glossary.indexOf("**UI evidence**:"), glossary.indexOf("## Measuring the factory"));
 
@@ -22,6 +22,10 @@ describe("The Staging trial's words and decision (#814)", () => {
         "**Trial problem**:",
         "The issue the Operator files when a Staging trial finds a problem. The pull request it was found on is not accepted until the Trial problem's fix is on staging and accepted.",
         "_Avoid_: Follow-up (the Reviewer's), bug report, defect",
+        "",
+        "**Promote list**:",
+        "Every pull request a production deployment of a Product repo would take, agent or Plain, each with its Staging trial's result, and a count of those not yet accepted. A pull request is on it from its merge until production takes it, which is when a production deployment that contains it has succeeded: it is promoted then, and unpromoted until. The list only tells the Operator what that deploy holds, and nothing deploys or refuses a deploy for it.",
+        "_Avoid_: release list, changelog, deploy queue, release candidates",
         "",
       ].join("\n"),
     );

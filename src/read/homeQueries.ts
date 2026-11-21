@@ -275,7 +275,7 @@ export interface RawUnpromotedPullRequest extends Omit<RawMergedPullRequest, "cl
 /**
  * The merged pull requests of a repo that declares `staging`, newest-updated
  * first, a hundred at a time, with only what says whether one merged since
- * the promote list's start (#857): when it merged and was last updated, the
+ * the Promote list's start (#857): when it merged and was last updated, the
  * branch it merged into, its merge commit, and whose it is. Made only where
  * the pages of UNPROMOTED_PULL_REQUESTS_QUERY stopped at the 100 they keep,
  * short of the start, to count the merges left out.

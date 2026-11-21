@@ -144,6 +144,7 @@ export type { MergedLastDayFacts } from "../kit/standingProduction.ts";
 
 // The Standing at Staging
 
+export { aMainChecksRead, aStagingFacts, aStagingRead } from "./builders.ts";
 export { commitsToCheck, joinStaging, stagingMergesToRead } from "./joinStaging.ts";
 export { readMainChecks } from "./mainChecks.ts";
 export type { CommitToCheck, MainCheckOf, MainChecksRead } from "./mainChecks.ts";
@@ -154,7 +155,7 @@ export type { StagingRead } from "./rows.ts";
 export { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
 export { trialProblemIn, trialProblemLine } from "../loop/markers.ts";
 
-// The promote list
+// The Promote list
 
 export { promoteListOf } from "./promoteList.ts";
 export type { PromoteEntry, PromoteList } from "./promoteList.ts";

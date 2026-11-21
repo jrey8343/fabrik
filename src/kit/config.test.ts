@@ -360,6 +360,7 @@ describe("Kit config", () => {
       digest: { enabled: true },
       operator: null,
       production: null,
+      staging: null,
     };
 
     expect(resolveKitConfig({ config: JSON.stringify(starter) })).toEqual({ ok: true, config: DEFAULTS });
@@ -1079,11 +1080,11 @@ describe("The Kit config template", () => {
     expect(JSON.parse(template)).toMatchObject({ ui: null, preview: { url: null } });
   });
 
-  it("spells out production at its Kit default, declaring nothing, then time_zone unset, as the last members", () => {
+  it("spells out production and staging at their Kit defaults, declaring nothing, then time_zone unset, as the last members", () => {
     const starter: unknown = JSON.parse(template);
 
-    expect(starter).toMatchObject({ production: null, time_zone: null });
-    expect(Object.keys(starter as object).slice(-2)).toEqual(["production", "time_zone"]);
+    expect(starter).toMatchObject({ production: null, staging: null, time_zone: null });
+    expect(Object.keys(starter as object).slice(-3)).toEqual(["production", "staging", "time_zone"]);
   });
 
   it("resolves to every Kit default", () => {
