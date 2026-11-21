@@ -245,7 +245,16 @@ describe("a Plain pull request's Standing", () => {
       ]);
     });
 
-    describe("beside a Ticket whose agent PR is not handed to the Operator (#851)", () => {
+    it("stands by itself, carrying issue 12, beside the agent PR of a blocked ready-for-human issue, which is nobody's move", () => {
+      const blocked = anOpenIssue({ number: 12, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-05T20:00:00Z")], blockers: [{ repo: "owner/product", number: 3 }], hiddenBlockers: 1 });
+      const standings = standingsIn({ openIssues: [blocked], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 12, draft: true })], plainPullRequests: [pairing({ draft: true })] });
+      expect(standings.map(({ issue, pullRequest, name }) => [issue, pullRequest, name]).toSorted(([, a], [, b]) => Number(a) - Number(b))).toEqual([
+        [12, 50, "blocked"],
+        [12, 80, "draft"],
+      ]);
+    });
+
+    describe("stands by itself beside a Ticket whose agent PR is not handed to the Operator (#851)", () => {
       const AGENT_HEAD = "a".repeat(40);
       const PAIR_HEAD = "b".repeat(40);
       const RUNNING: RequiredChecksFact = [
@@ -256,7 +265,7 @@ describe("a Plain pull request's Standing", () => {
         { name: "test", is: "failing" },
         { name: "lint", is: "passed" },
       ];
-      const passedAtGate = (agent: RequiredChecksFact, paired: RequiredChecksFact) =>
+      const besideReviewerPass = (agent: RequiredChecksFact, paired: RequiredChecksFact) =>
         standingsIn(
           {
             openIssues: [anOpenIssue({ number: 8, labels: ["ready-for-agent"] })],
@@ -269,21 +278,21 @@ describe("a Plain pull request's Standing", () => {
           .map(({ issue, pullRequest, work, place, name, detail }) => ({ issue, pullRequest, work, place, name, detail }));
 
       it("stands by itself, carrying issue 8, while agent PR 50 passed at the Merge gate is yours to merge, each named for its own head's checks", () => {
-        expect(passedAtGate(PASSED, RUNNING)).toEqual([
+        expect(besideReviewerPass(PASSED, RUNNING)).toEqual([
           { issue: 8, pullRequest: 50, work: "ticket", place: "merge-gate", name: "yours-to-merge", detail: { plain: null, passedHead: AGENT_HEAD, head: AGENT_HEAD } },
           { issue: 8, pullRequest: 74, work: "plain", place: null, name: "waiting-on-checks", detail: { plain: "pairing", check: "test", checksUnread: false, head: PAIR_HEAD } },
         ]);
       });
 
       it("is named for its own failing check while agent PR 50 is yours to merge", () => {
-        expect(passedAtGate(PASSED, FAILING)).toEqual([
+        expect(besideReviewerPass(PASSED, FAILING)).toEqual([
           { issue: 8, pullRequest: 50, work: "ticket", place: "merge-gate", name: "yours-to-merge", detail: { plain: null, passedHead: AGENT_HEAD, head: AGENT_HEAD } },
           { issue: 8, pullRequest: 74, work: "plain", place: null, name: "check-failing", detail: { plain: "pairing", check: "test", checkIs: "failing", head: PAIR_HEAD } },
         ]);
       });
 
       it("waits on its own running check while agent PR 50 is named for its own failing one: no row names one head's check over the other's pull request", () => {
-        expect(passedAtGate(FAILING, RUNNING)).toEqual([
+        expect(besideReviewerPass(FAILING, RUNNING)).toEqual([
           {
             issue: 8,
             pullRequest: 50,

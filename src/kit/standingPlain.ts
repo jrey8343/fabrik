@@ -93,8 +93,8 @@ export interface Pairing {
  * one that carries no pull request first, else one carrying the agent PR
  * while it is handed to the Operator. With none of those, its own is null,
  * and it stands by itself carrying the issue's number, as where the issue has
- * no own Standing at all: beside an agent PR the Kit is still working, or a
- * second Pairing session's pull request on the issue.
+ * no own Standing at all: beside an agent PR not handed to the Operator, or
+ * as a second Pairing session's pull request on the issue.
  */
 export function pairingsOf(standings: readonly Standing[], { plainPullRequests, openIssues }: GitHubFacts): Pairing[] {
   const taken = new Set<Standing>();
@@ -111,12 +111,7 @@ export function pairingsOf(standings: readonly Standing[], { plainPullRequests, 
   });
 }
 
-/**
- * Whether an issue's own Standing carrying its agent PR is handed to the
- * Operator, `yours-to-do`: a `ready-for-human` Ticket, or a hand-back on the
- * pull request (#611). Only then is the Operator's Pairing session its live
- * work; at implement, review, the Merge gate or a Retry the agent PR is (#851).
- */
+/** Whether an issue's own Standing is handed to the Operator, `yours-to-do`: the one carrying an agent PR a Pairing session's pull request may join (joinPairing). */
 function isHandedToOperator(own: Standing): boolean {
   return own.name === "yours-to-do";
 }
