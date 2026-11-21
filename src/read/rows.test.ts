@@ -230,6 +230,196 @@ describe("a Product repo's rows", () => {
     });
   });
 
+  describe("a merged agent pull request at Staging (#855)", () => {
+    const MERGE = "m".repeat(40);
+    const DEPLOYED = "d".repeat(40);
+    const declaring = (overrides: Partial<typeof DEFAULT_KIT_CONFIG> = {}) =>
+      ({
+        ...homeFactsOf().kit,
+        config: {
+          ok: true,
+          config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" }, staging: { url: "https://staging.example.dev/shop/", environment: "staging" }, ...overrides },
+        },
+      }) as const;
+    const STAGED = declaring();
+    /** Agent pull request 50, merged half an hour ago in a repo that declares staging, with these facts beside. */
+    const merged = (overrides: Partial<Omit<Facts, "kind">> = {}) => homeFactsOf({ kit: STAGED, mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z")], ...overrides });
+    /** A staging Deployments read: the merge's first deploy succeeded at 19:40, and the newest that contains it is of DEPLOYED. */
+    const ON_STAGING = {
+      ...aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z", newest: { deployment: 905, commit: DEPLOYED, at: "2026-11-08T19:50:00Z" } }) }),
+      environment: "staging",
+    };
+    const UI_MARKER = { run: 4400, artifact: 900, failure: null, routes: ["/book", "/patients/[patientId]/notes", "/cart?step=2"], preview: { is: "linked", url: "https://fabrik-ticket-7.shop.example.dev/" } } as const;
+    const SHOTS_MARKER: ShotsMarker = {
+      source: "shots",
+      head: "c".repeat(40),
+      run: 9300,
+      artifact: 9301,
+      failure: null,
+      routes: [],
+      named: [{ name: "composer: draft ready", journey: "write-a-clinical-note", path: "/patients/6f1b2c3d/notes/new?tab=draft" }, { name: "inbox: empty" }],
+      missed: [{ name: "inbox: empty", why: "not-produced" }],
+    };
+
+    it("take the staging reads after the time, giving the merged pull request a row with the rule's Standing for them; with none given its staging deploys are unread", () => {
+      const facts = merged();
+
+      const rows = rowsOf(facts, null, null, null, NOW, { deployments: ON_STAGING, mainChecks: null });
+
+      expect(rows.map(({ standing }) => standing)).toEqual(
+        standingsOf(standingFactsOf({ github: facts.github, kit: { ...STAGED, runsInFlight: "unread", headChecks: {} }, mergedLastDay: facts.mergedLastDay, stagingDeployments: ON_STAGING }), NOW),
+      );
+      expect(rows.map(({ standing }) => standing)).toMatchObject([{ issue: 7, pullRequest: 50, place: "staging", name: "on-staging", move: "nobody" }]);
+      for (const none of [rowsOf(facts, null, null, null, NOW), rowsOf(facts, null, null, null, NOW, null), rowsOf(facts, null, null, null, NOW, { deployments: null, mainChecks: null })]) {
+        expect(none.map(({ standing }) => standing)).toMatchObject([{ place: "staging", name: "merged", detail: { deploysUnread: true } }]);
+      }
+    });
+
+    it("take the Main checks read with them, and production's Deployments read where it always was", () => {
+      const facts = merged({ kit: declaring({ monitor: { ...DEFAULT_KIT_CONFIG.monitor, mainChecks: ["e2e"] } }) });
+      const red = { name: "e2e", is: "red", url: "https://github.com/owner/product/actions/runs/7/job/903", at: "2026-11-08T19:58:00Z" } as const;
+      const checks = (check: typeof red | { readonly name: string; readonly is: "green"; readonly url: null; readonly at: null }) => ({ repo: "owner/product", readAt: NOW, commits: { [DEPLOYED]: [check] } });
+      const promoted = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "running", deployment: 950, commit: MERGE, at: "2026-11-08T19:59:00Z" }) });
+
+      expect(rowsOf(facts, null, null, null, NOW, { deployments: ON_STAGING, mainChecks: checks(red) }).map(({ standing }) => standing)).toMatchObject([
+        { place: "staging", name: "deploy-failed", since: "2026-11-08T19:58:00Z", detail: { log: red.url, staging: { check: "e2e" } } },
+      ]);
+      expect(rowsOf(facts, null, null, null, NOW, { deployments: ON_STAGING, mainChecks: checks({ name: "e2e", is: "green", url: null, at: null }) }).map(({ standing }) => standing)).toMatchObject([{ place: "staging", name: "on-staging" }]);
+      expect(rowsOf(facts, null, null, null, NOW, { deployments: ON_STAGING, mainChecks: null }).map(({ standing }) => standing)).toMatchObject([{ place: "staging", name: "deploying", detail: { staging: { checksUnread: true } } }]);
+      expect(rowsOf(facts, null, null, promoted, NOW, { deployments: ON_STAGING, mainChecks: checks(red) }).map(({ standing }) => standing)).toMatchObject([{ place: "production", name: "deploying", move: "kit" }]);
+    });
+
+    describe("which need a Staging trial", () => {
+      const onStaging = (overrides: Partial<Omit<Facts, "kind">>) => rowsOf(merged(overrides), null, null, null, NOW, { deployments: ON_STAGING, mainChecks: null }).map(({ standing }) => standing);
+
+      it.each([
+        ["an evidence marker", { evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }] }],
+        ["an evidence marker whose capture failed", { evidenceMarkers: [{ pullRequest: 50, marker: { run: 4400, artifact: null, failure: "server-did-not-start", routes: ["/book"] } }] }],
+        ["an evidence marker an earlier release wrote, naming no routes", { evidenceMarkers: [{ pullRequest: 50, marker: { run: 4400, artifact: 900 } }] }],
+        ["a shots marker", { shotsMarkers: [{ pullRequest: 50, marker: SHOTS_MARKER }] }],
+        ["a shots marker nothing of whose check could be read", { shotsMarkers: [{ pullRequest: 50, marker: { ...SHOTS_MARKER, artifact: null, failure: "no-artifact" } }] }],
+        ["a shots marker with an Evidence miss", { shotsMarkers: [{ pullRequest: 50, marker: { ...SHOTS_MARKER, named: [], missed: [], miss: "nothing-named" } }] }],
+      ] as const)("is the Operator's on staging, yours and not stopping work, with %s", (_what, markers) => {
+        expect(onStaging(markers)).toMatchObject([{ name: "on-staging", move: "operator", yours: true, stopsWork: false, detail: { staging: { trial: { needed: true, why: "ui-evidence" } } } }]);
+      });
+
+      it.each([
+        ["whose Implementer said nothing visible changes", { shotsMarkers: [{ pullRequest: 50, marker: { ...SHOTS_MARKER, named: [], missed: [], nothingVisible: "Only the API's error codes changed." } }] }],
+        ["with neither marker", {}],
+        ["when only another pull request carries one", { evidenceMarkers: [{ pullRequest: 51, marker: UI_MARKER }], shotsMarkers: [{ pullRequest: 52, marker: SHOTS_MARKER }] }],
+      ] as const)("is nobody's on staging, changing no screen, for one %s", (_what, markers) => {
+        expect(onStaging(markers)).toMatchObject([{ name: "on-staging", move: "nobody", yours: false, stopsWork: false, detail: { staging: { trial: { needed: false, why: "no-screen" } } } }]);
+      });
+
+      it("reads facts cached by an earlier release, which hold no shots markers, as carrying none", () => {
+        const { shotsMarkers: _, ...cached } = merged({ evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }] });
+
+        expect(rowsOf(JSON.parse(JSON.stringify(cached)) as Facts, null, null, null, NOW, { deployments: ON_STAGING, mainChecks: null }).map(({ standing }) => standing)).toMatchObject([{ name: "on-staging", move: "operator" }]);
+      });
+    });
+
+    describe("its staging pages and what to try", () => {
+      const stagingOf = (facts: Facts, production: Parameters<typeof rowsOf>[3] = null) =>
+        rowsOf(facts, null, null, production, NOW, { deployments: ON_STAGING, mainChecks: null }).map(({ standing, staging }) => ({ place: standing.place, staging }));
+
+      it("give a captured route with no dynamic segment its page on the staging site, built as a production page is, one with a dynamic segment the site itself, and the route patterns to try", () => {
+        expect(stagingOf(merged({ evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }] }))).toEqual([
+          {
+            place: "staging",
+            staging: {
+              site: "https://staging.example.dev/shop/",
+              pages: [
+                { route: "/book", url: "https://staging.example.dev/shop/book" },
+                { route: "/patients/[patientId]/notes", url: "https://staging.example.dev/shop/" },
+                { route: "/cart?step=2", url: "https://staging.example.dev/shop/cart?step=2" },
+              ],
+              shots: [],
+              toTry: ["/book", "/patients/[patientId]/notes", "/cart?step=2"],
+            },
+          },
+        ]);
+      });
+
+      it("give every Evidence shot the site itself, whatever path its Journey visited, and the shot names to try", () => {
+        expect(stagingOf(merged({ shotsMarkers: [{ pullRequest: 50, marker: SHOTS_MARKER }] }))).toEqual([
+          {
+            place: "staging",
+            staging: {
+              site: "https://staging.example.dev/shop/",
+              pages: [],
+              shots: [
+                { name: "composer: draft ready", url: "https://staging.example.dev/shop/" },
+                { name: "inbox: empty", url: "https://staging.example.dev/shop/" },
+              ],
+              toTry: ["composer: draft ready", "inbox: empty"],
+            },
+          },
+        ]);
+      });
+
+      it("give the site alone, and nothing to try, for a pull request that is not UI, and for one whose marker names no routes", () => {
+        const bare = { site: "https://staging.example.dev/shop/", pages: [], shots: [], toTry: [] };
+
+        expect(stagingOf(merged())).toEqual([{ place: "staging", staging: bare }]);
+        expect(stagingOf(merged({ evidenceMarkers: [{ pullRequest: 50, marker: { run: 4400, artifact: 900 } }] }))).toEqual([{ place: "staging", staging: bare }]);
+      });
+
+      it("stay on its row once it is at Production, beside production's pages and shot links, which are what they were", () => {
+        const promoted = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 950, commit: MERGE, at: "2026-11-08T19:58:00Z" }) });
+        const facts = merged({ evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }] });
+        const [atStaging] = rowsOf(facts, null, null, null, NOW, { deployments: ON_STAGING, mainChecks: null });
+        const [atProduction] = rowsOf(facts, null, null, promoted, NOW, { deployments: ON_STAGING, mainChecks: null });
+        const [undeclared] = rowsOf({ ...facts, kit: { ...STAGED, config: { ok: true, config: { ...STAGED.config.config, staging: null } } } }, null, null, promoted, NOW);
+
+        expect(atProduction?.standing).toMatchObject({ place: "production", name: "live" });
+        expect(atProduction?.staging).toEqual(atStaging?.staging);
+        expect(atStaging?.production).toEqual(undeclared?.production);
+        expect(atProduction?.production).toEqual({
+          site: "https://shop.example",
+          tracked: true,
+          pages: [
+            { route: "/book", url: "https://shop.example/book" },
+            { route: "/patients/[patientId]/notes", url: "https://shop.example/patients/[patientId]/notes" },
+            { route: "/cart?step=2", url: "https://shop.example/cart?step=2" },
+          ],
+        });
+        const shots = rowsOf(merged({ shotsMarkers: [{ pullRequest: 50, marker: SHOTS_MARKER }] }), null, null, null, NOW, { deployments: ON_STAGING, mainChecks: null })[0]?.shots;
+        expect(shots?.named.map(({ production }) => production)).toEqual(["https://shop.example/patients/6f1b2c3d/notes/new?tab=draft", null]);
+      });
+
+      it("are no key at all on a row that is not a merged pull request's, and on every row of a repo that declares no staging", () => {
+        const open = homeFactsOf({ kit: STAGED, github: factsOf({ openIssues: [TICKET], openPullRequests: [anOpenPullRequest({ number: 51, ticket: 8 })] }), evidenceMarkers: [{ pullRequest: 51, marker: UI_MARKER }] });
+        const undeclared = homeFactsOf({
+          kit: { ...STAGED, config: { ok: true, config: { ...STAGED.config.config, staging: null } } },
+          github: factsOf({ openIssues: [TICKET] }),
+          mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z")],
+          evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }],
+        });
+
+        for (const rows of [rowsOf(open, null, null, null, NOW, { deployments: ON_STAGING, mainChecks: null }), rowsOf(undeclared, null, null, null, NOW, { deployments: ON_STAGING, mainChecks: null })]) {
+          expect(rows.length).toBe(2);
+          for (const row of rows) expect(row).not.toHaveProperty("staging");
+        }
+      });
+    });
+
+    it("gives a repo that declares no staging the rows it gave before, whatever staging reads it is handed", () => {
+      const undeclared = homeFactsOf({
+        kit: { ...STAGED, config: { ok: true, config: { ...STAGED.config.config, staging: null } } },
+        github: factsOf({ openIssues: [TICKET] }),
+        mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z")],
+        evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }],
+      });
+      const live = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" }) });
+
+      const before = rowsOf(undeclared, null, null, live, NOW);
+
+      expect(JSON.stringify(rowsOf(undeclared, null, null, live, NOW, { deployments: ON_STAGING, mainChecks: { repo: "owner/product", readAt: NOW, commits: {} } }))).toBe(JSON.stringify(before));
+      expect(before.map(({ standing }) => standing)).toMatchObject([{ issue: 7, name: "not-started" }, { pullRequest: 50, place: "production", name: "live", detail: { mergeCommit: MERGE, mergedAt: "2026-11-08T19:30:00Z", environment: "production", noDeployAt: null, deployment: 900, log: null, deploysUnread: false } }]);
+      expect(Object.keys(before[1]!.standing.detail).toSorted()).toEqual(["deployment", "deploysUnread", "environment", "log", "mergeCommit", "mergedAt", "noDeployAt"]);
+    });
+  });
+
   describe("an agent pull request's UI evidence (#639)", () => {
     const PREVIEW = "https://fabrik-ticket-7.shop.example.dev/";
     const evidenceOf = (marker: EvidenceMarker | null, pullRequest = anOpenPullRequest({ number: 50, ticket: 7 })) => {

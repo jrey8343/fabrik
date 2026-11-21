@@ -7,6 +7,8 @@
 // Standing at Production it reads facts only the read library fills, so no
 // Kit job works out a Standing past the merge, and nothing in the Loop waits
 // on it. Pure, no I/O.
+import type { ShotsMarker } from "../evidence/shotsEvidence.ts";
+import type { EvidenceMarker } from "../evidence/uiEvidence.ts";
 import type { DeploymentsRead, DeployOf } from "../read/deployments.ts";
 import type { MainCheckOf, MainChecksRead } from "../read/mainChecks.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
@@ -39,6 +41,18 @@ export function isMergedStanding(standing: Standing): standing is MergedStanding
 
 /** Whether a merged agent pull request needs a Staging trial, and why: it carries UI evidence, or it changes no screen. */
 export type StagingTrial = { readonly needed: true; readonly why: "ui-evidence" } | { readonly needed: false; readonly why: "no-screen" };
+
+/**
+ * Whether a merged agent pull request needs a Staging trial, from the marker
+ * the Kit wrote on it: one the Kit treated as a UI pull request does, which
+ * carries an evidence marker or a shots marker, a failed capture's and an
+ * Evidence miss's included, unless its Implementer said nothing visible
+ * changes. Every other changes no screen.
+ */
+export function asksAStagingTrial(evidence: EvidenceMarker | undefined, shots: ShotsMarker | undefined): boolean {
+  if (shots?.nothingVisible !== undefined) return false;
+  return evidence !== undefined || shots !== undefined;
+}
 
 /**
  * What a merged agent pull request's Standing carries in a repo that declares

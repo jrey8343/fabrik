@@ -4,9 +4,13 @@
 // request's row at Production hangs on it. Pure, no I/O. It agrees with the
 // rule: for the same facts, the rows the rule gives with a Deployments read
 // (rowsOf) equal the rows it gave with none, or with an earlier read, joined
-// with that read.
+// with that read. In a repo that declares `staging` (#855, ADR-0038) the
+// read of production's environment also moves a row from Staging to
+// Production; the staging environment's own read is the join with staging's
+// (./joinStaging.ts).
 import { standingAt, standingOrder } from "../kit/standing.ts";
-import { deployIn, isProductionStanding, type ProductionStanding, productionStandingOf, stillStands } from "../kit/standingProduction.ts";
+import { deployIn, productionStandingOf, stillStands } from "../kit/standingProduction.ts";
+import { isMergedStanding, type MergedStanding, promotedStandingOf, stagingStandingOf } from "../kit/standingStaging.ts";
 import type { DeploymentsRead, MergeToRead } from "./deployments.ts";
 import { type Row, withOwnSettled } from "./rows.ts";
 
@@ -14,14 +18,23 @@ import { type Row, withOwnSettled } from "./rows.ts";
  * Which merges want a Deployments read: the merge commit and merge time of
  * every row at Production that is not Live, in the rows' order. A Live row is
  * settled and is never asked about again; a row in a repo that declares no
- * environment is at no place, and nothing is read for it.
+ * environment is at no place, and nothing is read for it. In a repo that
+ * declares `staging`, every row at Staging wants production's read too,
+ * where Kit config names production's environment: it is how a production
+ * Deployment starting is seen.
  */
 export function mergesToRead(rows: readonly Row[]): MergeToRead[] {
   return rows.flatMap(({ standing }) =>
-    isProductionStanding(standing) && standing.place === "production" && standing.name !== "live" && standing.detail.mergeCommit !== null
+    isMergedStanding(standing) && wantsProductionRead(standing) && standing.detail.mergeCommit !== null
       ? [{ mergeCommit: standing.detail.mergeCommit, mergedAt: standing.detail.mergedAt }]
       : [],
   );
+}
+
+/** Whether a merged pull request's row hangs on a read of production's Deployments: at Production and not Live, or at Staging in a repo that tracks production's deploys. */
+function wantsProductionRead({ place, name, detail }: MergedStanding): boolean {
+  if (place === "production") return name !== "live";
+  return place === "staging" && detail.staging !== undefined && detail.staging.production !== null;
 }
 
 /**
@@ -32,10 +45,17 @@ export function mergesToRead(rows: readonly Row[]): MergeToRead[] {
  * environment. A merged pull request's row whose 24 hours have passed at
  * `now` is left out, at Production or not. Every row is read at `now` as the
  * rule reads a kept Standing (standingAt).
+ *
+ * In a repo that declares `staging`, a read of production's environment
+ * moves a row at Staging to Production, with production's names, once it
+ * shows a Deployment that contains the merge has started, and leaves it at
+ * Staging until then. One at Production that the read holds no Deployment
+ * for any more goes back to Staging, its staging deploys unread until the
+ * join with staging settles it.
  */
 export function joinDeployments(rows: readonly Row[], read: DeploymentsRead, now: string): Row[] {
   const joined = rows.flatMap((row) => {
-    const settled = isProductionStanding(row.standing) ? settledWith(row.standing, read, now) : row.standing;
+    const settled = isMergedStanding(row.standing) ? settledWith(row.standing, read, now) : row.standing;
     if (settled === null) return [];
     const standing = standingAt(settled, now);
     const plainPullRequest = withOwnSettled(row.plainPullRequest, (own) => standingAt(own, now));
@@ -46,11 +66,20 @@ export function joinDeployments(rows: readonly Row[], read: DeploymentsRead, now
 }
 
 /** A merged pull request's kept Standing with the fresh read, or as it was where the read says nothing of it; null once its 24 hours have passed. */
-function settledWith(standing: ProductionStanding, read: DeploymentsRead, now: string): ProductionStanding | null {
+function settledWith(standing: MergedStanding, read: DeploymentsRead, now: string): MergedStanding | null {
   const { repo, issue, pullRequest, place, detail } = standing;
   if (!stillStands(detail.mergedAt, now)) return null;
-  if (place !== "production" || pullRequest === null) return standing;
+  if (pullRequest === null) return standing;
+  const merge = { number: pullRequest, ticket: issue, mergeCommit: detail.mergeCommit, mergedAt: detail.mergedAt };
+  if (detail.staging !== undefined) {
+    const deploy = deployIn(read, repo, detail.staging.production, detail.mergeCommit);
+    if (deploy === "unread") return standing;
+    const promoted = promotedStandingOf(repo, merge, detail.staging, read);
+    if (promoted !== null || place === "staging") return promoted ?? standing;
+    return stagingStandingOf(repo, merge, detail.staging, "unread", null);
+  }
+  if (place !== "production") return standing;
   const deploy = deployIn(read, repo, detail.environment, detail.mergeCommit);
   if (deploy === "unread") return standing;
-  return productionStandingOf(repo, { number: pullRequest, ticket: issue, mergeCommit: detail.mergeCommit, mergedAt: detail.mergedAt }, detail.environment, deploy);
+  return productionStandingOf(repo, merge, detail.environment, deploy);
 }

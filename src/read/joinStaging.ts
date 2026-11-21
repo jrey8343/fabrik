@@ -1,0 +1,89 @@
+// The join with staging (#855, ADR-0038): a repo's kept rows settled against
+// a fresh staging read, with no gather: the Deployments read of
+// `staging.environment` (./deployments.ts) and the Main checks read of the
+// commits it deployed (./mainChecks.ts). A staging deploy starting or
+// finishing, or a Main check ending, prompts only those reads, and a merged
+// agent pull request's row at Staging hangs on them. A production Deployment
+// starting moves a row from Staging to Production, which is the join with
+// Deployments' to see (./joinDeployments.ts), given production's read. Pure,
+// no I/O. It agrees with the rule: for the same facts, the rows the rule
+// gives with a staging read (rowsOf) equal the rows it gave with none, or
+// with an earlier one, joined with that read.
+import { standingAt, standingOrder } from "../kit/standing.ts";
+import { deployIn, stillStands } from "../kit/standingProduction.ts";
+import { isMergedStanding, type MergedStanding, stagingStandingOf } from "../kit/standingStaging.ts";
+import type { DeploymentsRead, MergeToRead } from "./deployments.ts";
+import type { CommitToCheck } from "./mainChecks.ts";
+import { type Row, type StagingRead, withOwnSettled } from "./rows.ts";
+
+/**
+ * Which merges want a Deployments read of `staging.environment`, asked for
+ * the newest success: the merge commit and merge time of every row at
+ * Staging, in the rows' order, but one on staging that needs no Staging
+ * trial, which is settled and never asked about again. One on staging that
+ * needs a trial is asked about on every read, so a later deploy whose Main
+ * check goes red moves it back to deploy failed. A repo that declares no
+ * `staging` has no such row.
+ */
+export function stagingMergesToRead(rows: readonly Row[]): MergeToRead[] {
+  return rows.flatMap(({ standing }) => {
+    if (!isMergedStanding(standing) || standing.place !== "staging" || standing.detail.mergeCommit === null) return [];
+    if (standing.name === "on-staging" && !standing.detail.staging.trial.needed) return [];
+    return [{ mergeCommit: standing.detail.mergeCommit, mergedAt: standing.detail.mergedAt }];
+  });
+}
+
+/**
+ * Which commits want a Main checks read, with the Main checks to read on
+ * each: for every row at Staging whose repo names Main checks and whose merge
+ * `read`, a Deployments read of its staging environment, gives as succeeded,
+ * the commit of the newest successful Deployment that contains it, or the
+ * deciding one's where the read was not asked for the newest; each commit
+ * once, in the rows' order. None where the repo names no Main checks or has
+ * them off: a merge is then on staging on its Deployment alone.
+ */
+export function commitsToCheck(rows: readonly Row[], read: DeploymentsRead): CommitToCheck[] {
+  const asked = new Map<string, readonly string[]>();
+  for (const { standing } of rows) {
+    if (!isMergedStanding(standing) || standing.place !== "staging") continue;
+    const staging = standing.detail.staging;
+    if (staging === undefined || staging.mainChecks.length === 0) continue;
+    const deploy = deployIn(read, standing.repo, staging.environment, standing.detail.mergeCommit);
+    if (deploy === "unread" || deploy.is !== "succeeded") continue;
+    const commit = deploy.newest?.commit ?? deploy.commit;
+    if (commit !== null && !asked.has(commit)) asked.set(commit, staging.mainChecks);
+  }
+  return [...asked].map(([commit, checks]) => ({ commit, checks }));
+}
+
+/**
+ * The kept rows as they stand at `now`, ISO 8601, with the staging read
+ * `read`, in the rule's order. A row at Staging takes the name, `since` and
+ * detail the rule gives for the read; a merge its Deployments read leaves
+ * out or gives as unread keeps its row, as does a read of another repo or
+ * environment, or one with no Deployments read. A merged pull request's row
+ * whose 24 hours have passed at `now` is left out, at Staging or not. Every
+ * row is read at `now` as the rule reads a kept Standing (standingAt). In a
+ * repo that declares no `staging` no row hangs on the read.
+ */
+export function joinStaging(rows: readonly Row[], read: StagingRead, now: string): Row[] {
+  const joined = rows.flatMap((row) => {
+    const settled = isMergedStanding(row.standing) ? settledWith(row.standing, read, now) : row.standing;
+    if (settled === null) return [];
+    const standing = standingAt(settled, now);
+    const plainPullRequest = withOwnSettled(row.plainPullRequest, (own) => standingAt(own, now));
+    return standing === row.standing && plainPullRequest === row.plainPullRequest ? [row] : [{ ...row, standing, plainPullRequest }];
+  });
+  // A row at Staging takes its deploy's or its check's time, so the rows are put back in the rule's order.
+  return joined.toSorted((a, b) => standingOrder(a.standing, b.standing));
+}
+
+/** A merged pull request's kept Standing with the fresh staging read, or as it was where it is not at Staging or the read says nothing of it; null once its 24 hours have passed. */
+function settledWith(standing: MergedStanding, { deployments, mainChecks }: StagingRead, now: string): MergedStanding | null {
+  const { repo, issue, pullRequest, place, detail } = standing;
+  if (!stillStands(detail.mergedAt, now)) return null;
+  if (place !== "staging" || detail.staging === undefined || pullRequest === null) return standing;
+  const deploy = deployIn(deployments, repo, detail.staging.environment, detail.mergeCommit);
+  if (deploy === "unread") return standing;
+  return stagingStandingOf(repo, { number: pullRequest, ticket: issue, mergeCommit: detail.mergeCommit, mergedAt: detail.mergedAt }, detail.staging, deploy, mainChecks);
+}

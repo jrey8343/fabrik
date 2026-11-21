@@ -8,19 +8,22 @@
 // each one's page on the preview and, once merged, in production, and where
 // an issue's Prototype is kept, or, where the evidence is Evidence shots, each
 // named shot with its pages built from its path (#822). The Kit builds every
-// address, so a reader holds no rule about addresses either. An open agent
+// address, so a reader holds no rule about addresses either. In a repo that
+// declares `staging`, a merged pull request's row stands at Staging for what
+// a staging read says (#855), and carries where to try it on staging and
+// what to try. An open agent
 // pull request's row carries the Digest of its head as data (#655), and each
 // Roll-in owed on it with the Kit's text as data (#664), so a reader parses
 // no hidden line and no Markdown. Pure, no I/O, and plain data: written as
 // JSON and read back a row is equal.
 import type { ShotNotProduced, ShotSize } from "../evidence/shotsManifest.ts";
-import { type CaptureFailure, captureFailureSentence } from "../evidence/uiEvidence.ts";
+import { type CaptureFailure, captureFailureSentence, hasDynamicSegment } from "../evidence/uiEvidence.ts";
 import { producedNamedShots, type ShotsFailure } from "../evidence/shotsEvidence.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
-import { type ProductionConfig, productionPageUrl, withRouteOn } from "../kit/config.ts";
+import { type ProductionConfig, productionPageUrl, stagingPageUrl, withRouteOn } from "../kit/config.ts";
 import { pairedOwnStandingsOf, type Standing, type StandingFacts, standingsOf } from "../kit/standing.ts";
 import { plainSinceOf } from "../kit/standingPlain.ts";
-import { isProductionStanding } from "../kit/standingProduction.ts";
+import { asksAStagingTrial, isMergedStanding } from "../kit/standingStaging.ts";
 import type { CommentFacts, GitHubFacts, RequiredChecksFact } from "../kit/weeklySummary.ts";
 import { isHeldLine } from "../loop/heldLine.ts";
 import { DESIGN_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
@@ -33,6 +36,7 @@ import { roundWaitsIn } from "./roundRead.ts";
 import { type RunsRead, runsInFlightFactOf } from "./runs.ts";
 import { type StoreFacts, storeRowsOf } from "./store.ts";
 import type { DeploymentsRead } from "./deployments.ts";
+import type { MainChecksRead } from "./mainChecks.ts";
 
 /** One Standing, with what a reader shows beside it. */
 export interface Row {
@@ -101,6 +105,13 @@ export interface Row {
    */
   readonly production: RowProduction | null;
   /**
+   * On a merged agent pull request's row in a repo whose Kit config declares
+   * `staging` (#855, ADR-0038), whatever its name and at Production too:
+   * where the Operator tries its change, and what to try. No such key on any
+   * other row, so a repo that declares no `staging` has the rows it had.
+   */
+  readonly staging?: RowStaging;
+  /**
    * On an open issue's row: its newest prototype round among the comments
    * the gather read, when that round's hidden line reads. Null when it has
    * none, a prototype failure round being none, or the newest was posted by
@@ -147,6 +158,33 @@ export interface RowProduction {
    * routes, for which a reader links the site alone.
    */
   readonly pages: readonly { readonly route: string; readonly url: string }[];
+}
+
+/**
+ * Where the Operator tries a merged agent pull request's change, as Kit
+ * config's `staging` block declares it, and what to try there. A link never
+ * opens a record: the Kit cannot tell whether staging holds the one a
+ * capture or a Journey visited in the Sandbox.
+ */
+export interface RowStaging {
+  /** The staging site's address, `staging.url`. */
+  readonly site: string;
+  /**
+   * The staging page of each route its UI evidence captured, in the marker's
+   * order: the route on the staging site, built as a production page is,
+   * where it has no dynamic segment (ADR-0024), and the site itself where it
+   * has one. Empty for a pull request with no route marker, or one that
+   * names no routes.
+   */
+  readonly pages: readonly { readonly route: string; readonly url: string }[];
+  /**
+   * Each named Evidence shot, in the pull request's order, with the site
+   * itself: a shot carries only the path its Journey visited, never a
+   * pattern. Empty for a pull request with no shots marker.
+   */
+  readonly shots: readonly { readonly name: string; readonly url: string }[];
+  /** What to try: the route patterns, then the Evidence shot names, each in its order. */
+  readonly toTry: readonly string[];
 }
 
 /** An agent pull request's UI evidence, as its evidence marker records it. */
@@ -229,12 +267,31 @@ type RowsChecks = RequiredChecksRead | null;
 type RowsDeployments = DeploymentsRead | null;
 
 /**
+ * What a reader read of staging, in a repo whose Kit config declares it
+ * (#855, ADR-0038), for the rows and for the join with staging
+ * (./joinStaging.ts).
+ */
+export interface StagingRead {
+  /** The Deployments read of `staging.environment`, asked for the newest success (readDeployments), or null when none was made: every merge's staging deploys are then unread. */
+  readonly deployments: DeploymentsRead | null;
+  /** The Main checks read of the commits on staging (./mainChecks.ts), or null when none was made: they are then unread, which matters only where the repo names Main checks. */
+  readonly mainChecks: MainChecksRead | null;
+}
+
+/**
  * One Product repo's rows at `now`, ISO 8601: one for each Standing the rule
  * gives for `facts`, with these runs in flight, Required checks and
  * Deployments, in the rule's order; an agent pull request merged in the last
  * 24 hours has one in a repo that declares `production`. The store's rows,
  * for the store's facts, are its own rule's (./store.ts), which reads no run,
  * no check and no deploy.
+ *
+ * In a repo that declares `staging`, such a pull request has a row whether
+ * or not it declares `production`: at Staging, for what `staging` says of
+ * its staging deploys and their Main checks, until `deployments`, still the
+ * read of production's environment, shows a production Deployment has
+ * started. Left out or null, its staging deploys are unread. A repo that
+ * declares none never reads it.
  */
 export function rowsOf(
   facts: Facts | StoreFacts,
@@ -242,9 +299,10 @@ export function rowsOf(
   checks: RowsChecks,
   deployments: RowsDeployments,
   now: string,
+  staging: StagingRead | null = null,
 ): Row[] {
   if (facts.kind === "store") return storeRowsOf(facts, now);
-  const ruleFacts = ruleFactsOf(facts, runsFactOf(runs), checksFactOf(checks), deployments);
+  const ruleFacts = ruleFactsOf(facts, runsFactOf(runs), checksFactOf(checks), deployments, staging);
   const standings = standingsOf(ruleFacts, now);
   // Worked out only when a Pairing session's pull request was joined to its issue's own Standing.
   const owns = standings.some(({ detail }) => detail.pullRequest !== undefined) ? pairedOwnStandingsOf(ruleFacts, now) : new Map<number, Standing>();
@@ -279,6 +337,8 @@ export function bareRowOf(standing: Standing, title: string, lastWord: Row["last
  */
 function rowOf(standing: Standing, facts: Facts, owns: ReadonlyMap<number, Standing>): Row {
   const { issue, pullRequest } = standing;
+  const merged = isMergedStanding(standing);
+  const staging = pullRequest !== null && merged ? stagingOf(facts, pullRequest) : null;
   return {
     ...bareRowOf(standing, titleOf(standing, facts), lastWordOf(standing, facts)),
     related: pullRequest === null ? [] : relatedOf(facts, pullRequest),
@@ -288,10 +348,35 @@ function rowOf(standing: Standing, facts: Facts, owns: ReadonlyMap<number, Stand
     ticketClosed: pullRequest === null ? null : ticketClosedOf(facts, pullRequest),
     plainPullRequest: pullRequest === null ? null : plainPullRequestOf(facts, pullRequest, standing.detail.pullRequest === undefined ? null : (owns.get(pullRequest) ?? null)),
     evidence: pullRequest === null ? null : evidenceOf(facts, pullRequest),
-    shots: pullRequest === null ? null : shotsOf(facts, pullRequest, isProductionStanding(standing)),
-    production: pullRequest !== null && isProductionStanding(standing) ? productionOf(facts, pullRequest) : null,
+    shots: pullRequest === null ? null : shotsOf(facts, pullRequest, merged),
+    production: pullRequest !== null && merged ? productionOf(facts, pullRequest) : null,
+    ...(staging === null ? {} : { staging }),
     prototype: issue === null ? null : prototypeOf(facts, issue),
     digest: pullRequest === null ? null : digestOn(facts, pullRequest),
+  };
+}
+
+/** The shots markers the facts hold: none in facts cached by an earlier release, which have no `shotsMarkers` at all. */
+function shotsMarkersOf({ shotsMarkers }: Facts): Facts["shotsMarkers"] {
+  return (shotsMarkers as Facts["shotsMarkers"] | undefined) ?? [];
+}
+
+/**
+ * Where the Operator tries merged agent pull request `pullRequest`'s change
+ * on staging, and what to try; null when Kit config declares no `staging`.
+ * The routes are the marker's own, as a row's production pages are, whatever
+ * came of the capture.
+ */
+function stagingOf(facts: Facts, pullRequest: number): RowStaging | null {
+  const staging = facts.kit.config.ok ? facts.kit.config.config.staging : null;
+  if (staging === null) return null;
+  const routes = facts.evidenceMarkers.find((held) => held.pullRequest === pullRequest)?.marker.routes ?? [];
+  const names = (shotsMarkersOf(facts).find((held) => held.pullRequest === pullRequest)?.marker.named ?? []).map(({ name }) => name);
+  return {
+    site: staging.url,
+    pages: routes.map((route) => ({ route, url: hasDynamicSegment(route) ? staging.url : stagingPageUrl(staging, route) })),
+    shots: names.map((name) => ({ name, url: staging.url })),
+    toTry: [...routes, ...names],
   };
 }
 
@@ -431,8 +516,17 @@ function ticketClosedOf({ github, ticketStates }: Facts, pullRequest: number): R
 const ANY_BOT = "[bot]";
 
 /** What the Standing rule reads of the repo: the gather's facts, with these runs, checks and Deployments. */
-function ruleFactsOf(facts: Facts, runs: readonly RunInFlightFact[] | "unread", checks: Readonly<Record<string, RequiredChecksFact>>, deployments: RowsDeployments): StandingFacts {
+function ruleFactsOf(
+  facts: Facts,
+  runs: readonly RunInFlightFact[] | "unread",
+  checks: Readonly<Record<string, RequiredChecksFact>>,
+  deployments: RowsDeployments,
+  staging: StagingRead | null,
+): StandingFacts {
   const { github, kit, operator, appLogin, mergedLastDay } = facts;
+  const shotsMarkers = shotsMarkersOf(facts);
+  const markersOf = (pullRequest: number) =>
+    [facts.evidenceMarkers.find((held) => held.pullRequest === pullRequest)?.marker, shotsMarkers.find((held) => held.pullRequest === pullRequest)?.marker] as const;
   return {
     kind: "product",
     github: appLogin === null ? anyBotAsTheApp(github) : github,
@@ -443,6 +537,9 @@ function ruleFactsOf(facts: Facts, runs: readonly RunInFlightFact[] | "unread", 
     runsEnded: [],
     mergedLastDay,
     deployments,
+    stagingDeployments: staging?.deployments ?? null,
+    mainChecks: staging?.mainChecks ?? null,
+    needTrial: mergedLastDay.flatMap(({ number }) => (asksAStagingTrial(...markersOf(number)) ? [number] : [])),
   };
 }
 
