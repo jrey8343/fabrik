@@ -43,7 +43,7 @@ import {
   verdictMarker,
 } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
-import type { DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
+import type { Action, DesignQueueSnapshot, LoopEvent, Plan } from "../loop/types.ts";
 import {
   AUDIT_JOB_NAME,
   countDispatchedRuns,
@@ -4169,6 +4169,37 @@ describe("Gathering the open agent PRs the conflict check weighs (#304)", () => 
       expect(snapshot.closedCheckIssues).toEqual([
         { number: 21, check: "e2e", closedAt: "2026-11-18T09:00:00Z", stateReason: "completed" },
         { number: 20, check: "lint", closedAt: "2026-11-17T09:00:00Z", stateReason: "not-planned" },
+      ]);
+    });
+
+    it("reads, on a tick, a Check's issue rewritten as its agent brief and the Spec written from one, never the issue that Spec superseded (#839)", async () => {
+      const app = { login: "fabrik-app[bot]", __typename: "Bot" };
+      const filed = anIssue({ number: 7, labels: ["bug", "needs-design", "fabrik:flaky-check"], byApp: true, body: `${flakyCheckIssueMarker("e2e")}\nThe check.` });
+      const finished = (output: unknown) => {
+        const plan = planFor({ kind: "agent-run-finished", role: "design", issue: 7, output: JSON.stringify(output) }, snapshotOf(filed), kitConfig());
+        return plan.kind === "act" ? plan.actions : [];
+      };
+      const brief = finished({ kind: "brief", comment: "One PR.", brief: { summary: "Fix e2e.", acceptanceCriteria: ["e2e passes"] } });
+      const spec = finished({ kind: "spec", comment: "Big.", spec: { title: "Spec", body: "## Problem Statement\n\nRed." }, tickets: [{ key: "fix", title: "Fix", body: "Fix it.", blockedBy: [] }] });
+      const bodyOf = (actions: readonly Action[], kind: "edit-issue-body" | "create-issue") => {
+        const found = actions.find((action) => action.kind === kind && (kind === "edit-issue-body" || ("key" in action && action.key === "spec")));
+        return found !== undefined && "body" in found && typeof found.body === "string" ? found.body : "";
+      };
+      const closed = (number: number, body: string) => ({ number, body, closedAt: "2026-11-18T09:00:00Z", stateReason: "COMPLETED", author: app });
+      const { github: base } = githubReading([[]]);
+      const github = {
+        ...base,
+        async graphql(query: string, variables: Record<string, unknown>) {
+          if (!query.includes("closedAt stateReason")) return base.graphql(query, variables);
+          return { repository: { issues: { nodes: [closed(7, bodyOf(brief, "edit-issue-body")), closed(8, bodyOf(spec, "edit-issue-body")), closed(60, bodyOf(spec, "create-issue"))] } } };
+        },
+      } as unknown as GitHub;
+
+      const snapshot = await gatherSnapshot(github, repo, { kind: "scheduled-tick", now: "2026-11-18T10:17:00Z" }, null, "fabrik-app[bot]");
+
+      expect(snapshot.closedCheckIssues?.map(({ number, check }) => [number, check])).toEqual([
+        [7, "e2e"],
+        [60, "e2e"],
       ]);
     });
 

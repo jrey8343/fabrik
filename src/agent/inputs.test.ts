@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { GitHubError } from "../github/client.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
-import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
+import { designRoundMarker, flakyCheckIssueMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
 import { roundLineIn, roundLineOf, withoutRoundLines } from "../loop/roundLine.ts";
 import { planFor } from "../loop/rules.ts";
 import { AGENT_FAILURE_FILE } from "./failure.ts";
@@ -106,6 +106,19 @@ describe("An agent job's inputs", () => {
       { number: 6, title: "The booking confirmation UI", stateLabel: "ready-for-agent", open: true, pullRequest: { number: 22, state: "open" } },
       { number: 8, title: "Add the booking emails", stateLabel: "needs-design", open: true, pullRequest: null },
     ]);
+  });
+
+  it.each([
+    ["the Fabrik App's Check's issue", { login: "fabrik-app", __typename: "Bot" }, "e2e"],
+    ["a person's issue quoting a Check's issue's marker", { login: "someone", __typename: "User" }, null],
+  ])("reads the check of %s, which the turn's Map inputs weigh (#839)", async (_, author, check) => {
+    const page = issuePage([], null);
+    const checksIssue = { repository: { issue: { ...page.repository.issue, parent: null, author, body: `${flakyCheckIssueMarker("e2e")}\nThe check.` } } };
+
+    const read = await readIssue(graphqlReturning(checksIssue), repo, 7, "operator");
+
+    expect(read.check).toBe(check);
+    expect((read.issue as { author: unknown }).author).toEqual({ login: author.login });
   });
 
   it("reads no other Tickets for an issue with no parent", async () => {
@@ -773,6 +786,13 @@ describe("What a Design-session turn's inputs say of the Map cap", () => {
     const github = githubWithMaps(maps);
 
     expect(await readMapOffer(github, repo, DEFAULT_KIT_CONFIG, { number: 3 })).toEqual({ kind: "under-a-spec", spec: 3 });
+    expect(github.reads).toEqual([]);
+  });
+
+  it("says a Check's issue can't be offered a Map, whatever room the cap has, and reads no open Maps (#839)", async () => {
+    const github = githubWithMaps([]);
+
+    expect(await readMapOffer(github, repo, DEFAULT_KIT_CONFIG, null, "e2e")).toEqual({ kind: "checks-issue", check: "e2e" });
     expect(github.reads).toEqual([]);
   });
 });

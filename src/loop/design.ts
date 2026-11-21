@@ -1,6 +1,7 @@
 // Design-session rules: when a turn starts, and how its output lands on the issue.
 // Each turn rebuilds its context from the issue thread, so nothing is held here
 // between turns beyond what the thread itself shows.
+import { checkCode } from "../review/failureExcerpt.ts";
 import { ticketOfAgentBranch } from "./agentPullRequest.ts";
 import type { SentBack } from "./backToDesign.ts";
 import { withCarriedLines } from "./carriedLines.ts";
@@ -17,6 +18,7 @@ import {
 import {
   DESIGN_LABEL,
   decisionLabel,
+  FLAKY_CHECK_LABEL,
   isCategoryLabel,
   type Label,
   KEPT_BRANCH_LABEL,
@@ -31,7 +33,10 @@ import {
 import {
   DECISIONS_SO_FAR_HEADING,
   DESIGN_TURN_FAILED_MARKER,
+  flakyCheckIssueMarker,
+  flakyCheckIssueOf,
   handBackMarker,
+  withoutFlakyCheckIssueMarker,
   designRoundMarker,
   LIVE_OUTCOME_MARKER,
   MAP_CAP_REFUSAL_OPENING,
@@ -160,7 +165,7 @@ export function answerRound(
   const notNow = whileInSession(issueNumber, snapshot.issue);
   if (notNow !== null) return notNow;
   const live = LIVE_OUTCOME_MARKER.exec(body);
-  if (live?.[1] !== undefined) return landLiveOutcome(issueNumber, live[1], snapshot.operator);
+  if (live?.[1] !== undefined) return landLiveOutcome(issueNumber, live[1], snapshot.issue, snapshot.operator);
   const { designRounds, turnFailed, firstTurnClaimed } = snapshot.issue;
   if (designRounds === 0 && !turnFailed && !firstTurnClaimed) {
     return {
@@ -175,9 +180,12 @@ export function answerRound(
 /**
  * The live session's outcome is already on GitHub, so the Kit only moves the
  * issue on, as an async finish would. Each outcome ends the session and frees
- * its slot, so it asks for a Design queue check.
+ * its slot, so it asks for a Design queue check. A Spec or a Map on a Check's
+ * issue is refused instead (liveRefusedOnCheckIssue).
  */
-function landLiveOutcome(issueNumber: number, outcome: string, operator: string): Plan {
+function landLiveOutcome(issueNumber: number, outcome: string, issue: IssueSnapshot, operator: string): Plan {
+  const check = keptCheck(issue);
+  if (check !== null && (outcome === "spec" || outcome === "map")) return liveRefusedOnCheckIssue(issueNumber, outcome, check);
   const leaveSession: Action = { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN };
   // A brief, a Spec or a Map leaves new ready work, so see whether it can start.
   switch (outcome) {
@@ -226,6 +234,32 @@ function landLiveOutcome(issueNumber: number, outcome: string, operator: string)
         reason: `The live Design session on #${issueNumber} posted the outcome ${outcome}, which isn't brief, operator-brief, spec or map, so the Kit left the issue as it is`,
       };
   }
+}
+
+/**
+ * A live Spec or Map on a Check's issue (#839), which the Kit refuses as a
+ * backstop to the live skill handing a Spec to the async session: a Spec the
+ * Operator's account filed is no issue the Fabrik App opened, so the Kit
+ * would never read the check's marker on it, and a Check's issue never
+ * becomes a Map. Nothing closes and needs-design stays on. The comment opens
+ * like a failed turn's notice, so the session keeps its slot and the
+ * Operator's reply starts the async turn that finishes it, and mentions
+ * nobody: the Operator posted the outcome, so is already here.
+ */
+function liveRefusedOnCheckIssue(issueNumber: number, outcome: "spec" | "map", check: string): Plan {
+  const why =
+    outcome === "spec"
+      ? "the Kit reads a check's marker only on an issue the Fabrik App opened, so a Spec the live session filed can't take its place, and the check's fix landing would never bring in the pull requests the check holds"
+      : "a Check's issue never becomes a Map: its fix lands from a brief or a Spec, whose first Ticket can find the check's cause";
+  const undo =
+    outcome === "spec"
+      ? "Close the Spec and the Tickets the live session filed as not planned, then reply on this issue: the async Design session takes its next turn and lands the Spec as the Fabrik App."
+      : "Put back the issue's body from its edit history, close the Decisions the live session filed as not planned, then reply on this issue to finish it with a brief or a Spec.";
+  const said = [
+    `The live Design session ended #${issueNumber} in ${outcome === "spec" ? "a Spec" : "a Map"}, which the Kit refused: #${issueNumber} is the Check's issue for ${checkCode(check)}, and ${why}.`,
+    `The Kit left #${issueNumber} open in \`${NEEDS_DESIGN}\` and closed nothing. ${undo}`,
+  ].join("\n\n");
+  return { kind: "act", actions: [{ kind: "comment", issue: issueNumber, body: [DESIGN_TURN_FAILED_MARKER, said, handBackMarker({ kind: "design-turn-failed", role: "design" })].join("\n") }] };
 }
 
 /**
@@ -381,6 +415,11 @@ function landTurn(
   // Every outcome but an Operator brief leaves new ready work, so see whether it can start.
   const checkDispatch: Action = { kind: "check-dispatch" };
   if (output.kind === "map") {
+    // A Check's issue ties its check to the fix that lands from it, which a Map never does (#839).
+    const check = keptCheck(snapshot.issue);
+    if (check !== null) {
+      return wrongOutcome(issueNumber, `#${issueNumber} is the Check's issue for ${checkCode(check)}, which never becomes a Map: its fix lands from a brief or a Spec, whose first Ticket can find the check's cause`);
+    }
     if (mapCap === null) return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the open Maps" };
     // The cap holds even when the turn ignored what its inputs said of it.
     if (mapCap.kind === "full") return heldByMapCap(issueNumber, mapCap);
@@ -603,11 +642,16 @@ function closingNote(comment: string): string {
 }
 
 /**
- * The labels a new Ticket gets: the issue's category, and ready-for-agent, so
- * Intake never sends it to Triage. An Operator step gets ready-for-human instead.
+ * The labels a new Spec or Ticket gets: the issue's category, and
+ * ready-for-agent, so Intake never sends it to Triage. An Operator step gets
+ * ready-for-human instead. Whatever is filed from an issue carrying
+ * fabrik:flaky-check carries it too (#839), so each ready-for-agent Ticket of
+ * a Check's issue's Spec, or a sibling split from one, is a check's fix
+ * (src/loop/dispatch.ts's isChecksFix).
  */
 function readyLabels(issue: IssueSnapshot, state: typeof READY_FOR_AGENT | typeof READY_FOR_HUMAN = READY_FOR_AGENT): Label[] {
-  return [...issue.labels.filter(isCategoryLabel), state];
+  const checks: Label[] = issue.labels.includes(FLAKY_CHECK_LABEL) ? [FLAKY_CHECK_LABEL] : [];
+  return [...issue.labels.filter(isCategoryLabel), state, ...checks];
 }
 
 /** `2 Tickets`, `1 Operator step`, or `2 Tickets and 1 Operator step`. */
@@ -879,6 +923,7 @@ function supersedeBySpec(
     },
     ...tickets.actions,
     { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
+    ...givenUpToSpec(issue),
     {
       kind: "close-as-superseded",
       issue: issueNumber,
@@ -892,6 +937,20 @@ function supersedeBySpec(
   ];
 }
 
+/**
+ * What a Check's issue gives up to the Spec that takes its place (#839),
+ * before it closes as superseded: its marker line, the rest of its body as it
+ * was, and fabrik:flaky-check. Every superseded issue closes as completed, so
+ * this way neither the issue-closed event nor the tick's read of closed
+ * Check's issues takes its close for the check's fix landing, and one issue
+ * at a time carries the check's marker. Nothing for any other issue.
+ */
+function givenUpToSpec(issue: IssueSnapshot): Action[] {
+  return [
+    ...(keptCheck(issue) === null ? [] : [{ kind: "edit-issue-body", issue: issue.number, body: withoutFlakyCheckIssueMarker(issue.body) } as const]),
+    ...(issue.labels.includes(FLAKY_CHECK_LABEL) ? [{ kind: "remove-label", issue: issue.number, label: FLAKY_CHECK_LABEL } as const] : []),
+  ];
+}
 
 /** A round: the only Design-session text that notifies, through one @-mention of the Operator. */
 function roundComment(
@@ -1003,14 +1062,29 @@ function keptMarker(issue: IssueSnapshot): MonitorMarker | null {
 }
 
 /**
+ * The check a Check's issue (#462, #781) is about, whose marker line opens the
+ * body a session's rewrite leaves, or the Spec that takes the issue's place
+ * (#839), so the Kit still finds the check's open issue and starts the healing
+ * when it closes as completed (ADR-0031). The Kit reads the marker only on an
+ * issue the Fabrik App opened, and a Spec is the App's, so one in an issue
+ * anyone else opened is never kept. Null for any other issue.
+ */
+function keptCheck(issue: Pick<IssueSnapshot, "byApp" | "body">): string | null {
+  return issue.byApp ? flakyCheckIssueOf(issue.body) : null;
+}
+
+/**
  * The body a session's rewrite leaves: `rewritten`, opened by the kept
- * Monitor marker's line (#148) and ended with the From audit and escape lines
- * of the issue's old body (src/loop/carriedLines.ts, #150), so whatever reads
- * those lines still finds them. A line the old body quotes as code, as a
- * Monitor issue quotes its Sentry error, is never carried.
+ * check's marker line (#839), which is read only as a body's first line, then
+ * the kept Monitor marker's line (#148), and ended with the From audit and
+ * escape lines of the issue's old body (src/loop/carriedLines.ts, #150), so
+ * whatever reads those lines still finds them. A line the old body quotes as
+ * code, as a Monitor issue quotes its Sentry error, is never carried.
  */
 function rewrittenBody(rewritten: string, issue: IssueSnapshot, marker: MonitorMarker | null = keptMarker(issue)): string {
-  return withCarriedLines(marker === null ? rewritten : [monitorMarkerLine(marker), rewritten].join("\n"), issue.body);
+  const check = keptCheck(issue);
+  const opening = [...(check === null ? [] : [flakyCheckIssueMarker(check)]), ...(marker === null ? [] : [monitorMarkerLine(marker)])];
+  return withCarriedLines([...opening, rewritten].join("\n"), issue.body);
 }
 
 /** Why a session on this issue can't take a turn now, or null when it can. */

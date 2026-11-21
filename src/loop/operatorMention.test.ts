@@ -5,7 +5,7 @@
 // and what's left. Until then the Operator hears of it as quietly as of a
 // Flaky check.
 import { describe, expect, it } from "vitest";
-import { aPullRequest, kitConfig, notificationsOf, tickSnapshot } from "../__fixtures__/snapshots.ts";
+import { anIssue, aPullRequest, kitConfig, notificationsOf, snapshotOf, tickSnapshot } from "../__fixtures__/snapshots.ts";
 import { checkFixMarker, checkFixMarksIn, flakyCheckIssueMarker, flakyCheckMarker, flakyCheckMarksIn, gateRerunDoneMarker, gateRerunMarksIn, operatorMentionMarksIn } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type {
@@ -146,6 +146,18 @@ describe("while the Kit still has a move left, nothing is posted", () => {
 
   it("with no issue for the check to weigh", () => {
     expect(notificationsOf(tick())).toEqual([]);
+  });
+
+  it("while the Spec a Design session wrote from the check's issue is open and ready-for-agent, as it takes the issue's place (#839)", () => {
+    const filed = anIssue({ number: 12, labels: ["bug", "needs-design", "fabrik:flaky-check"], byApp: true, body: checkIssue([]).body });
+    const output = { kind: "spec", comment: "Big.", spec: { title: "Spec: a steady e2e", body: "## Problem Statement\n\nRed." }, tickets: [{ key: "fix", title: "Fix e2e", body: "Fix it.", blockedBy: [] }] };
+    const plan = planFor({ kind: "agent-run-finished", role: "design", issue: 12, output: JSON.stringify(output) }, snapshotOf(filed), kitConfig());
+    const spec = (plan.kind === "act" ? plan.actions : []).find((action) => action.kind === "create-issue" && action.key === "spec");
+    if (spec?.kind !== "create-issue") throw new Error("The plan files no Spec");
+    const open = { number: 60, labels: spec.labels, body: spec.body, comments: [], createdAt: "2026-11-18T09:00:00Z" };
+
+    expect(notificationsOf(tick({ issues: [open] }))).toEqual([]);
+    expect(notificationsOf(tick({ issues: [{ ...open, labels: open.labels.filter((label) => label !== "ready-for-agent").concat("ready-for-human") }] }))).toEqual(["mention on #50"]);
   });
 });
 

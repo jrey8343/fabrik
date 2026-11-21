@@ -372,7 +372,7 @@ function aDesignSessionOf(comments: readonly ReturnType<typeof aComment>[]): Rea
     graphql: <T,>(_query: string, variables: Record<string, unknown>) =>
       Promise.resolve(
         (variables["map"] === undefined
-          ? { repository: { issue: { state: "OPEN", labels: { nodes: [{ name: "needs-design" }] }, parent: null, comments: { nodes } } } }
+          ? { repository: { issue: { state: "OPEN", labels: { nodes: [{ name: "needs-design" }] }, parent: null, body: "The cart.", author: { __typename: "User", login: "owner" }, comments: { nodes } } } }
           : { repository: { issues: { nodes: [] } } }) as T,
       ),
   };

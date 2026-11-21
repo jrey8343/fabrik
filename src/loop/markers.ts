@@ -219,6 +219,15 @@ export function flakyCheckIssueOf(body: string): string | null {
   }
 }
 
+/**
+ * `body` without its opening check's issue marker line (#839), the rest as it
+ * was, as a Check's issue a Spec supersedes is left, so its close is never
+ * read as the check's fix landing. Exactly `body` when it opens with none.
+ */
+export function withoutFlakyCheckIssueMarker(body: string): string {
+  return flakyCheckIssueOf(body) === null ? body : body.replace(/^.*(?:\r?\n|$)/, "");
+}
+
 const GATE_RERUN_MARKER = /^<!-- fabrik:gate-rerun (\{.*?\}) -->/;
 const GATE_RERUN_DONE_MARKER = /^<!-- fabrik:gate-rerun-done (\{.*?\}) -->/;
 const GATE_RERUN_DONE: readonly GateRerunDone[] = ["outside", "red-on-main", "red-again", "refused", "no-run"];

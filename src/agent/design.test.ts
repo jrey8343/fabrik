@@ -287,7 +287,23 @@ describe("What a Design-session turn's prompt says of the Map cap", () => {
     expect(text).not.toContain("The Map cap has room");
   });
 
-  it.each([null, {}, { kind: "maybe" }, { kind: "cap-full", cap: "1", openMaps: [] }, { kind: "cap-full", cap: 1 }, { kind: "under-a-spec" }])(
+  it("tells a turn on a Check's issue, from the file the inputs step writes, not to offer a Map, and why (#839)", async () => {
+    const github = {
+      graphql: async <T>(): Promise<T> => {
+        throw new Error("a Check's issue reads no open Maps");
+      },
+    };
+    const written = JSON.stringify(await readMapOffer(github, { owner: "acme", name: "shop" }, DEFAULT_KIT_CONFIG, null, "e2e"));
+    const text = said(JSON.parse(written));
+
+    expect(text).toContain(
+      "This issue is the Check's issue for the Required check `e2e`, and a Check's issue never becomes a Map: the Kit brings in the check's fix when the issue, or the Spec written from it, closes as completed. A red check whose cause isn't known finishes as a Spec whose first Ticket finds the cause.",
+    );
+    expect(text).toContain("Don't offer a Map, and never end in `map`: the Kit would refuse it.");
+    expect(text).not.toContain("The Map cap has room");
+  });
+
+  it.each([null, {}, { kind: "maybe" }, { kind: "cap-full", cap: "1", openMaps: [] }, { kind: "cap-full", cap: 1 }, { kind: "under-a-spec" }, { kind: "checks-issue" }])(
     "fails the turn on inputs it can't read: %j",
     (offer) => {
       expect(() => mapCapContext(offer)).toThrow("map.json doesn't say whether this turn may offer a Map");

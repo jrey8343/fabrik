@@ -576,6 +576,14 @@ describe("work that goes on without the Operator", () => {
         });
       });
 
+      it("names a Ticket of a Check's issue's Spec as the fix, never the Spec, which carries the label too, even when a pull request names it (#839)", () => {
+        const standings = standingsIn(
+          { openIssues: [ready(55), ready(56), ready(60)], openPullRequests: fullGate },
+          dispatching([{ number: 55, labels: fixLabels, subIssues: 1, openLinkedPullRequests: [70] }, { number: 56, labels: fixLabels }, { number: 60 }], roomy),
+        );
+        expect(slots(standings)).toEqual([{ issue: 60, detail: { slot: "merge-gate", mergeGate: 3, checksFixes: { first: [56], underWay: [] } } }]);
+      });
+
       it("leaves the detail as it is today when the only fix neither goes first nor is under way", () => {
         const standings = standingsIn(
           { openIssues: [ready(50), ready(60)], openPullRequests: fullGate },

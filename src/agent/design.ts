@@ -14,6 +14,7 @@ import { PROTOTYPE_DEFAULT_VARIANTS, PROTOTYPE_MIN_VARIANTS, PROTOTYPE_VARIANT_C
 import { BROKEN_RUN_MARKER, EMPTY_DIFF_MARKER, isBrokenRunComment, isEmptyDiffComment, LIVE_OUTCOME_MARKER, sessionFinishedIn } from "../loop/markers.ts";
 import { spelled } from "../loop/readable.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
+import { checkCode } from "../review/failureExcerpt.ts";
 import { type FiledFromPullRequest, filedFromRef, headIsFetched } from "./filedFromFetch.ts";
 import { filedFromOf, MAP_INPUTS_FILE, type MapOffer, SPEC_TICKETS_FILE, type SpecTicket } from "./inputs.ts";
 import { givenOperatorComments, operatorCommentsSection } from "./operatorComments.ts";
@@ -24,8 +25,8 @@ export const MAP_CAP_HEADING = "The Map cap";
 /**
  * The Map cap as the turn's inputs read it (MAP_INPUTS_FILE): whether the
  * turn may offer a Map, and when it can't, why: the issue is a Ticket under a
- * Spec, or the cap is full, naming the open Maps that hold it, so the turn
- * can tell the Operator which.
+ * Spec or a Check's issue (#839), or the cap is full, naming the open Maps
+ * that hold it, so the turn can tell the Operator which.
  */
 export function mapCapContext(offer: unknown): string[] {
   return [`## ${MAP_CAP_HEADING}`, mapCapSaid(readOffer(offer))];
@@ -38,6 +39,12 @@ function mapCapSaid(offer: MapOffer): string {
       return "The Map cap has room, so this session may offer to chart the issue as a Map.";
     case "under-a-spec":
       return `This issue is a Ticket under the Spec #${offer.spec}, and a Ticket under a Spec never becomes a Map: the Spec stays the single parent of its Tickets. ${refuse}`;
+    case "checks-issue":
+      return [
+        `This issue is the Check's issue for the Required check ${checkCode(offer.check)}, and a Check's issue never becomes a Map: the Kit brings in the check's fix when the issue, or the Spec written from it, closes as completed.`,
+        "A red check whose cause isn't known finishes as a Spec whose first Ticket finds the cause.",
+        refuse,
+      ].join(" ");
     case "cap-full": {
       if (offer.cap === 0) {
         return `\`caps.maps\` is 0, so this repo charts no new Map. ${refuse} If the Operator asks for one, say in your next round's intro that the Kit config stops new Maps.`;
@@ -60,6 +67,8 @@ function readOffer(value: unknown): MapOffer {
   if (offer["kind"] === "may-offer") return { kind: "may-offer" };
   const { cap, openMaps, spec } = offer;
   if (offer["kind"] === "under-a-spec" && typeof spec === "number") return { kind: "under-a-spec", spec };
+  const { check } = offer;
+  if (offer["kind"] === "checks-issue" && typeof check === "string") return { kind: "checks-issue", check };
   if (offer["kind"] === "cap-full" && typeof cap === "number" && Array.isArray(openMaps)) {
     return { kind: "cap-full", cap, openMaps: openMaps.map((map: { number?: unknown; title?: unknown }) => ({ number: Number(map.number), title: text(map.title) })) };
   }
