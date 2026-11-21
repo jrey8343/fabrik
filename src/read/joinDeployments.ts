@@ -9,8 +9,8 @@
 // Production; the staging environment's own read is the join with staging's
 // (./joinStaging.ts).
 import { standingAt, standingOrder } from "../kit/standing.ts";
-import { deployIn, productionStandingOf, stillStands } from "../kit/standingProduction.ts";
-import { isMergedStanding, type MergedStanding, promotedStandingOf, stagingStandingOf } from "../kit/standingStaging.ts";
+import { deployIn, productionStandingOf } from "../kit/standingProduction.ts";
+import { isMergedStanding, type MergedStanding, mergedStillStands, promotedStandingOf, stagingStandingOf } from "../kit/standingStaging.ts";
 import type { DeploymentsRead, MergeToRead } from "./deployments.ts";
 import { type Row, withOwnSettled } from "./rows.ts";
 
@@ -43,8 +43,10 @@ function wantsProductionRead({ place, name, detail }: MergedStanding): boolean {
  * `since` and detail the rule gives for the read; a merge the read leaves out
  * or gives as unread keeps its row, as does a read of another repo or
  * environment. A merged pull request's row whose 24 hours have passed at
- * `now` is left out, at Production or not. Every row is read at `now` as the
- * rule reads a kept Standing (standingAt).
+ * `now` is left out, at Production or not; in a repo that declares
+ * `staging`, a row at Staging stands as its own `standsUntil` says (#856),
+ * so one that waits on the Operator is kept however old. Every row is read
+ * at `now` as the rule reads a kept Standing (standingAt).
  *
  * In a repo that declares `staging`, a read of production's environment
  * moves a row at Staging to Production, with production's names, once it
@@ -65,10 +67,22 @@ export function joinDeployments(rows: readonly Row[], read: DeploymentsRead, now
   return joined.toSorted((a, b) => standingOrder(a.standing, b.standing));
 }
 
-/** A merged pull request's kept Standing with the fresh read, or as it was where the read says nothing of it; null once its 24 hours have passed. */
+/**
+ * A merged pull request's kept Standing with the fresh read, or as it was
+ * where the read says nothing of it; null once it no longer stands
+ * (mergedStillStands), as it is read before the read and as the read leaves
+ * it: one that waited at Staging for days stands by its merge once it is at
+ * Production.
+ */
 function settledWith(standing: MergedStanding, read: DeploymentsRead, now: string): MergedStanding | null {
+  if (!mergedStillStands(standing, now)) return null;
+  const settled = withRead(standing, read);
+  return settled === standing || mergedStillStands(settled, now) ? settled : null;
+}
+
+/** A merged pull request's kept Standing as the fresh read leaves it, or as it was where the read says nothing of it. */
+function withRead(standing: MergedStanding, read: DeploymentsRead): MergedStanding {
   const { repo, issue, pullRequest, place, detail } = standing;
-  if (!stillStands(detail.mergedAt, now)) return null;
   if (pullRequest === null) return standing;
   const merge = { number: pullRequest, ticket: issue, mergeCommit: detail.mergeCommit, mergedAt: detail.mergedAt };
   if (detail.staging !== undefined) {
@@ -76,6 +90,7 @@ function settledWith(standing: MergedStanding, read: DeploymentsRead, now: strin
     if (deploy === "unread") return standing;
     const promoted = promotedStandingOf(repo, merge, detail.staging, read);
     if (promoted !== null || place === "staging") return promoted ?? standing;
+    // Back at Staging: with its result's name where its Staging trial has one (#856), else its staging deploys unread.
     return stagingStandingOf(repo, merge, detail.staging, "unread", null);
   }
   if (place !== "production") return standing;

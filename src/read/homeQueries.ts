@@ -10,9 +10,12 @@
 // for GitHub's record of an edit to each of a pull request's comments (#655),
 // and for why each issue cross-referenced to a pull request is in its state,
 // with one query more, by number, for the comments of those closed as not
-// planned (#664).
+// planned (#664). In a repo whose Kit config declares `staging`, and in no
+// other, they ask for the merged pull requests a page at a time with their
+// label events and the issues that name them, and for an environment's
+// Deployments (#856).
 import { BLOCKED_BY, type RawBlockedBy } from "../github/blockers.ts";
-import { ACTOR, COMMENTS, COMMIT, DRAFT_EVENTS, LABEL_EVENTS, PAGE_INFO, type RawIssue, type RawOpenPullRequest, type RawReview } from "../github/facts.ts";
+import { ACTOR, COMMENTS, COMMIT, DRAFT_EVENTS, LABEL_EVENTS, PAGE_INFO, type RawIssue, type RawLabelEvent, type RawOpenPullRequest, type RawReview } from "../github/facts.ts";
 
 /** An issue's last 100 comments, as the Weekly summary reads them, with each one's id: a Prototype's round is known by its comment. */
 export const COMMENTS_WITH_IDS = `comments(last: 100) { nodes { databaseId url body createdAt author ${ACTOR} } }`;
@@ -199,4 +202,100 @@ export interface RawMergedPullRequest {
 /** What MERGED_PULL_REQUESTS_QUERY reads. */
 export interface MergedPullRequestsQueryResult {
   repository: { pullRequests: { nodes: RawMergedPullRequest[] } };
+}
+
+/**
+ * An issue of the repo as a merged pull request's read in a repo that
+ * declares `staging` gives it (#856), cross-referenced to the pull request or
+ * closed by it: its body, where a Trial problem's line is, and whether and
+ * why it is closed.
+ */
+const TRIAL_ISSUE = "number title state stateReason body repository { nameWithOwner }";
+
+/** The issues GitHub cross-references to a merged pull request, as CROSS_REFERENCES reads an open one's, each with its body: a Trial problem names the pull request it was found on there. */
+const CROSS_REFERENCES_WITH_BODIES = `
+  crossReferences: timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
+    nodes {
+      __typename
+      ... on CrossReferencedEvent { source { __typename ... on Issue { ${TRIAL_ISSUE} } } }
+    }
+  }
+`;
+
+/**
+ * The merged pull requests of a repo that declares `staging` (#856,
+ * ADR-0038), newest-updated first, a page at a time: what
+ * MERGED_PULL_REQUESTS_QUERY reads of each, with when it was last updated,
+ * by which the gather knows when to stop; its label events, a Staging
+ * trial's result among them; the issues cross-referenced to it, with their
+ * bodies; and the body and state of each issue it closes. Made in place of
+ * MERGED_PULL_REQUESTS_QUERY, and only in such a repo.
+ */
+export const UNPROMOTED_PULL_REQUESTS_QUERY = `
+  query ($owner: String!, $name: String!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      pullRequests(states: MERGED, first: 25, after: $after, orderBy: { field: UPDATED_AT, direction: DESC }) {
+        ${PAGE_INFO}
+        nodes {
+          number title body mergedAt updatedAt headRefName
+          author ${ACTOR}
+          mergeCommit { oid }
+          closingIssuesReferences(first: 10) { nodes { ${TRIAL_ISSUE} } }
+          ${LABEL_EVENTS}
+          ${CROSS_REFERENCES_WITH_BODIES}
+        }
+      }
+    }
+  }
+`;
+
+/** An issue as TRIAL_ISSUE reads it; a cross-reference's source of another kind has only its kind. */
+export interface RawTrialIssue {
+  __typename?: string;
+  number?: number;
+  title?: string;
+  state?: "OPEN" | "CLOSED";
+  stateReason?: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null;
+  body?: string;
+  repository?: { nameWithOwner: string };
+}
+
+/** A merged pull request as UNPROMOTED_PULL_REQUESTS_QUERY reads it. */
+export interface RawUnpromotedPullRequest extends Omit<RawMergedPullRequest, "closingIssuesReferences"> {
+  updatedAt: string;
+  closingIssuesReferences: { nodes: RawTrialIssue[] };
+  timelineItems: { nodes: RawLabelEvent[] };
+  crossReferences: { nodes: { __typename: string; source?: RawTrialIssue | null }[] };
+}
+
+/**
+ * An environment's Deployments by creation, a page at a time, newest first
+ * (`DESC`) or oldest first (`ASC`), each with the commit it deployed, when
+ * that commit was committed, and its latest statuses: how a repo that
+ * declares `staging` finds where its reach past the last day starts (#856).
+ * GraphQL, since the gather reads no REST. GitHub keeps a Deployment's
+ * current status whatever its age, and deletes its earlier ones after 90
+ * days.
+ */
+export function deploymentsQuery(direction: "ASC" | "DESC"): string {
+  return `
+  query ($owner: String!, $name: String!, $environment: String!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      deployments(environments: [$environment], first: 20, after: $after, orderBy: { field: CREATED_AT, direction: ${direction} }) {
+        ${PAGE_INFO}
+        nodes { databaseId createdAt commitOid commit { committedDate } statuses(first: 20) { nodes { state createdAt } } }
+      }
+    }
+  }
+`;
+}
+
+/** A Deployment as deploymentsQuery reads it. */
+export interface RawGatheredDeployment {
+  databaseId: number | null;
+  createdAt: string;
+  commitOid: string;
+  /** Null when GitHub no longer has the commit. */
+  commit: { committedDate: string } | null;
+  statuses: { nodes: { state: string; createdAt: string }[] } | null;
 }

@@ -403,6 +403,63 @@ describe("a Product repo's rows", () => {
       });
     });
 
+    describe("that production has not taken, as a gather keeps it past the last day (#856)", () => {
+      const WEEK_OLD = "2026-11-01T19:30:00Z";
+      /** What a gather reads past the last day: agent pull request 50, merged a week ago, with these facts beside. */
+      const waiting = (staging: Partial<NonNullable<Facts["staging"]>> = {}) =>
+        homeFactsOf({
+          kit: STAGED,
+          staging: { since: null, unpromoted: [aMergedLastDay(WEEK_OLD, { title: "Show the cart total" })], trials: { pullRequests: [], problems: [] }, evidenceMarkers: [], shotsMarkers: [], ...staging },
+        });
+      const read = { deployments: ON_STAGING, mainChecks: null };
+
+      it("has a row a week after its merge while it needs a Staging trial, the Operator's, with its title, its evidence, its staging pages and production's as a newly merged one has them", () => {
+        const [row, ...rest] = rowsOf(waiting({ evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }] }), null, null, null, NOW, read);
+        const [lastDay] = rowsOf(merged({ evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }] }), null, null, null, NOW, read);
+
+        expect(rest).toEqual([]);
+        expect(row).toMatchObject({ title: "Show the cart total", standing: { issue: 7, pullRequest: 50, place: "staging", name: "on-staging", move: "operator", yours: true, stopsWork: false, detail: { mergedAt: WEEK_OLD, staging: { trial: { needed: true, why: "ui-evidence" }, standsUntil: null } } } });
+        expect(row?.evidence).toEqual(lastDay?.evidence);
+        expect(row?.staging).toEqual(lastDay?.staging);
+        expect(row?.production).toEqual(lastDay?.production);
+        expect(row?.evidence?.pages?.map(({ route }) => route)).toEqual(["/book", "/patients/[patientId]/notes", "/cart?step=2"]);
+      });
+
+      it("reads its shots marker the same way, and has no row once its 24 hours have passed when it changes no screen", () => {
+        const [row] = rowsOf(waiting({ shotsMarkers: [{ pullRequest: 50, marker: SHOTS_MARKER }] }), null, null, null, NOW, read);
+
+        expect(row).toMatchObject({ standing: { name: "on-staging", move: "operator" }, shots: { run: 9300 }, staging: { toTry: ["composer: draft ready", "inbox: empty"] } });
+        expect(rowsOf(waiting({ shotsMarkers: [{ pullRequest: 50, marker: { ...SHOTS_MARKER, named: [], missed: [], nothingVisible: "Only the copy of an email changed." } }] }), null, null, null, NOW, read)).toEqual([]);
+        expect(rowsOf(waiting(), null, null, null, NOW, read)).toEqual([]);
+      });
+
+      it("takes its Staging trial's result from the label events the gather read, by the Operator the facts name, and needs a trial when it closes a Trial problem", () => {
+        const accepted = (actor: string) => ({ pullRequests: [{ pullRequest: 50, labelEvents: [aLabelAdded("fabrik:trial-accepted", "2026-11-08T19:50:00Z", { actor })], closes: [] }], problems: [] });
+        const closing = { pullRequests: [{ pullRequest: 50, labelEvents: [], closes: [70] }], problems: [{ issue: 70, pullRequest: 12, title: "The cart total reads 0", open: false, closedAs: "completed" }] } as const;
+
+        expect(rowsOf(waiting({ trials: accepted("operator") }), null, null, null, NOW, read).map(({ standing }) => standing)).toMatchObject([{ name: "trial-accepted", move: "nobody", since: "2026-11-08T19:50:00Z" }]);
+        expect(rowsOf(waiting({ trials: accepted("fabrik-app[bot]") }), null, null, null, NOW, read)).toEqual([]);
+        expect(rowsOf({ ...waiting({ trials: accepted("kate") }), operator: "kate" }, null, null, null, NOW, read).map(({ standing }) => standing)).toMatchObject([{ name: "trial-accepted" }]);
+        expect(rowsOf(waiting({ trials: closing }), null, null, null, NOW, read).map(({ standing }) => standing)).toMatchObject([
+          { name: "on-staging", move: "operator", yours: true, detail: { staging: { trial: { needed: true, why: "closes-trial-problem" }, standsUntil: null } } },
+        ]);
+        // Even one whose Implementer said nothing visible changes: a fix is never accepted with nobody looking.
+        const nothingVisible = [{ pullRequest: 50, marker: { ...SHOTS_MARKER, named: [], missed: [], nothingVisible: "Only the copy of an email changed." } }];
+        expect(rowsOf(waiting({ trials: closing, shotsMarkers: nothingVisible }), null, null, null, NOW, read).map(({ standing }) => standing)).toMatchObject([
+          { name: "on-staging", move: "operator", detail: { staging: { trial: { needed: true, why: "closes-trial-problem" } } } },
+        ]);
+      });
+
+      it("gives one row to a pull request the gather kept both ways, and survives a JSON round trip", () => {
+        const both = { ...waiting({ unpromoted: [aMergedLastDay("2026-11-08T19:30:00Z")], evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }] }), mergedLastDay: [aMergedLastDay("2026-11-08T19:30:00Z")], evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }] };
+        const rows = rowsOf(both, null, null, null, NOW, read);
+
+        expect(rows.map(({ standing }) => standing)).toMatchObject([{ pullRequest: 50, name: "on-staging", detail: { staging: { standsUntil: null } } }]);
+        expect(rowsOf(JSON.parse(JSON.stringify(both)) as Facts, null, null, null, NOW, read)).toStrictEqual(rows);
+        expect(JSON.parse(JSON.stringify(rows))).toStrictEqual(rows);
+      });
+    });
+
     it("gives a repo that declares no staging the rows it gave before, whatever staging reads it is handed", () => {
       const undeclared = homeFactsOf({
         kit: { ...STAGED, config: { ok: true, config: { ...STAGED.config.config, staging: null } } },

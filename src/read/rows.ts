@@ -11,7 +11,9 @@
 // address, so a reader holds no rule about addresses either. In a repo that
 // declares `staging`, a merged pull request's row stands at Staging for what
 // a staging read says (#855), and carries where to try it on staging and
-// what to try. An open agent
+// what to try; there the Operator's own label gives its Staging trial a
+// result, and one that waits on them has a row for as long as production
+// leaves it (#856). An open agent
 // pull request's row carries the Digest of its head as data (#655), and each
 // Roll-in owed on it with the Kit's text as data (#664), so a reader parses
 // no hidden line and no Markdown. Pure, no I/O, and plain data: written as
@@ -291,7 +293,11 @@ export interface StagingRead {
  * its staging deploys and their Main checks, until `deployments`, still the
  * read of production's environment, shows a production Deployment has
  * started. Left out or null, its staging deploys are unread. A repo that
- * declares none never reads it.
+ * declares none never reads it. There the Operator's own label gives its
+ * Staging trial a result, which names its row (#856), and one that needs a
+ * trial and has no result keeps its row, with all a newly merged one's
+ * carries, until it has a result or production takes it, however long after
+ * its merge: the facts' `staging` holds it.
  */
 export function rowsOf(
   facts: Facts | StoreFacts,
@@ -356,9 +362,24 @@ function rowOf(standing: Standing, facts: Facts, owns: ReadonlyMap<number, Stand
   };
 }
 
-/** The shots markers the facts hold: none in facts cached by an earlier release, which have no `shotsMarkers` at all. */
-function shotsMarkersOf({ shotsMarkers }: Facts): Facts["shotsMarkers"] {
-  return (shotsMarkers as Facts["shotsMarkers"] | undefined) ?? [];
+/**
+ * The shots markers the facts hold, those of the pull requests production
+ * has not taken among them (#856): none in facts cached by an earlier
+ * release, which have no `shotsMarkers` at all.
+ */
+function shotsMarkersOf({ shotsMarkers, staging }: Facts): Facts["shotsMarkers"] {
+  return [...((shotsMarkers as Facts["shotsMarkers"] | undefined) ?? []), ...(staging?.shotsMarkers ?? [])];
+}
+
+/** The evidence markers the facts hold, those of the pull requests production has not taken among them (#856). */
+function evidenceMarkersOf({ evidenceMarkers, staging }: Facts): Facts["evidenceMarkers"] {
+  return staging === undefined ? evidenceMarkers : [...evidenceMarkers, ...staging.evidenceMarkers];
+}
+
+/** The merged agent pull requests the facts hold, each once: those of the last 24 hours, then those production has not taken (#856). */
+function mergedOf({ mergedLastDay, staging }: Facts): Facts["mergedLastDay"] {
+  if (staging === undefined) return mergedLastDay;
+  return [...mergedLastDay, ...staging.unpromoted.filter(({ number }) => !mergedLastDay.some((held) => held.number === number))];
 }
 
 /**
@@ -370,7 +391,7 @@ function shotsMarkersOf({ shotsMarkers }: Facts): Facts["shotsMarkers"] {
 function stagingOf(facts: Facts, pullRequest: number): RowStaging | null {
   const staging = facts.kit.config.ok ? facts.kit.config.config.staging : null;
   if (staging === null) return null;
-  const routes = facts.evidenceMarkers.find((held) => held.pullRequest === pullRequest)?.marker.routes ?? [];
+  const routes = evidenceMarkersOf(facts).find((held) => held.pullRequest === pullRequest)?.marker.routes ?? [];
   const names = (shotsMarkersOf(facts).find((held) => held.pullRequest === pullRequest)?.marker.named ?? []).map(({ name }) => name);
   return {
     site: staging.url,
@@ -417,16 +438,17 @@ function isPrototypeRound(body: string): boolean {
 }
 
 /** Where merged agent pull request `pullRequest`'s change goes live, with the live page of each route it captured; null when Kit config declares no `production`. */
-function productionOf({ kit, evidenceMarkers }: Facts, pullRequest: number): RowProduction | null {
+function productionOf(facts: Facts, pullRequest: number): RowProduction | null {
+  const { kit } = facts;
   const production = kit.config.ok ? kit.config.config.production : null;
   if (production === null) return null;
-  const routes = evidenceMarkers.find((held) => held.pullRequest === pullRequest)?.marker.routes ?? [];
+  const routes = evidenceMarkersOf(facts).find((held) => held.pullRequest === pullRequest)?.marker.routes ?? [];
   return { site: production.url, tracked: production.environment !== null, pages: routes.map((route) => ({ route, url: productionPageUrl(production, route) })) };
 }
 
 /** Agent pull request `pullRequest`'s UI evidence, from its evidence marker; null when the facts hold none for it. */
-function evidenceOf({ evidenceMarkers }: Facts, pullRequest: number): RowEvidence | null {
-  const marker = evidenceMarkers.find((held) => held.pullRequest === pullRequest)?.marker;
+function evidenceOf(facts: Facts, pullRequest: number): RowEvidence | null {
+  const marker = evidenceMarkersOf(facts).find((held) => held.pullRequest === pullRequest)?.marker;
   if (marker === undefined) return null;
   const { run, artifact, failure, routes, preview, missed } = marker;
   const linked = preview?.is === "linked" ? preview.url : null;
@@ -447,8 +469,9 @@ function evidenceOf({ evidenceMarkers }: Facts, pullRequest: number): RowEvidenc
  * request's row (`merged`); null when the facts hold none for it, as facts
  * cached by an earlier release, with no `shotsMarkers` at all, never do.
  */
-function shotsOf({ kit, shotsMarkers }: Facts, pullRequest: number, merged: boolean): RowShots | null {
-  const marker = (shotsMarkers as Facts["shotsMarkers"] | undefined)?.find((held) => held.pullRequest === pullRequest)?.marker;
+function shotsOf(facts: Facts, pullRequest: number, merged: boolean): RowShots | null {
+  const { kit } = facts;
+  const marker = shotsMarkersOf(facts).find((held) => held.pullRequest === pullRequest)?.marker;
   if (marker === undefined) return null;
   const { head, run, artifact, failure, preview, nothingVisible, miss, named, missed } = marker;
   const linked = preview?.is === "linked" ? preview.url : null;
@@ -524,9 +547,10 @@ function ruleFactsOf(
   staging: StagingRead | null,
 ): StandingFacts {
   const { github, kit, operator, appLogin, mergedLastDay } = facts;
+  const evidenceMarkers = evidenceMarkersOf(facts);
   const shotsMarkers = shotsMarkersOf(facts);
   const markersOf = (pullRequest: number) =>
-    [facts.evidenceMarkers.find((held) => held.pullRequest === pullRequest)?.marker, shotsMarkers.find((held) => held.pullRequest === pullRequest)?.marker] as const;
+    [evidenceMarkers.find((held) => held.pullRequest === pullRequest)?.marker, shotsMarkers.find((held) => held.pullRequest === pullRequest)?.marker] as const;
   return {
     kind: "product",
     github: appLogin === null ? anyBotAsTheApp(github) : github,
@@ -539,7 +563,9 @@ function ruleFactsOf(
     deployments,
     stagingDeployments: staging?.deployments ?? null,
     mainChecks: staging?.mainChecks ?? null,
-    needTrial: mergedLastDay.flatMap(({ number }) => (asksAStagingTrial(...markersOf(number)) ? [number] : [])),
+    needTrial: mergedOf(facts).flatMap(({ number }) => (asksAStagingTrial(...markersOf(number)) ? [number] : [])),
+    // What a gather reads past the last day in a repo that declares `staging` (#856): no such key from any other.
+    ...(facts.staging === undefined ? {} : { unpromoted: facts.staging.unpromoted, trials: facts.staging.trials }),
   };
 }
 
@@ -558,10 +584,11 @@ function anyBotAsTheApp(github: GitHubFacts): GitHubFacts {
   return { ...(walk(github, "") as GitHubFacts), plainPullRequests: github.plainPullRequests };
 }
 
-/** The issue's title, or the pull request's, open or merged in the last day, when the Standing has no issue the facts hold. */
-function titleOf({ issue, pullRequest }: Standing, { github, mergedLastDay }: Facts): string {
+/** The issue's title, or the pull request's, open or merged, when the Standing has no issue the facts hold. */
+function titleOf({ issue, pullRequest }: Standing, facts: Facts): string {
+  const { github } = facts;
   const issues = [...github.openIssues, ...github.audits, ...github.retros];
-  const pullRequests = [...github.openPullRequests, ...github.plainPullRequests, ...mergedLastDay];
+  const pullRequests = [...github.openPullRequests, ...github.plainPullRequests, ...mergedOf(facts)];
   const titled = issues.find(({ number }) => number === issue) ?? pullRequests.find(({ number }) => number === pullRequest);
   return titled?.title ?? "";
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_KIT_CONFIG, type KitConfig } from "../kit/config.ts";
+import { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
 import { aDeploymentsRead, aDeployOf, aLabelAdded, aMergedLastDay, anOpenIssue, factsOf, homeFactsOf } from "./builders.ts";
 import type { DeploymentsRead } from "./deployments.ts";
 import type { Facts } from "./gather.ts";
@@ -386,5 +387,111 @@ describe("the join with production's Deployments, in a repo that declares stagin
       [53, "no-deploy-seen"],
     ]);
     expect(joined).toEqual(rowsOf(facts(), null, null, null, after, EARLIER));
+  });
+});
+
+describe("the joins and a Staging trial's result (#856)", () => {
+  /** The Operator adding `label` at `at`. */
+  const added = (label: string, at: string) => aLabelAdded(label, at, { actor: "operator" });
+  /** The facts above, with what a gather reads past the last day in a repo that declares staging: these label events on pull request 50, and no pull request production has not taken, unless a test says otherwise. */
+  const tried = (labelEvents: readonly ReturnType<typeof aLabelAdded>[], staging: Partial<NonNullable<Facts["staging"]>> = {}): Facts => ({
+    ...facts(),
+    staging: { since: null, unpromoted: [], trials: { pullRequests: [{ pullRequest: 50, labelEvents, closes: [] }], problems: [] }, evidenceMarkers: [], shotsMarkers: [], ...staging },
+  });
+  const ACCEPTED = tried([added(TRIAL_ACCEPTED_LABEL, "2026-11-12T09:58:00Z")]);
+  /** A later read: 50's newest deploy is of REDEPLOYED, where `e2e` is red. */
+  const REDDER: StagingRead = {
+    deployments: staged({ [merge("1")]: succeeded(merge("1"), "2026-11-12T09:36:00Z", REDEPLOYED, "2026-11-12T10:10:00Z") }),
+    mainChecks: checked({ [REDEPLOYED]: [check("red", "2026-11-12T10:15:00Z")] }),
+  };
+
+  it("ask nothing of staging for a row with a result, which is settled, and still ask production's read of it", () => {
+    const kept = rowsOf(ACCEPTED, null, null, null, KEPT_AT, EARLIER);
+
+    expect(of(kept, 50)?.standing).toMatchObject({ place: "staging", name: "trial-accepted", move: "nobody", since: "2026-11-12T09:58:00Z" });
+    expect(stagingMergesToRead(kept).map(({ mergeCommit }) => mergeCommit)).toEqual([merge("2"), merge("4")]);
+    expect(commitsToCheck(kept, REDDER.deployments!)).toEqual([]);
+    expect(commitsToCheck(rowsOf(facts(), null, null, null, KEPT_AT, EARLIER), REDDER.deployments!)).toEqual([{ commit: REDEPLOYED, checks: ["e2e"] }]);
+    expect(mergesToRead(kept).map(({ mergeCommit }) => mergeCommit)).toContain(merge("1"));
+  });
+
+  it("leave a row with a result alone: a later deploy whose Main check is red never moves it, as the rule has it", () => {
+    for (const label of [TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL]) {
+      const settled = tried([added(label, "2026-11-12T09:58:00Z")]);
+      const kept = rowsOf(settled, null, null, null, KEPT_AT, EARLIER);
+
+      const joined = joinStaging(kept, REDDER, NOW);
+
+      expect(of(joined, 50)).toBe(of(kept, 50));
+      const known = { deployments: staged({ ...EARLIER.deployments!.merges, ...REDDER.deployments!.merges }), mainChecks: checked({ ...EARLIER.mainChecks!.commits, ...REDDER.mainChecks!.commits }) };
+      expect(joined).toEqual(rowsOf(settled, null, null, null, NOW, known));
+    }
+    // Untried, the same read moves it back to deploy failed.
+    expect(of(joinStaging(rowsOf(tried([]), null, null, null, KEPT_AT, EARLIER), REDDER, NOW), 50)?.standing).toMatchObject({ name: "deploy-failed" });
+  });
+
+  it("move a row with a result to Production once a production Deployment that contains it has started, and put it back with its result when that read holds none any more, as the rule does", () => {
+    const started = aDeploymentsRead({ [merge("1")]: aDeployOf({ is: "running", deployment: 950, commit: merge("1"), at: "2026-11-12T10:15:00Z" }) }, NOW);
+    const none = aDeploymentsRead({ [merge("1")]: aDeployOf() }, NOW);
+    const kept = rowsOf(ACCEPTED, null, null, null, KEPT_AT, EARLIER);
+
+    const promoted = joinDeployments(kept, started, NOW);
+    const back = joinDeployments(promoted, none, NOW);
+
+    expect(of(promoted, 50)?.standing).toMatchObject({ place: "production", name: "deploying", detail: { staging: { result: { is: "accepted", at: "2026-11-12T09:58:00Z" } } } });
+    expect(promoted).toEqual(rowsOf(ACCEPTED, null, null, started, NOW, EARLIER));
+    expect(of(back, 50)?.standing).toMatchObject({ place: "staging", name: "trial-accepted", since: "2026-11-12T09:58:00Z" });
+    expect(of(back, 50)).toEqual(of(rowsOf(ACCEPTED, null, null, none, NOW, EARLIER), 50));
+  });
+
+  describe("and how long a row stands", () => {
+    /** Agent pull request 44, merged a week before with merge commit 9, closing Ticket 3, carrying UI evidence, among those production has not taken. */
+    const WAITING = {
+      unpromoted: [aMergedLastDay("2026-11-05T09:30:00Z", { number: 44, ticket: 3, mergeCommit: merge("9"), title: "Show the cart total" })],
+      evidenceMarkers: [{ pullRequest: 44, marker: { run: 4300, artifact: 800, failure: null, routes: ["/cart"] } }],
+    };
+    const WEEK_OLD: StagingRead = {
+      deployments: staged({ ...EARLIER.deployments!.merges, [merge("9")]: aDeployOf({ is: "succeeded", deployment: 800, commit: merge("9"), at: "2026-11-05T09:36:00Z", newest: { deployment: 905, commit: DEPLOYED, at: "2026-11-12T10:00:00Z" } }) }, KEPT_AT),
+      mainChecks: EARLIER.mainChecks,
+    };
+
+    it("keep an untried row that needs a trial a week after its merge, through both joins, as the rule does; and ask staging's and production's reads of it still", () => {
+      const waiting = tried([], WAITING);
+      const kept = rowsOf(waiting, null, null, null, KEPT_AT, WEEK_OLD);
+
+      expect(of(kept, 44)).toMatchObject({ title: "Show the cart total", standing: { place: "staging", name: "on-staging", move: "operator", yours: true, since: "2026-11-05T09:36:00Z", detail: { staging: { standsUntil: null } } } });
+      expect(stagingMergesToRead(kept)).toContainEqual({ mergeCommit: merge("9"), mergedAt: "2026-11-05T09:30:00Z" });
+      expect(mergesToRead(kept)).toContainEqual({ mergeCommit: merge("9"), mergedAt: "2026-11-05T09:30:00Z" });
+      for (const later of [NOW, "2026-11-20T10:00:00Z"]) {
+        expect(of(joinStaging(kept, { deployments: staged({}, later), mainChecks: null }, later), 44)?.standing).toMatchObject({ name: "on-staging", move: "operator" });
+        expect(of(joinDeployments(kept, aDeploymentsRead({}, later), later), 44)?.standing).toMatchObject({ name: "on-staging", move: "operator" });
+      }
+      expect(joinStaging(kept, WEEK_OLD, NOW)).toEqual(rowsOf(waiting, null, null, null, NOW, WEEK_OLD));
+      expect(joinDeployments(kept, aDeploymentsRead({}, NOW), NOW)).toEqual(rowsOf(waiting, null, null, null, NOW, WEEK_OLD));
+    });
+
+    it("leave out a row 24 hours after the label event that gave its result, and not a minute sooner, as the rule does", () => {
+      const settled = tried([], { ...WAITING, trials: { pullRequests: [{ pullRequest: 44, labelEvents: [added(TRIAL_ACCEPTED_LABEL, "2026-11-11T10:10:00Z")], closes: [] }], problems: [] } });
+      const kept = rowsOf(settled, null, null, null, KEPT_AT, WEEK_OLD);
+
+      expect(of(kept, 44)?.standing).toMatchObject({ name: "trial-accepted", detail: { staging: { standsUntil: "2026-11-12T10:10:00.000Z" } } });
+      for (const [now, stands] of [["2026-11-12T10:10:00Z", true], ["2026-11-12T10:11:00Z", false]] as const) {
+        expect(of(joinStaging(kept, WEEK_OLD, now), 44) !== undefined).toBe(stands);
+        expect(of(joinDeployments(kept, aDeploymentsRead({}, now), now), 44) !== undefined).toBe(stands);
+        expect(joinStaging(kept, WEEK_OLD, now)).toEqual(rowsOf(settled, null, null, null, now, WEEK_OLD));
+        expect(joinDeployments(kept, aDeploymentsRead({}, now), now)).toEqual(rowsOf(settled, null, null, null, now, WEEK_OLD));
+      }
+    });
+
+    it("leave out a week-old row once a production Deployment that contains it has started: there it stands by its merge", () => {
+      const waiting = tried([], WAITING);
+      const kept = rowsOf(waiting, null, null, null, KEPT_AT, WEEK_OLD);
+      const started = aDeploymentsRead({ [merge("9")]: aDeployOf({ is: "running", deployment: 950, commit: DEPLOYED, at: "2026-11-12T10:15:00Z" }) }, NOW);
+
+      const joined = joinDeployments(kept, started, NOW);
+
+      expect(of(joined, 44)).toBeUndefined();
+      expect(joined).toEqual(rowsOf(waiting, null, null, started, NOW, WEEK_OLD));
+    });
   });
 });

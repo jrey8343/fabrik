@@ -10,8 +10,8 @@
 // gives with a staging read (rowsOf) equal the rows it gave with none, or
 // with an earlier one, joined with that read.
 import { standingAt, standingOrder } from "../kit/standing.ts";
-import { deployIn, stillStands } from "../kit/standingProduction.ts";
-import { isMergedStanding, type MergedStanding, stagingStandingOf } from "../kit/standingStaging.ts";
+import { deployIn } from "../kit/standingProduction.ts";
+import { isMergedStanding, isTried, type MergedStanding, mergedStillStands, stagingStandingOf } from "../kit/standingStaging.ts";
 import type { DeploymentsRead, MergeToRead } from "./deployments.ts";
 import type { CommitToCheck } from "./mainChecks.ts";
 import { type Row, type StagingRead, withOwnSettled } from "./rows.ts";
@@ -20,15 +20,16 @@ import { type Row, type StagingRead, withOwnSettled } from "./rows.ts";
  * Which merges want a Deployments read of `staging.environment`, asked for
  * the newest success: the merge commit and merge time of every row at
  * Staging, in the rows' order, but one on staging that needs no Staging
- * trial, which is settled and never asked about again. One on staging that
- * needs a trial is asked about on every read, so a later deploy whose Main
- * check goes red moves it back to deploy failed. A repo that declares no
- * `staging` has no such row.
+ * trial, and one whose Staging trial has a result (#856), which are settled
+ * and never asked about again. One on staging that needs a trial and has no
+ * result is asked about on every read, so a later deploy whose Main check
+ * goes red moves it back to deploy failed. A repo that declares no `staging`
+ * has no such row.
  */
 export function stagingMergesToRead(rows: readonly Row[]): MergeToRead[] {
   return rows.flatMap(({ standing }) => {
     if (!isMergedStanding(standing) || standing.place !== "staging" || standing.detail.mergeCommit === null) return [];
-    if (standing.name === "on-staging" && !standing.detail.staging.trial.needed) return [];
+    if (isTried(standing) || (standing.name === "on-staging" && !standing.detail.staging.trial.needed)) return [];
     return [{ mergeCommit: standing.detail.mergeCommit, mergedAt: standing.detail.mergedAt }];
   });
 }
@@ -40,12 +41,13 @@ export function stagingMergesToRead(rows: readonly Row[]): MergeToRead[] {
  * the commit of the newest successful Deployment that contains it, or the
  * deciding one's where the read was not asked for the newest; each commit
  * once, in the rows' order. None where the repo names no Main checks or has
- * them off: a merge is then on staging on its Deployment alone.
+ * them off: a merge is then on staging on its Deployment alone. None for a
+ * row whose Staging trial has a result (#856), which no check moves.
  */
 export function commitsToCheck(rows: readonly Row[], read: DeploymentsRead): CommitToCheck[] {
   const asked = new Map<string, readonly string[]>();
   for (const { standing } of rows) {
-    if (!isMergedStanding(standing) || standing.place !== "staging") continue;
+    if (!isMergedStanding(standing) || standing.place !== "staging" || isTried(standing)) continue;
     const staging = standing.detail.staging;
     if (staging === undefined || staging.mainChecks.length === 0) continue;
     const deploy = deployIn(read, standing.repo, staging.environment, standing.detail.mergeCommit);
@@ -61,10 +63,14 @@ export function commitsToCheck(rows: readonly Row[], read: DeploymentsRead): Com
  * `read`, in the rule's order. A row at Staging takes the name, `since` and
  * detail the rule gives for the read; a merge its Deployments read leaves
  * out or gives as unread keeps its row, as does a read of another repo or
- * environment, or one with no Deployments read. A merged pull request's row
- * whose 24 hours have passed at `now` is left out, at Staging or not. Every
- * row is read at `now` as the rule reads a kept Standing (standingAt). In a
- * repo that declares no `staging` no row hangs on the read.
+ * environment, or one with no Deployments read. A row whose Staging trial
+ * has a result is left as it is (#856): a later deploy never moves it. A
+ * merged pull request's row that no longer stands at `now` is left out
+ * (mergedStillStands): at Staging, one past its `standsUntil`, which one
+ * that waits on the Operator has none of; anywhere else, one whose 24 hours
+ * from the merge have passed. Every row is read at `now` as the rule reads a
+ * kept Standing (standingAt). In a repo that declares no `staging` no row
+ * hangs on the read.
  */
 export function joinStaging(rows: readonly Row[], read: StagingRead, now: string): Row[] {
   const joined = rows.flatMap((row) => {
@@ -78,11 +84,11 @@ export function joinStaging(rows: readonly Row[], read: StagingRead, now: string
   return joined.toSorted((a, b) => standingOrder(a.standing, b.standing));
 }
 
-/** A merged pull request's kept Standing with the fresh staging read, or as it was where it is not at Staging or the read says nothing of it; null once its 24 hours have passed. */
+/** A merged pull request's kept Standing with the fresh staging read, or as it was where it is not at Staging, its Staging trial has a result, or the read says nothing of it; null once it no longer stands. */
 function settledWith(standing: MergedStanding, { deployments, mainChecks }: StagingRead, now: string): MergedStanding | null {
   const { repo, issue, pullRequest, place, detail } = standing;
-  if (!stillStands(detail.mergedAt, now)) return null;
-  if (place !== "staging" || detail.staging === undefined || pullRequest === null) return standing;
+  if (!mergedStillStands(standing, now)) return null;
+  if (place !== "staging" || detail.staging === undefined || pullRequest === null || isTried(standing)) return standing;
   const deploy = deployIn(deployments, repo, detail.staging.environment, detail.mergeCommit);
   if (deploy === "unread") return standing;
   return stagingStandingOf(repo, { number: pullRequest, ticket: issue, mergeCommit: detail.mergeCommit, mergedAt: detail.mergedAt }, detail.staging, deploy, mainChecks);
