@@ -59,6 +59,11 @@ class Thread {
     return { ...snapshotOfPullRequest(this.pullRequest()), pullRequest: null, conflicts: { main, now: "2026-01-01T00:00:00Z", implementJobUnderWay: null, pullRequests: [{ pullRequest: this.pullRequest(), mergeable: false }] } };
   }
 
+  /** The Operator gives a handed-back PR back to the Kit, taking `ready-for-human` off it (#841). */
+  giveBack(): void {
+    this.labels = this.labels.filter((label) => label !== "ready-for-human");
+  }
+
   /** Applies these actions to the thread as the adapter would. */
   land(actions: readonly Action[]): void {
     for (const action of actions) {
@@ -282,7 +287,7 @@ describe("A conflict-only run", () => {
       const thread = new Thread();
       thread.mainMovesAndConflicts(MAIN);
       thread.conflictRunFinishes({ net: [], commits: [], updatedFromMain: false }, B);
-      thread.labels = [];
+      thread.giveBack();
 
       expect(planFor({ kind: "main-pushed", head: MAIN }, thread.conflictsSnapshot(MAIN), kitConfig())).toEqual({ kind: "nothing", reason: expect.stringContaining("already tried against main") });
       expect(thread.mainMovesAndConflicts(NEXT_MAIN)).toMatchObject({ kind: "act" });
@@ -293,7 +298,7 @@ describe("A conflict-only run", () => {
       thread.mainMovesAndConflicts(MAIN);
       thread.conflictRunFinishes({ net: [], commits: [], updatedFromMain: false }, B);
       thread.mainMovesAndConflicts(NEXT_MAIN);
-      thread.labels = [];
+      thread.giveBack();
 
       const tick = planFor({ kind: "scheduled-tick", now: "2026-01-01T01:17:00Z" }, tickSnapshot({ conflicts: thread.conflictsSnapshot(NEXT_MAIN).conflicts }), kitConfig());
 

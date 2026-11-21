@@ -143,7 +143,7 @@ describe("A Review that stopped because its PR conflicts with main (#704)", () =
       );
     });
 
-    it("a draft carrying ready-for-human: starts no rebase, and hands it to the Operator with the reason (#841)", () => {
+    it("a draft carrying ready-for-human: starts no rebase, and hands it to the Operator as the hand-back notices do (#841)", () => {
       const actions = actionsOf(plan(draft({ labels: ["ready-for-human"] })));
 
       expect(actions.some((action) => action.kind === "rebase-onto-main")).toBe(false);
@@ -151,7 +151,7 @@ describe("A Review that stopped because its PR conflicts with main (#704)", () =
         [
           `@operator ${OPENING}`,
           "",
-          "**This needs you.** The Kit isn't bringing it up to date from here: #50 carries `ready-for-human`, so it's the Operator's until they take the label off. Merge `main` into `fabrik/ticket-7` and push, and Review starts on the push.",
+          "**This needs you.** #50 is yours while it carries `ready-for-human`: the Kit leaves its branch alone until then, and taking the label off gives it back. Merge `main` into `fabrik/ticket-7` and push, and Review starts on the push.",
           '<!-- fabrik:hand-back {"kind":"conflicted-review","role":"review"} -->',
         ].join("\n"),
       );

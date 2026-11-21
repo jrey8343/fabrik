@@ -19,6 +19,7 @@
 // take the label off.
 import { agentBranchFor } from "./agentPullRequest.ts";
 import { type HeldOn, heldUntilThen, startsWhen } from "./hold.ts";
+import { handBackStandsLine } from "./handBacks.ts";
 import { DISPATCH_LABEL, READY_FOR_HUMAN } from "./labels.ts";
 import { flakyOnPassedHead, passedHeadAtGate } from "./flakyChecks.ts";
 import { checkFixMarker, type CheckFixMark, conflictAttemptMarker, CONFLICT_RUN_ENDED_MARKER, handBackMarker, requestChangesRunEndedMarker } from "./markers.ts";
@@ -391,6 +392,9 @@ export function afterConflictedReview(
       return noActionNote(
         `**You don't need to do anything yet.** GitHub hadn't worked out whether #${number} still conflicts with \`main\`, so the Kit left it for a later conflict check, which brings it up to date if it does. If it merges cleanly, GitHub won't start the checks on \`${pullRequest.headSha.slice(0, 7)}\` until something is pushed to \`${branch}\`. ${sooner}`,
       );
+    // The Operator's to move on, in the notices' own words (#841).
+    case "handed-back":
+      return handedBack(opening, `${handBackStandsLine(number)} ${mergeYourself}`);
     // A later conflict check tries again once main moves past this head.
     case "tried":
       return noActionNote(`**You don't need to do anything.** The Kit already tried to bring #${number} up to date with \`main\`${at}, so it tries again once \`main\` moves. ${sooner}`);
@@ -583,17 +587,6 @@ export function owedConflictRun(pullRequest: PullRequestSnapshot, config: KitCon
 }
 
 /**
- * What a notice that puts ready-for-human on a pull request says of its
- * Hand-back (#841, ADR-0036): the PR is the Operator's while the label is on,
- * the Kit leaves its branch alone until then, and taking it off gives the PR
- * back. It promises nothing by a main sha, which may have moved before the
- * notice is read.
- */
-export function handBackStands(pullRequest: number): string {
-  return `#${pullRequest} is yours while it carries \`${READY_FOR_HUMAN}\`: the Kit leaves its branch alone until then, and taking the label off gives it back.`;
-}
-
-/**
  * A conflict-only run that ended without pushing: it failed, changed nothing,
  * didn't bring main in, or was refused. The Kit says why on the PR, ends the
  * run's time in flight, adds ready-for-human to the PR, and brings it back
@@ -622,7 +615,7 @@ export function conflictRunEnded(
         CONFLICT_RUN_ENDED_MARKER,
         `@${operator} The conflict-only run on #${pullRequest} didn't bring it up to date with \`main\` at ${main.slice(0, 7)}: ${why}.`,
         "",
-        `The PR still conflicts with \`main\`, so it's yours to resolve. ${handBackStands(pullRequest)} No retry was used.`,
+        `The PR still conflicts with \`main\`, so it's yours to resolve. ${handBackStandsLine(pullRequest)} No retry was used.`,
         ...(runUrl === null ? [] : ["", `[The run](${runUrl})`]),
         handBackMarker({ kind: "conflict-run-unlanded", role: "implement", ...(failure === null ? {} : { failure }) }),
       ].join("\n"),
@@ -654,7 +647,7 @@ export function requestChangesRunEnded(pullRequest: number, main: string, operat
         requestChangesRunEndedMarker(main),
         `@${operator} The Request-changes run on #${pullRequest} didn't land: ${why}.`,
         "",
-        `The Kit judged the run against \`main\` at ${head}, and your requested changes aren't built, so it's yours from here. ${handBackStands(pullRequest)} Once it's back with the Kit, your Request changes still goes first. No retry was used.`,
+        `The Kit judged the run against \`main\` at ${head}, and your requested changes aren't built, so it's yours from here. ${handBackStandsLine(pullRequest)} Once it's back with the Kit, your Request changes still goes first. No retry was used.`,
         "",
         `[The run](${runUrl})`,
         handBackMarker({ kind: "request-changes-unlanded", role: "implement" }),

@@ -13,7 +13,8 @@ import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_
 import { whyNotReviewable } from "./agentPullRequest.ts";
 import { withoutMentions } from "./mentions.ts";
 import { mergedReason } from "./mergedTickets.ts";
-import { conflictRunEnded, handBackStands, owedConflictRun, requestChangesRunEnded } from "./conflicts.ts";
+import { conflictRunEnded, owedConflictRun, requestChangesRunEnded } from "./conflicts.ts";
+import { handBackStandsLine } from "./handBacks.ts";
 import {
   CONFLICT_RUN_MARKER,
   EMPTY_DIFF_MARKER,
@@ -595,7 +596,7 @@ function requestChangesRunEmpty(
     ...(recorded === null ? [] : [recorded.marker]),
     moved
       ? `The Request-changes run on #${number} committed nothing to \`${branch}\` on top of ${started}, the head it started on, which moved to ${head} while it worked. Review runs on ${head}, and its Verdict decides what's next. No retry was used.`
-      : `@${operator} The Request-changes run on #${number} committed nothing to \`${branch}\` on top of ${started}, so your requested changes aren't built, and it's yours from here. ${handBackStands(number)} No retry was used.`,
+      : `@${operator} The Request-changes run on #${number} committed nothing to \`${branch}\` on top of ${started}, so your requested changes aren't built, and it's yours from here. ${handBackStandsLine(number)} No retry was used.`,
     "",
     ...(recorded === null ? [] : [...recorded.lines, ""]),
     // Why it built nothing, if it said, so an Operator handed the PR back knows (#429).

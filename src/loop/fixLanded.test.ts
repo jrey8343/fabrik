@@ -179,6 +179,7 @@ describe("a PR the check holds that carries ready-for-human, whose Hand-back sta
     const plan = planFor(COMPLETED, closing([handedBack, other]), kitConfig());
 
     expect(rebasesIn(plan).map(({ pullRequest }) => pullRequest)).toEqual([51]);
+    // #51's rebase carries one record on each outcome (pushed, conflicted, already up to date), and #50 none.
     expect(checkFixRecords(plan).map((action) => action.kind === "comment" && action.issue)).toEqual([51, 51, 51]);
   });
 

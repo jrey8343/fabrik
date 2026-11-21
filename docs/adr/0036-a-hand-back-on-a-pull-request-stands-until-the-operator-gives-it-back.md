@@ -1,6 +1,6 @@
 # A Hand-back on a pull request stands until the Operator gives it back
 
-This refines ADR-0011 and ADR-0031, which stay as written apart from what follows. When a conflict-only run or a Request-changes run doesn't land, or a Request-changes run commits nothing on a head that didn't move, the Kit hands the pull request to the Operator: its notice says the work is theirs, and it adds `ready-for-human`. Until now the next conflict check took the pull request back anyway. At the next new `main` head, or when a Check's issue closed as completed, the Kit rebased its branch, or put it back in draft and started a conflict-only run, while the Operator might be resolving the same conflict on the same branch.
+This refines ADR-0011, ADR-0016, ADR-0028 and ADR-0031, which stay as written apart from what follows. When a conflict-only run or a Request-changes run doesn't land, or a Request-changes run commits nothing on a head that didn't move, the Kit hands the pull request to the Operator: its notice says the work is theirs, and it adds `ready-for-human`. Until now the next conflict check took the pull request back anyway. At the next new `main` head, or when a Check's issue closed as completed, the Kit rebased its branch, or put it back in draft and started a conflict-only run, while the Operator might be resolving the same conflict on the same branch.
 
 A Hand-back on a pull request now stands while the pull request carries `ready-for-human`, and while it stands the Kit leaves the branch alone:
 
