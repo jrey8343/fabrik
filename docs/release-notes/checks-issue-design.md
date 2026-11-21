@@ -1,6 +1,6 @@
 # Release notes: A Design session keeps a Check's issue tied to its check
 
-The notes for the minor release in which a Design session on a Check's issue keeps the tie to its check however it ends, so the Kit brings held pull requests up to date when the fix lands, and not before ([#839](https://github.com/jrey8343/fabrik/issues/839), ADR-0036). Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.
+The notes for the minor release in which a Design session on a Check's issue keeps the tie to its check however it ends, so the Kit brings held pull requests up to date when the fix lands, and not before ([#839](https://github.com/jrey8343/fabrik/issues/839), ADR-0037). Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.
 
 ## Release-note line
 

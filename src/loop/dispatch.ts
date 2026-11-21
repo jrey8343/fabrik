@@ -27,7 +27,7 @@ interface Candidate {
  * Ticket carrying fabrik:flaky-check, so a Check's issue Triage routed, or a
  * Ticket of the Spec a Design session wrote from one (#839). No marker is
  * read, nor which check the Ticket fixes: the label says it is a fix, and a
- * Ticket has no sub-issues, so the Spec, which carries the label too (ADR-0036),
+ * Ticket has no sub-issues, so the Spec, which carries the label too (ADR-0037),
  * is never a fix, never released and never named as one. Dispatch weighs a fix
  * ahead of every other candidate and releases it past caps.merge_gate, as the
  * pull requests its red check holds are what fill the gate.
