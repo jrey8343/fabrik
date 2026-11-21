@@ -185,4 +185,12 @@ describe("a run's figures, from every result of its stream (#860)", () => {
 
     expect(stream.durationMs).toBe(65_000);
   });
+
+  it("is never less than its turns took together, as when only the messages before the first result carry a time", () => {
+    const stream = readStream(
+      lines(init, at("2026-11-21T01:23:16.000Z"), { type: "result", duration_ms: 1_000_000 }, { type: "assistant", message: {} }, { type: "result", duration_ms: 43_000 }),
+    );
+
+    expect(stream.durationMs).toBe(1_043_000);
+  });
 });

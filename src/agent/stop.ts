@@ -3,8 +3,8 @@
 // child that is still open, so a run that settled with its agent's process
 // open, as one ended by its output block or its idle limit is, kept its step
 // running until that process closed by itself. The agent runner
-// (src/agent/run.ts) and the judge (src/kit/judge-main.ts) call this once
-// everything they write is written.
+// (src/agent/run.ts) and the judge (src/kit/judge-main.ts) end through this
+// once everything they write is written.
 import { spawnSync } from "node:child_process";
 
 /** How long a process told to stop is given before it is killed. */
@@ -20,16 +20,16 @@ function startedBy(root: number): number[] {
     children.set(parent, [...(children.get(parent) ?? []), pid]);
   }
   const found: number[] = [];
-  const unread = [root];
-  for (let next = unread.shift(); next !== undefined; next = unread.shift()) {
-    const own = children.get(next) ?? [];
-    found.push(...own);
-    unread.push(...own);
+  const toRead = [root];
+  for (let next = toRead.shift(); next !== undefined; next = toRead.shift()) {
+    const started = children.get(next) ?? [];
+    found.push(...started);
+    toRead.push(...started);
   }
   return found;
 }
 
-function signal(pids: readonly number[], name: NodeJS.Signals): void {
+function sendSignal(pids: readonly number[], name: NodeJS.Signals): void {
   for (const pid of pids) {
     try {
       process.kill(pid, name);
@@ -39,7 +39,7 @@ function signal(pids: readonly number[], name: NodeJS.Signals): void {
   }
 }
 
-function running(pid: number): boolean {
+function isRunning(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -50,27 +50,37 @@ function running(pid: number): boolean {
 
 /**
  * Stops every process this one started that is still running, and what those
- * started: the agent's `claude` and its background commands. Each is asked to
- * stop, then killed if it hasn't within `graceMs`. Gives how many it found
- * running, 0 for a run whose agent had exited by itself.
+ * started, as far as the process table still ties them to it: the agent's
+ * `claude` and the background commands it holds. Each is asked to stop, then
+ * killed if it hasn't within `graceMs`. Gives how many it found running, 0
+ * for a run whose agent had exited by itself. A process whose own parent has
+ * already exited is tied to nothing here, so it is left to the job's end.
  */
 export async function stopStartedProcesses(graceMs: number = STOP_GRACE_MS): Promise<number> {
   const started = startedBy(process.pid);
   if (started.length === 0) return 0;
-  signal(started, "SIGTERM");
+  sendSignal(started, "SIGTERM");
   const deadline = Date.now() + graceMs;
-  while (started.some(running) && Date.now() < deadline) await new Promise((done) => setTimeout(done, 50));
+  while (started.some(isRunning) && Date.now() < deadline) await new Promise((done) => setTimeout(done, 50));
   // Whatever outlived the request, and anything started since the first look.
-  signal([...started.filter(running), ...startedBy(process.pid)], "SIGKILL");
+  sendSignal([...started.filter(isRunning), ...startedBy(process.pid)], "SIGKILL");
   return started.length;
 }
 
 /**
- * Ends a Kit program that ran an agent, with `code`, once everything it
- * writes is written: stops what the run left running, says so, and exits, so
- * its step ends without waiting for the agent's process to close.
+ * Ends a Kit program that ran an agent, once `program` has settled, by which
+ * time everything it writes is written: says how it failed, if it did, under
+ * `failureTitle`, stops what the run left running, says so, and exits with 0
+ * or 1, so its step ends without waiting for the agent's process to close.
  */
-export async function endAgentProgram(code: number): Promise<never> {
+export async function endAgentProgram(program: Promise<void>, failureTitle: string): Promise<never> {
+  const code = await program.then(
+    () => 0,
+    (error: unknown) => {
+      console.log(`::error title=${failureTitle}::${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    },
+  );
   const stopped = await stopStartedProcesses();
   if (stopped > 0) {
     console.log(`::notice title=Agent process stopped::The run settled with ${stopped} process${stopped === 1 ? "" : "es"} still running, which the Kit stopped`);

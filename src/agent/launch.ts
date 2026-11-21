@@ -22,7 +22,7 @@ import type { FailedRunCommits, FailureReport } from "../loop/types.ts";
 import { CLAUDE_ARGS_ENV } from "../preflight/main.ts";
 import { checkInitMessage } from "../preflight/meteredBilling.ts";
 import { failureReportFor } from "./failure.ts";
-import { isObject, readStream, type StreamMessage, streamMessageOf } from "./stream.ts";
+import { isObject, parsedJson, readStream, type StreamMessage, streamMessageOf } from "./stream.ts";
 import { transcriptWriter } from "./transcript.ts";
 
 export type Checked<T> = { readonly ok: true; readonly output: T } | { readonly ok: false; readonly errors: readonly string[] };
@@ -137,16 +137,39 @@ const shellWord = (word: string): string => (/^[\w,.=:/-]+$/.test(word) ? word :
  */
 export const OUTPUT_BLOCK_GRACE_SECONDS = 60;
 
-/** Whether a reply holds the whole of the output block `tag` names: its opening tag, then its closing one. */
-function holdsBlock(reply: string, tag: string): boolean {
-  const open = reply.indexOf(`<${tag}>`);
-  return open !== -1 && reply.includes(`</${tag}>`, open + tag.length + 2);
+/** What the last whole `<tag>` block of a reply holds, as Sandcastle finds it (its findLastTagContent), or null if the reply has none. */
+function lastBlockIn(reply: string, tag: string): string | null {
+  const [open, close] = [`<${tag}>`, `</${tag}>`];
+  let last: string | null = null;
+  for (let from = 0; ; ) {
+    const start = reply.indexOf(open, from);
+    const end = start === -1 ? -1 : reply.indexOf(close, start + open.length);
+    if (end === -1) return last;
+    last = reply.slice(start + open.length, end);
+    from = end + close.length;
+  }
+}
+
+/**
+ * Whether a reply holds the whole output block: the tag's two ends, and for a
+ * JSON output, JSON between them, in a code fence or not, as Sandcastle reads
+ * it. So a reply that only names the tag in prose holds none. Whether the
+ * JSON keeps the role's contract is Sandcastle's to check, which asks once
+ * for a block that breaks it again.
+ */
+function holdsBlock(reply: string, output: OutputDefinition): boolean {
+  const block = lastBlockIn(reply, output.tag)?.trim();
+  if (block === undefined || output._tag === "string") return block !== undefined;
+  const fenced = /^```(?:json)?\s*\n(?<body>[\s\S]*?)\n\s*```\s*$/u.exec(block)?.groups?.["body"];
+  return parsedJson(fenced ?? block) !== undefined;
 }
 
 /** An agent's launch: what it is started with, what the preflight is told of it, and what ends its run. */
 export interface AgentLaunch {
   /** The `claude` arguments the provider launches with, for the metered-billing preflight. */
   readonly args: readonly string[];
+  /** The structured output the agent's reply must end in, as Sandcastle reads it. */
+  readonly output: OutputDefinition;
   /** The Sandcastle provider that launches the agent. */
   readonly provider: AgentProvider;
   /**
@@ -158,7 +181,7 @@ export interface AgentLaunch {
 
 /**
  * The launch of an agent on `model` at `effort`, whose reply ends in the
- * output block `tag` names, with any `flags` the run adds. Sandcastle's
+ * block `output` names, with any `flags` the run adds. Sandcastle's
  * claudeCode() takes no extra flags, so the provider adds them to the command
  * it builds, a resumed session's too.
  *
@@ -171,17 +194,20 @@ export interface AgentLaunch {
  * named or quoted mid-run. So the signal is one the agent can't write, made
  * afresh for each launch, and the provider puts it after a `result` that
  * holds the block, where Sandcastle's reading of the tag never sees it. A
- * later `result` that holds a block takes the earlier one's place; one that
- * holds none is left out, so the reply Sandcastle reads stays the block's.
+ * later `result` that holds a block takes the earlier one's place. One that
+ * holds none, or reports an error, is left out, so the reply Sandcastle reads
+ * stays the block's whether the process then exits or stays open: a turn the
+ * agent is woken into after its reply can't undo a run that had finished.
  */
-export function agentLaunch(model: string, effort: string | null, tag: string, flags: readonly string[] = []): AgentLaunch {
+export function agentLaunch(model: string, effort: string | null, output: OutputDefinition, flags: readonly string[] = []): AgentLaunch {
   const claude = claudeCode(model, effort === null ? {} : { effort: effort as NonNullable<ClaudeCodeOptions["effort"]> });
   const added = [...NO_SCHEDULED_TURNS, ...flags].map(shellWord).join(" ");
   const endSignal = `<fabrik-run-end-${randomUUID()}>`;
   // Whether this process's stream has given a result that holds the block yet.
-  let ended = false;
+  let blockSeen = false;
   return {
     args: claudeArgs(model, effort, flags),
+    output,
     endSignal,
     provider: {
       ...claude,
@@ -189,14 +215,16 @@ export function agentLaunch(model: string, effort: string | null, tag: string, f
         const built = claude.buildPrintCommand(options);
         if (!built.command.endsWith(PROMPT_ON_STDIN)) throw new Error(`Can't add the launch flags to an unexpected launch command: ${built.command}`);
         // A new process, whose stream starts with no block: Sandcastle's one retry of a malformed block is one.
-        ended = false;
+        blockSeen = false;
         return { ...built, command: `${built.command.slice(0, -PROMPT_ON_STDIN.length)} ${added}${PROMPT_ON_STDIN}` };
       },
       parseStreamLine(line) {
         return claude.parseStreamLine(line).flatMap((event): ReturnType<AgentProvider["parseStreamLine"]> => {
+          // Sandcastle's claudeCode() gives a result that reports an error as an `error`, and no other line as one.
+          if (event.type === "error") return blockSeen ? [] : [event];
           if (event.type !== "result") return [event];
-          if (!holdsBlock(event.result, tag)) return ended ? [] : [event];
-          ended = true;
+          if (!holdsBlock(event.result, output)) return blockSeen ? [] : [event];
+          blockSeen = true;
           return [{ ...event, result: `${event.result}\n${endSignal}` }];
         });
       },
@@ -243,8 +271,6 @@ export interface AgentRun {
   /** The run's name in Sandcastle's log. */
   readonly name: string;
   readonly launch: AgentLaunch;
-  /** The structured output the reply must end in, as Sandcastle reads it. */
-  readonly output: OutputDefinition;
   /** The git checkout the agent works in. */
   readonly cwd: string;
   readonly prompt: string;
@@ -271,13 +297,12 @@ export interface AgentRun {
  * passed with no further line (#860). Either way Sandcastle reads the block
  * from the reply, and asks once for a malformed one again. A run that ends
  * the second way leaves its agent's process running, as a failed one may:
- * stopStartedProcesses (src/agent/stop.ts) is for the caller, once it has
- * written what it writes.
+ * the caller ends through endAgentProgram (src/agent/stop.ts), which stops
+ * it, once the caller has written what it writes.
  */
 export async function runAgent({
   name,
   launch,
-  output,
   cwd,
   prompt,
   ready,
@@ -295,7 +320,7 @@ export async function runAgent({
     cwd,
     prompt,
     maxIterations: 1,
-    output,
+    output: launch.output,
     hooks: { sandbox: { onSandboxReady: [ready] } },
     completionSignal: launch.endSignal,
     completionTimeoutSeconds: graceSeconds,

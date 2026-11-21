@@ -46,7 +46,7 @@ describe("The judge's answer, read from its one reply", () => {
 });
 
 describe("The judge's launch", () => {
-  const { provider: judge, args } = judgeLaunch();
+  const { provider: judge, args } = judgeLaunch([]);
   /** A launch command's words, with Sandcastle's single quotes taken off. */
   const words = (command: string) => command.split(" ").map((word) => word.replace(/^'(.*)'$/, "$1"));
 

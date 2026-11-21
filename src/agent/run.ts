@@ -617,7 +617,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     // Ends when the agent's process exits, or a grace period after a result that holds the output block (#860).
     const reply = await runAgent({
       name: `${prompt}-${subject}`,
-      launch: agentLaunch(role.model, role.effort, prompt),
+      launch: agentLaunch(role.model, role.effort, output),
       cwd: productDir,
       prompt: promptFor({
         template: await promptTemplate(prompt, reviewKind),
@@ -628,7 +628,6 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
         heading: spec.issueHeading ?? "The issue",
         extra,
       }),
-      output,
       // The role spec says which of the Product's Sandbox commands run before the agent starts (#703).
       ready: { command: readyHook(spec.readies, config.sandbox), timeoutMs },
       abort,
@@ -713,13 +712,6 @@ if (import.meta.main) {
     process.exitCode = 2;
   } else {
     // Everything the run writes is written by the time it settles, so its agent's process is stopped and the step ends (#860).
-    const code = await runner.start().then(
-      () => 0,
-      (error: unknown) => {
-        console.log(`::error title=Agent run failed::${error instanceof Error ? error.message : String(error)}`);
-        return 1;
-      },
-    );
-    await endAgentProgram(code);
+    await endAgentProgram(runner.start(), "Agent run failed");
   }
 }

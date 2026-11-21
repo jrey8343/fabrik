@@ -28,7 +28,9 @@ export interface AgentStream {
    * between results included: the first result's `duration_ms`, then the time
    * from it to the last result, read from the messages before each, since a
    * result carries no time of its own. One result's `duration_ms` is the
-   * run's. null when no result gave one.
+   * run's. It is never less than `duration_ms` summed over every result,
+   * which leaves the waits out, and is that sum when those messages carry no
+   * time either. null when no result gave one.
    */
   readonly durationMs: number | null;
   /** Every `rate_limit_event`'s `rate_limit_info`, in order. */
@@ -176,15 +178,14 @@ function timeBefore(messages: readonly StreamMessage[], index: number): number |
 
 function durationOf(messages: readonly StreamMessage[]): number | null {
   const results = messages.filter(isResult);
+  // The turns alone: the run's duration less the waits between them, so never more than it.
+  const turns = summed(results, "duration_ms");
   const first = results[0]?.["duration_ms"];
-  if (results.length > 1 && typeof first === "number") {
-    // Each result follows its turn's last message at once, so the two messages are as far apart as the two results.
-    const firstAt = timeBefore(messages, messages.findIndex(isResult));
-    const lastAt = timeBefore(messages, messages.findLastIndex(isResult));
-    if (firstAt !== null && lastAt !== null && lastAt >= firstAt) return first + (lastAt - firstAt);
-  }
-  // Without those times, the turns alone: the run's duration less its waits.
-  return summed(results, "duration_ms");
+  if (results.length < 2 || typeof first !== "number" || turns === null) return turns;
+  // Each result follows its turn's last message at once, so the two messages are as far apart as the two results.
+  const firstAt = timeBefore(messages, messages.findIndex(isResult));
+  const lastAt = timeBefore(messages, messages.findLastIndex(isResult));
+  return firstAt === null || lastAt === null ? turns : Math.max(turns, first + (lastAt - firstAt));
 }
 
 /** Reads every stdout line of the agent's stream, in order. */

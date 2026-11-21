@@ -4,14 +4,15 @@ The notes for the patch release that stops a finished agent being failed as idle
 
 ## Release-note line
 
-An agent whose reply held its output block is no longer failed as a crash ten minutes later because its process stayed open: the block ends the run, and the work is pushed.
+An agent whose reply held its output block is no longer failed as an Infrastructure failure ten minutes later because its process stayed open: the block ends the run, and the work is pushed.
 
 ## What changed
 
 - **The output block ends the run.** A `claude -p` run that ends a turn with a background command running is woken into another turn, so its stream holds more than one `result`, and its process can stay open after the last. The Kit used to wait for the process, see no output for 600 seconds and fail the run as an Infrastructure failure, with the commits only in the failure report's bundle. Now, once a `result` holds the role's whole output block and 60 seconds pass with no further line, the run is over, and the Kit carries on as it does when the process exits: the init check, the branch bundle, the output contract, the agent result.
   - Only a `result` counts. Assistant text that names or quotes the tag mid-run neither ends the run nor starts the 60 seconds.
-  - A `result` with no block isn't the end. A later `result` that holds a block takes an earlier one's place.
-  - A run whose process exits by itself is unchanged, with its one retry for a malformed block.
+  - A `result` with no block isn't the end, and neither is one that only names the tag in prose: a JSON role's block must hold JSON. A later `result` that holds a block takes an earlier one's place.
+  - A run whose process exits by itself after its one reply is unchanged, with its one retry for a block that breaks the role's contract.
+  - Once a `result` has held the block, a turn the agent is woken into afterwards can't undo it. A later `result` that holds no block, or reports an error, is passed over, whether the process then exits or stays open. Before, a run that exited after such a turn failed or was asked for its block again.
 - **The agent's process doesn't outlive its run.** When a run settles, however it ended, the runner writes what it writes, stops the agent's process and whatever it started, and exits. A step no longer waits minutes after its run failed. A notice annotation, "Agent process stopped", says when a run left something running.
 - **No scheduled turns.** Every agent, each role's and the judge's, starts with `--disallowedTools ScheduleWakeup,CronCreate,CronDelete,CronList`, in the arguments the metered-billing preflight checks. Background commands stay. If an init message still lists one of these tools, the run goes on with a warning annotation, "Scheduling tools at init", naming them.
 - **The prompts say so.** Every role's prompt says the reply holding its output tag ends the run, to write it only once nothing is running or waited on, and never to schedule a wakeup.

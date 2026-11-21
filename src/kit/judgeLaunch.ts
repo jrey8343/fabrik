@@ -3,7 +3,7 @@
 // (src/agent/launch.ts), and with its one answer checked as the score file
 // will check it. The judge job runs it from src/kit/judge-main.ts. What the
 // job leaves for the score-record job is src/kit/judge.ts, which needs none of
-// this. Pure, no I/O.
+// this. No I/O.
 import { Output, type OutputObjectDefinition } from "@ai-hero/sandcastle";
 import { type AgentLaunch, agentLaunch, type Checked, schemaOf } from "../agent/launch.ts";
 import type { Rubric } from "./rubrics.ts";
@@ -21,11 +21,12 @@ const NO_TOOLS = ["--tools", "", "--strict-mcp-config"] as const;
 
 /**
  * The judge's launch: the Kit's judge model at the Kit's judge effort, with no
- * tools, on the launch every agent starts through (src/agent/launch.ts), so
- * its arguments are the ones the metered-billing preflight checks.
+ * tools, for its one answer on `rubrics`, on the launch every agent starts
+ * through (src/agent/launch.ts), so its arguments are the ones the
+ * metered-billing preflight checks.
  */
-export function judgeLaunch(): AgentLaunch {
-  return agentLaunch(JUDGE_MODEL, JUDGE_EFFORT, JUDGE_OUTPUT_TAG, NO_TOOLS);
+export function judgeLaunch(rubrics: readonly Rubric[]): AgentLaunch {
+  return agentLaunch(JUDGE_MODEL, JUDGE_EFFORT, judgeOutput(rubrics), NO_TOOLS);
 }
 
 /**

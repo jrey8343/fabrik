@@ -13,8 +13,8 @@ const alive = (pid: number): boolean => {
   }
 };
 
-/** Runs a Kit program that starts a command which stays open, as a settled run's agent can, then ends with `code`. */
-async function programEnding(code: number, starts: string) {
+/** Runs a Kit program that does what `starts` says, as a run's agent can leave a command open, then ends as `settled`, its run's promise, does. */
+async function programEnding(settled: string, starts: string) {
   const dir = await mkdtemp(join(tmpdir(), "fabrik-stop-"));
   const program = join(dir, "program.mjs");
   await writeFile(
@@ -23,7 +23,7 @@ async function programEnding(code: number, starts: string) {
       `import { spawn } from "node:child_process";`,
       `import { endAgentProgram } from ${JSON.stringify(join(import.meta.dirname, "stop.ts"))};`,
       starts,
-      `await endAgentProgram(${code});`,
+      `await endAgentProgram(${settled}, "Agent run failed");`,
     ].join("\n"),
   );
   const started = Date.now();
@@ -32,10 +32,10 @@ async function programEnding(code: number, starts: string) {
 }
 
 describe("A Kit program that ran an agent, once its run has settled (#860)", () => {
-  it("ends with its code without waiting for a process the run left open, and leaves none running", { timeout: 60_000 }, async () => {
+  it("fails, naming the failure, without waiting for a process the failed run left open, and leaves none running", { timeout: 60_000 }, async () => {
     // A child with open pipes is what kept the runner's step waiting: Node doesn't exit while one is open.
     const { status, lines, took } = await programEnding(
-      1,
+      `Promise.reject(new Error("Agent idle for 600 seconds"))`,
       `const child = spawn("sh", ["-c", "sleep 300 & echo $!; wait"], { stdio: ["ignore", "pipe", "pipe"] });
        const background = await new Promise((read) => child.stdout.once("data", (text) => read(Number(String(text).trim()))));
        console.log(JSON.stringify({ child: child.pid, background }));`,
@@ -45,11 +45,14 @@ describe("A Kit program that ran an agent, once its run has settled (#860)", () 
     expect(took).toBeLessThan(30_000);
     const { child, background } = JSON.parse(lines[0] ?? "{}") as { child: number; background: number };
     expect([alive(child), alive(background)]).toEqual([false, false]);
-    expect(lines[1]).toBe("::notice title=Agent process stopped::The run settled with 2 processes still running, which the Kit stopped");
+    expect(lines.slice(1)).toEqual([
+      "::error title=Agent run failed::Agent idle for 600 seconds",
+      "::notice title=Agent process stopped::The run settled with 2 processes still running, which the Kit stopped",
+    ]);
   });
 
-  it("ends with its code, saying nothing, when the run left nothing running", { timeout: 60_000 }, async () => {
-    const { status, lines } = await programEnding(0, `console.log("done");`);
+  it("succeeds, saying nothing, when the run passed and left nothing running", { timeout: 60_000 }, async () => {
+    const { status, lines } = await programEnding(`Promise.resolve()`, `console.log("done");`);
 
     expect(status).toBe(0);
     expect(lines).toEqual(["done"]);

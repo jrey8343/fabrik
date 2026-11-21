@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Output } from "@ai-hero/sandcastle";
+import { Output, type OutputDefinition } from "@ai-hero/sandcastle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readImplementOutput } from "../loop/implementOutput.ts";
 import { agentLaunch, replySchemaOf, runAgent, streamWatch } from "./launch.ts";
@@ -82,20 +82,22 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-/** Runs an Implementer whose `claude` follows `steps`, and gives its output with how the stand-in was launched. */
-async function running(steps: readonly Step[]) {
+/** An Implementer's output: its block, checked against a first run's contract. */
+const IMPLEMENT = Output.object({ tag: "implement", schema: replySchemaOf(readImplementOutput), maxRetries: 1 });
+
+/** Runs an agent whose `claude` follows `steps`, an Implementer unless told, and gives its output with how the stand-in was launched. */
+async function running(steps: readonly Step[], reply: OutputDefinition = IMPLEMENT) {
   const record = join(dir, "launched.json");
   await writeFile(join(dir, "plan.json"), JSON.stringify({ record, steps }));
   process.env["FAKE_CLAUDE_PLAN"] = join(dir, "plan.json");
   const abort = new AbortController();
   const watch = streamWatch(join(dir, "transcript.jsonl"), abort);
-  const launch = agentLaunch("claude-opus-5-5", "high", "implement");
+  const launch = agentLaunch("claude-opus-5-5", "high", reply);
   const output = await runAgent({
     name: "implement-7",
     launch,
-    output: Output.object({ tag: "implement", schema: replySchemaOf(readImplementOutput), maxRetries: 1 }),
     cwd: join(dir, "repo"),
-    prompt: "Build the Ticket, then end your reply with an <implement> block.",
+    prompt: `Do the work, then end your reply with a <${reply.tag}> block.`,
     ready: { command: "true", timeoutMs: 10_000 },
     abort,
     watch,
@@ -144,6 +146,27 @@ describe("An agent run whose process stays open after its reply (#860)", () => {
     expect(output).toMatchObject({ title: "Add the booking page" });
   });
 
+  it("isn't ended by a result that only names the tag's two ends, with no block between them", async () => {
+    const { output } = await running([
+      init,
+      result("The suite is running in the background. I will end with an <implement>…</implement> block once it passes."),
+      LONGER_THAN_GRACE,
+      says("The suite passed."),
+      result(block("Add the booking page")),
+    ]);
+
+    expect(output).toMatchObject({ title: "Add the booking page" });
+  });
+
+  it("ends a Reviewer's run with the reply its tag holds, which is text", async () => {
+    const { output } = await running(
+      [init, says("Reading the diff."), result("<review>\nverdict: pass\n\nChecked each criterion against the diff.\n</review>")],
+      Output.string({ tag: "review" }),
+    );
+
+    expect(output).toBe("verdict: pass\n\nChecked each criterion against the diff.");
+  });
+
   it("takes a later result's block over an earlier one's, and keeps the block when a later result holds none", async () => {
     const { output } = await running([
       init,
@@ -165,6 +188,18 @@ describe("An agent run whose process exits by itself", () => {
     expect(output).toEqual({ title: "Add the booking page", summary: "Adds the page." });
     expect(launched.argv).toEqual(launch.args);
     expect(JSON.parse(process.env["FABRIK_CLAUDE_ARGS"] ?? "[]")).toEqual(launch.args);
+  });
+
+  it("ends with the block an earlier result held, as a run left open does, when a turn it was woken into afterwards failed", async () => {
+    const { output } = await running([
+      init,
+      result(block("Add the booking page")),
+      says("Woken by the background command."),
+      { line: { type: "result", subtype: "error_during_execution", is_error: true, result: "API Error: overloaded" } },
+      { exit: 0 },
+    ]);
+
+    expect(output).toMatchObject({ title: "Add the booking page" });
   });
 
   it("fails when its reply holds no output block", async () => {

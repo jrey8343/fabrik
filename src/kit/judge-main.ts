@@ -7,7 +7,8 @@
 // never the Kit's. Its env holds no GitHub token, and its job holds only the
 // read-only one, which reads the Ticket (ADR-0004). It leaves its answer, checked
 // against the rubrics, or its failure report, for the score-record job, and
-// its transcript beside them.
+// its transcript beside them. Once it has written them, it stops whatever its
+// agent left running and exits (src/agent/stop.ts).
 //   node src/kit/judge-main.ts
 // Env:
 //   FABRIK_TRANSCRIPT_DIR   the scored run's gzipped transcript, and the brief of what a run on a PR was asked
@@ -31,7 +32,7 @@ import type { FailureReport } from "../loop/types.ts";
 import { readBytesIfPresent, readIfPresent } from "./checkout.ts";
 import { writeOutputs, writeSummary } from "./stepFiles.ts";
 import { JUDGE_FAILURE_FILE, JUDGE_JOB, JUDGE_RESULT_FILE, judgeFailureText, judgeResultText } from "./judge.ts";
-import { judgeLaunch, judgeOutput } from "./judgeLaunch.ts";
+import { judgeLaunch } from "./judgeLaunch.ts";
 import { loadRubrics } from "./kitFiles.ts";
 import { JUDGE_EFFORT, JUDGE_MODEL, JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
 import { readJudgedRun } from "./scorer.ts";
@@ -82,10 +83,9 @@ async function main(): Promise<void> {
 
     const answer = await runAgent({
       name: JUDGE_JOB,
-      launch: judgeLaunch(),
+      launch: judgeLaunch(rubrics),
       cwd: await emptyWorkingDir(),
       prompt,
-      output: judgeOutput(rubrics),
       // Neither setup nor build: the judge runs nothing, so only the preflight.
       ready: { command: readyHook("none", { setup: null, build: null }), timeoutMs: JUDGE_TIMEOUT_MINUTES * 60_000 },
       abort,
@@ -106,11 +106,4 @@ async function main(): Promise<void> {
 }
 
 // Everything the judge writes is written by the time it settles, so its agent's process is stopped and the step ends (#860).
-const code = await main().then(
-  () => 0,
-  (error: unknown) => {
-    console.log(`::error title=The judge failed::${error instanceof Error ? error.message : String(error)}`);
-    return 1;
-  },
-);
-await endAgentProgram(code);
+await endAgentProgram(main(), "The judge failed");
