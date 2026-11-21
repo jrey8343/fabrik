@@ -518,5 +518,20 @@ describe("the joins and a Staging trial's result (#856)", () => {
         expect(of(rowsOf(waiting, null, null, taken, now, WEEK_OLD), 44) !== undefined).toBe(stands);
       }
     });
+
+    it("keep a row whose day at Staging ended since it was kept, once production's read shows a Deployment has started on it: it stands by that Deployment, as the rule has it (#857)", () => {
+      const settled = tried([], { ...WAITING, trials: { pullRequests: [{ pullRequest: 44, labelEvents: [added(TRIAL_ACCEPTED_LABEL, "2026-11-11T10:10:00Z")], closes: [] }], problems: [] } });
+      const kept = rowsOf(settled, null, null, null, KEPT_AT, WEEK_OLD);
+      const later = "2026-11-12T10:15:00Z";
+      const started = aDeploymentsRead({ [merge("9")]: aDeployOf({ is: "running", deployment: 950, commit: DEPLOYED, at: "2026-11-12T10:12:00Z" }) }, later);
+
+      const joined = joinDeployments(kept, started, later);
+
+      expect(of(kept, 44)?.standing).toMatchObject({ place: "staging", name: "trial-accepted", detail: { staging: { standsUntil: "2026-11-12T10:10:00.000Z" } } });
+      expect(of(joined, 44)?.standing).toMatchObject({ place: "production", name: "deploying", since: "2026-11-12T10:12:00Z" });
+      expect(joined).toEqual(rowsOf(settled, null, null, started, later, WEEK_OLD));
+      // With nothing of it in the read, its day at Staging has ended, as the rule has it.
+      expect(of(joinDeployments(kept, aDeploymentsRead({}, later), later), 44)).toBeUndefined();
+    });
   });
 });

@@ -73,8 +73,10 @@ export function commitsToCheck(rows: readonly Row[], read: DeploymentsRead): Com
  * has a result is left as it is (#856): a later deploy never moves it. A
  * merged pull request's row that no longer stands at `now` is left out
  * (mergedStillStands): at Staging, one past its `standsUntil`, which one
- * that waits on the Operator has none of; anywhere else, one whose 24 hours
- * from the merge have passed. Every row is read at `now` as the rule reads a
+ * that waits on the Operator has none of; at Production, one whose 24 hours
+ * from the production Deployment that gave it its name have passed (#857);
+ * and in a repo that declares no `staging`, one whose 24 hours from the
+ * merge have passed. Every row is read at `now` as the rule reads a
  * kept Standing (standingAt). In a repo that declares no `staging` no row
  * hangs on the read. Rows holding a Standing of another schema are refused,
  * one that would be left out among them: a kept row comes back through
