@@ -82,6 +82,7 @@ import {
   parseCaptureResult,
   producedNamedShots,
   productionPageUrl,
+  promoteListOf,
   readCaller,
   readDeployments,
   readDigestPlaces,
@@ -171,6 +172,8 @@ import type {
   OutcomesRead,
   OwedRollIn,
   PlaceShown,
+  PromoteEntry,
+  PromoteList,
   ReadClient,
   RepoRead,
   Repo,
@@ -394,6 +397,87 @@ const A_MAIN_CHECKS_READ = {
   readAt: NOW,
   commits: { ["d".repeat(40)]: [{ name: "e2e", is: "green", url: "https://github.com/owner/product/actions/runs/7/job/901", at: "2026-11-09T11:55:00Z" }] },
 } as const satisfies MainChecksRead;
+
+/**
+ * A_MERGE_AT_STAGING's repo as a gather reads it past the last day (#857),
+ * its production block naming the workflow `deploy-production.yml`:
+ * production last deployed by Deployment 880 of commit `p…`, which succeeded
+ * on 2026-11-08 at 09:15, and since then agent pull request 50 and
+ * Dependabot's Kit bump 51 merged.
+ */
+const A_REPO_TO_PROMOTE = {
+  ...A_MERGE_AT_STAGING,
+  kit: {
+    repo: "owner/product",
+    branch: "main",
+    config: {
+      ok: true,
+      config: {
+        ...DEFAULT_KIT_CONFIG,
+        production: { url: "https://shop.example", environment: "production", workflow: "deploy-production.yml" },
+        staging: { url: "https://staging.shop.example", environment: "staging" },
+        monitor: { ...DEFAULT_KIT_CONFIG.monitor, mainChecks: ["e2e"] },
+      },
+    },
+    dispatch: null,
+  },
+  staging: {
+    since: { from: "production", deployment: 880, commit: "p".repeat(40), at: "2026-11-08T09:00:00Z", deployedAt: "2026-11-08T09:15:00Z" },
+    unpromoted: [aMergedLastDay("2026-11-09T11:30:00Z")],
+    promoted: [],
+    plain: [{ number: 51, title: "Bump the Kit to v3.2.0", mergedAt: "2026-11-09T10:00:00Z", author: "dependabot[bot]", headRef: "dependabot/github_actions/fabrik-3.2.0", closes: [] }],
+    mergedSince: 2,
+    trials: { pullRequests: [], problems: [] },
+    evidenceMarkers: [],
+    shotsMarkers: [],
+  },
+} satisfies Facts;
+
+/** Agent pull request 50's entry in that repo's promote list: on staging, carrying UI evidence of two routes, and untried. */
+const AN_UNTRIED_ENTRY = {
+  is: "agent",
+  pullRequest: 50,
+  title: "Build the thing",
+  ticket: 7,
+  mergedAt: "2026-11-09T11:30:00Z",
+  evidence: {
+    run: 4410,
+    artifact: 901,
+    failure: null,
+    preview: "unknown",
+    pages: [
+      { route: "/book", preview: null },
+      { route: "/patients/[patientId]/notes", preview: null },
+    ],
+    failureSentence: null,
+    missed: null,
+  },
+  shots: null,
+  staging: {
+    site: "https://staging.shop.example",
+    pages: [
+      { route: "/book", url: "https://staging.shop.example/book" },
+      { route: "/patients/[patientId]/notes", url: "https://staging.shop.example" },
+    ],
+    shots: [],
+    toTry: ["/book", "/patients/[patientId]/notes"],
+  },
+  trial: { needed: true, why: "ui-evidence" },
+  result: { is: "untried" },
+} as const satisfies PromoteEntry;
+
+/** The Kit bump's entry: a Plain pull request's, with its kind and nothing more. */
+const A_PLAIN_ENTRY = { is: "plain", pullRequest: 51, title: "Bump the Kit to v3.2.0", mergedAt: "2026-11-09T10:00:00Z", kind: "kit-bump" } as const satisfies PromoteEntry;
+
+/** That repo's promote list at NOW, with A_STAGING_DEPLOYMENTS_READ and A_MAIN_CHECKS_READ. */
+const A_PROMOTE_LIST = {
+  repo: "owner/product",
+  start: { from: "production", deployment: 880, commit: "p".repeat(40), deployedAt: "2026-11-08T09:15:00Z" },
+  entries: [AN_UNTRIED_ENTRY, A_PLAIN_ENTRY],
+  notAccepted: 1,
+  leftOut: 0,
+  dispatchPage: "https://github.com/owner/product/actions/workflows/deploy-production.yml",
+} as const satisfies PromoteList;
 
 /** A Run record as schema 7 wrote it, before Broken runs were recorded. */
 function aSchema7Record(): unknown {
@@ -1190,6 +1274,15 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       50,
     ),
 
+  // The promote list
+
+  promoteListOf: () =>
+    promoteListOf(
+      A_REPO_TO_PROMOTE,
+      { deployments: A_STAGING_DEPLOYMENTS_READ, mainChecks: A_MAIN_CHECKS_READ },
+      NOW,
+    ),
+
   // The Round read
 
   readRound: () =>
@@ -1588,6 +1681,18 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     },
   } satisfies MainChecksRead,
   StagingRead: { deployments: A_STAGING_DEPLOYMENTS_READ, mainChecks: A_MAIN_CHECKS_READ } satisfies StagingRead,
+
+  // The promote list
+
+  PromoteList: A_PROMOTE_LIST satisfies PromoteList,
+  PromoteEntry: [
+    AN_UNTRIED_ENTRY,
+    { ...AN_UNTRIED_ENTRY, pullRequest: 44, ticket: 3, result: { is: "accepted", at: "2026-11-09T11:00:00Z", fix: [61], problems: [{ issue: 70, title: "The cart total reads 0", open: false }] } },
+    { ...AN_UNTRIED_ENTRY, pullRequest: 45, ticket: 4, result: { is: "problem", at: "2026-11-09T08:00:00Z", problems: [{ issue: 71, title: "The basket loses its last line", open: true }] } },
+    { ...AN_UNTRIED_ENTRY, pullRequest: 46, ticket: 5, result: { is: "not-on-staging", name: "deploy-failed", unread: false } },
+    { ...AN_UNTRIED_ENTRY, pullRequest: 47, ticket: 6, evidence: null, staging: { site: "https://staging.shop.example", pages: [], shots: [], toTry: [] }, trial: { needed: false, why: "no-screen" }, result: { is: "no-screen" } },
+    A_PLAIN_ENTRY,
+  ] satisfies readonly PromoteEntry[],
 
   // The Round read
 

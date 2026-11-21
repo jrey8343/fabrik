@@ -186,6 +186,62 @@ describe("the read library's Staging trial (#856)", () => {
   });
 });
 
+describe("the read library's promote list (#857)", () => {
+  const STAGED = { ...homeFactsOf().kit, config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" }, staging: { url: "https://staging.shop.example", environment: "staging" } } } } as const;
+
+  it("says what a production deployment would take, from a gather's facts and a staging read: its start, each agent pull request with the result its row's Standing at Staging has, each Plain one with its kind, the count not yet accepted, and the dispatch page", async () => {
+    const list = (await EXPORT_CALLS["promoteListOf"]!()) as ReturnType<(typeof import("./index.ts"))["promoteListOf"]>;
+    const rows = (await EXPORT_CALLS["joinStaging"]!()) as ReturnType<(typeof import("./index.ts"))["joinStaging"]>;
+
+    expect(list).toEqual(EXPORT_SHAPES["PromoteList"]);
+    expect(list).toMatchObject({
+      repo: "owner/product",
+      start: { from: "production", deployment: 880, commit: "p".repeat(40), deployedAt: "2026-11-08T09:15:00Z" },
+      notAccepted: 1,
+      leftOut: 0,
+      dispatchPage: "https://github.com/owner/product/actions/workflows/deploy-production.yml",
+    });
+    expect(list?.entries).toMatchObject([
+      { is: "agent", pullRequest: 50, title: "Build the thing", ticket: 7, mergedAt: "2026-11-09T11:30:00Z", trial: { needed: true, why: "ui-evidence" }, result: { is: "untried" } },
+      { is: "plain", pullRequest: 51, kind: "kit-bump" },
+    ]);
+    // Pull request 50's row, for the same merge and the same staging read: on staging, the Operator's, with no result, and the same staging pages.
+    expect(rows[0]?.standing).toMatchObject({ pullRequest: 50, place: "staging", name: "on-staging", move: "operator", detail: { staging: { trial: { needed: true, why: "ui-evidence" }, result: null } } });
+    expect(list?.entries[0]).toMatchObject({ staging: rows[0]?.staging, evidence: rows[0]?.evidence });
+    expect(Object.keys(list?.entries[1] ?? {}).toSorted()).toEqual(["is", "kind", "mergedAt", "pullRequest", "title"]);
+  });
+
+  it("is null for a repo that declares no staging, whose rows are what they were", async () => {
+    const { promoteListOf, rowsOf } = await import("./index.ts");
+    const facts = homeFactsOf({ kit: { ...STAGED, config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" } } } }, mergedLastDay: [aMergedLastDay("2026-11-09T11:30:00Z")] });
+
+    expect(promoteListOf(facts, null, "2026-11-09T12:00:00Z")).toBeNull();
+    expect(rowsOf(facts, null, null, null, "2026-11-09T12:00:00Z").map(({ standing }) => [standing.place, standing.name])).toEqual([["production", "merged"]]);
+  });
+
+  it("keeps a pull request Live for 24 hours from the production Deployment that took it in a repo that declares staging, and for 24 hours from its merge in one that declares none", async () => {
+    const { aDeploymentsRead, aDeployOf, rowsOf } = await import("./index.ts");
+    const merge = aMergedLastDay("2026-11-04T11:00:00Z");
+    const by = { deployment: 880, commit: "p".repeat(40), at: "2026-11-09T11:00:00Z" };
+    const staged = homeFactsOf({
+      kit: STAGED,
+      staging: { since: { from: "production", ...by, at: "2026-11-09T10:30:00Z", deployedAt: by.at }, unpromoted: [], promoted: [{ ...merge, by }], plain: [], mergedSince: 0, trials: { pullRequests: [], problems: [] }, evidenceMarkers: [], shotsMarkers: [] },
+    });
+    const names = (facts: ReturnType<typeof homeFactsOf>, deployments: Parameters<typeof rowsOf>[3], now: string) => rowsOf(facts, null, null, deployments, now).map(({ standing }) => [standing.place, standing.name, standing.since]);
+
+    // Merged five days before the Deployment that took it: Live an hour after that Deployment, and with no row 25 hours after it.
+    expect(names(staged, null, "2026-11-09T12:00:00Z")).toEqual([["production", "live", "2026-11-09T11:00:00Z"]]);
+    expect(names(staged, null, "2026-11-10T11:00:00Z")).toEqual([["production", "live", "2026-11-09T11:00:00Z"]]);
+    expect(names(staged, null, "2026-11-10T12:00:00Z")).toEqual([]);
+    // With no staging block, Live lasts 24 hours from the merge, as it did.
+    const lastDay = aMergedLastDay("2026-11-09T09:00:00Z");
+    const unstaged = homeFactsOf({ kit: { ...STAGED, config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" } } } }, mergedLastDay: [lastDay] });
+    const live = aDeploymentsRead({ ["m".repeat(40)]: aDeployOf({ is: "succeeded", deployment: 881, commit: "m".repeat(40), at: "2026-11-09T11:00:00Z" }) }, "2026-11-09T12:00:00Z");
+    expect(names(unstaged, live, "2026-11-10T09:00:00Z")).toEqual([["production", "live", "2026-11-09T11:00:00Z"]]);
+    expect(names(unstaged, live, "2026-11-10T09:01:00Z")).toEqual([]);
+  });
+});
+
 describe("the read library's kept Standings and rows (#793)", () => {
   const NOW = "2026-11-09T00:00:00Z";
 

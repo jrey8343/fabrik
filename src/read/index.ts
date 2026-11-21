@@ -154,6 +154,11 @@ export type { StagingRead } from "./rows.ts";
 export { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
 export { trialProblemIn, trialProblemLine } from "../loop/markers.ts";
 
+// The promote list
+
+export { promoteListOf } from "./promoteList.ts";
+export type { PromoteEntry, PromoteList } from "./promoteList.ts";
+
 // The Round read
 
 export { readRound } from "./roundRead.ts";
