@@ -188,9 +188,17 @@ describe("the promote list", () => {
       expect(entryOf(entries, 56)?.result).toEqual({ is: "problem", at: "2026-11-09T08:00:00Z", problems: [{ issue: 71, title: "The basket loses its last line", open: true }] });
     });
 
-    it("is changes no screen for one on staging that needs no Staging trial, as its Standing is on staging and nobody's", () => {
+    it("is changes no screen for one that needs no Staging trial, as its Standing on staging is nobody's and says so", () => {
       expect(standingOf(55)).toMatchObject({ place: "staging", name: "on-staging", move: "nobody", detail: { staging: { trial: { needed: false, why: "no-screen" } } } });
       expect(entryOf(entries, 55)).toMatchObject({ trial: { needed: false, why: "no-screen" }, result: { is: "no-screen" } });
+    });
+
+    it("is changes no screen before it is on staging too, and with its staging deploys unread, as its Standing says it needs no trial under every name: nothing waits on its deploy", () => {
+      const failing = staged({ [commit(55)]: aDeployOf({ is: "failed", deployment: 655, commit: commit(55), at: "2026-11-08T13:08:00Z", log: null }) });
+
+      expect(rowsOf(facts(), null, null, null, NOW, failing).find(({ standing }) => standing.pullRequest === 55)?.standing).toMatchObject({ place: "staging", name: "deploy-failed", move: "nobody", detail: { staging: { trial: { needed: false, why: "no-screen" } } } });
+      expect(entryOf(promoteListOf(facts(), failing, NOW)?.entries ?? [], 55)?.result).toEqual({ is: "no-screen" });
+      expect(entryOf(promoteListOf(facts(), null, NOW)?.entries ?? [], 55)?.result).toEqual({ is: "no-screen" });
     });
 
     it.each([
@@ -198,7 +206,7 @@ describe("the promote list", () => {
       [53, "deploying"],
       [52, "no-deploy-seen"],
       [51, "merged"],
-    ] as const)("is not yet on staging for #%i, with the name %s its Standing at Staging has", (pullRequest, name) => {
+    ] as const)("is not yet on staging for #%i, which needs a Staging trial, with the name %s its Standing at Staging has", (pullRequest, name) => {
       expect(standingOf(pullRequest)).toMatchObject({ place: "staging", name });
       expect(entryOf(entries, pullRequest)?.result).toEqual({ is: "not-on-staging", name, unread: false });
     });
@@ -234,7 +242,7 @@ describe("the promote list", () => {
     expect(list?.notAccepted).toBe(6);
     // One that changes no screen is never counted, on staging or not, nor whatever label it was given.
     const noScreens = facts({ unpromoted: [merged(55, "2026-11-08T13:00:00Z"), merged(45, "2026-11-08T12:00:00Z"), merged(44, "2026-11-09T11:50:00Z")], evidenceMarkers: [], trials: { pullRequests: [{ pullRequest: 45, labelEvents: [byTheOperator(TRIAL_PROBLEM_LABEL, "2026-11-09T08:00:00Z")], closes: [5] }], problems: [] } });
-    expect(promoteListOf(noScreens, STAGING_READ, NOW)).toMatchObject({ notAccepted: 0, entries: [{ pullRequest: 44, result: { is: "not-on-staging" } }, { pullRequest: 55, result: { is: "no-screen" } }, { pullRequest: 45, result: { is: "problem" } }] });
+    expect(promoteListOf(noScreens, STAGING_READ, NOW)).toMatchObject({ notAccepted: 0, entries: [{ pullRequest: 44, result: { is: "no-screen" } }, { pullRequest: 55, result: { is: "no-screen" } }, { pullRequest: 45, result: { is: "problem" } }] });
   });
 
   it("holds a Kit bump, a Pairing session's pull request and the Operator's own each with its kind, no evidence and no staging pages, among the agent ones by merge time, and counts none of them", () => {

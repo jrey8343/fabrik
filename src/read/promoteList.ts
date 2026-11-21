@@ -124,18 +124,21 @@ const NOT_ON_STAGING = ["merged", "deploying", "deploy-failed", "no-deploy-seen"
 
 /**
  * An agent pull request's Staging trial result, as a promote list says it,
- * read from its Standing at Staging in the order the Standing's own name is:
+ * read from its Standing at Staging, the first of these that holds:
  *
  * - `accepted`, since `at`: by the Operator's own label, or, with `fix` not
  *   null, through the merged pull requests that closed its Trial problems.
  * - `problem`, since `at`, with its Trial problems; none is a problem with no
  *   issue named.
- * - `not-on-staging`, with the Standing's name that says why: `merged`,
- *   `deploying`, `deploy-failed` or `no-deploy-seen`. `unread` is whether
- *   that is for want of a read: its staging Deployments, or the Main checks
- *   of the commit on staging, could not be read.
+ * - `no-screen`: it changes no screen, so it needs no Staging trial and waits
+ *   on nobody, on staging or not.
+ * - `not-on-staging`: it needs a Staging trial and can't have one yet, with
+ *   the Standing's name that says why: `merged`, `deploying`,
+ *   `deploy-failed` or `no-deploy-seen`. `unread` is whether that is for
+ *   want of a read: its staging Deployments, or the Main checks of the
+ *   commit on staging, could not be read, or the staging read given holds
+ *   nothing of its merge.
  * - `untried`: on staging, needing a Staging trial, with no result.
- * - `no-screen`: on staging, and it changes no screen, so it needs none.
  */
 export type PromoteResult =
   | { readonly is: "untried" }
@@ -158,6 +161,14 @@ export type PromoteResult =
  * these facts and this read, read at `now`: the one the rule gives a row,
  * whether or not that Standing still stands and whether or not a production
  * Deployment has started on it.
+ *
+ * Only an entry that needs a Staging trial and has no result turns on the
+ * staging read, and such a pull request has a row at Staging until
+ * production takes it, so the read a reader makes for its rows
+ * (stagingMergesToRead, commitsToCheck) is the read this wants. Once a
+ * production Deployment has started on one, its row is at Production and
+ * those ask no more about it: where the read given then holds nothing of its
+ * merge, its entry says not yet on staging, unread.
  */
 export function promoteListOf(facts: Facts | StoreFacts, staging: StagingRead | null, now: string): PromoteList | null {
   if (facts.kind === "store" || !facts.kit.config.ok || facts.kit.config.config.staging === null) return null;
@@ -204,9 +215,10 @@ function plainEntryOf({ number, title, mergedAt, author, headRef, closes }: Merg
 /**
  * What a Standing at Staging says of its pull request's Staging trial, read
  * at `now`: its result where it has one, which names it whatever its deploys
- * say; else its name where it is not on staging yet; else, on staging,
- * whether it waits on a trial. `problems` gives each Trial problem its
- * title.
+ * say; else that it changes no screen, which its Standing says under every
+ * name and no deploy changes; else its name where it is not on staging yet;
+ * else, on staging, that it is untried. `problems` gives each Trial problem
+ * its title.
  */
 function resultOf(standing: StagingStanding, problems: readonly TrialProblemFacts[], now: string): PromoteResult {
   const { trial, result, checksUnread } = standing.detail.staging;
@@ -214,9 +226,9 @@ function resultOf(standing: StagingStanding, problems: readonly TrialProblemFact
     const named = result.problems.map(({ issue, open }) => ({ issue, title: problems.find((problem) => problem.issue === issue)?.title ?? "", open }));
     return result.is === "accepted" ? { is: "accepted", at: result.at, fix: result.fix, problems: named } : { is: "problem", at: result.at, problems: named };
   }
+  if (!trial.needed) return { is: "no-screen" };
   // A merge no staging deploy has started for turns no deploy seen with the time alone.
   const { name } = standingAt(standing, now);
   const waiting = NOT_ON_STAGING.find((notYet) => notYet === name);
-  if (waiting !== undefined) return { is: "not-on-staging", name: waiting, unread: standing.detail.deploysUnread || checksUnread };
-  return trial.needed ? { is: "untried" } : { is: "no-screen" };
+  return waiting === undefined ? { is: "untried" } : { is: "not-on-staging", name: waiting, unread: standing.detail.deploysUnread || checksUnread };
 }
