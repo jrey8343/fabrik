@@ -251,7 +251,7 @@ A Required check that has reported both failure and success on the same head com
 _Avoid_: flake, intermittent failure
 
 **Unrelated failure**:
-A Required check still red on an agent pull request's head after the Kit's re-run, which the Reviewer judged the pull request didn't cause. It never counts toward a Ticket's Retries. If it later reads green on that head, it is a Flaky check.
+A Required check still red on an agent pull request's head after the Kit's re-run, which the Reviewer judged the pull request didn't cause. It never counts toward a Ticket's Retries. If it later reads green on that head, it is a Flaky check. While one holds a pull request at the Merge gate the Kit heals it, short of setting the check aside (ADR-0031), and the pull request's Standing is the Kit's until the Kit mentions the Operator.
 _Avoid_: flake, pre-existing failure
 
 **Check's issue**:

@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { aDesignQueueIssue, aTicket, issueRef } from "../__fixtures__/snapshots.ts";
 import {
+  aCheckIssue,
   aComment,
   aDeploymentsRead,
   aDeployOf,
   aDesignRound,
   aDesignTurnFailedNotice,
+  aGateRerunAsk,
+  aGateRerunDone,
   aLabelAdded,
   aMapCapRefusal,
   aMergedLastDay,
@@ -14,6 +17,8 @@ import {
   anOpenPullRequest,
   anOpenReplay,
   anOpenRetro,
+  anOperatorMention,
+  aPassNaming,
   aPlainPullRequest,
   aReplayBody,
   aReview,
@@ -86,6 +91,54 @@ describe("the wording of a Standing", () => {
         pill: "Waiting on checks",
         sentence: "Waiting on `ci`, running on the head the Reviewer passed 40 minutes ago.",
         remedy: null,
+      });
+    });
+  });
+
+  describe("an agent PR at the Merge gate held by an Unrelated failure (#795)", () => {
+    const head = "h".repeat(40);
+    /** PR 50's Standing an hour after its pass, which named `ci` an Unrelated failure, `ci` failing since the pass, with these later comments and open issues. */
+    const heldWith = (comments: readonly CommentFacts[] = [], openIssues: GitHubFacts["openIssues"] = [], now = minutesAfter(60)): Standing => {
+      const kit = { repo: "owner/product", branch: "main", config: { ok: true, config: DEFAULT_KIT_CONFIG }, dispatch: null, runsInFlight: [], headChecks: { [head]: [{ name: "ci", is: "failing", at: SINCE }] } } as const;
+      const github = factsOf({ openPullRequests: [anOpenPullRequest({ draft: false, headSha: head, comments: [aPassNaming(["ci"], head, SINCE), ...comments] })], openIssues });
+      const standing = standingsOf(standingFactsOf({ github, kit }), now).find(({ pullRequest }) => pullRequest === 50);
+      if (standing === undefined) throw new Error("expected a Standing");
+      return standing;
+    };
+    const wordsOf = (standing: Standing) => wordStanding(standing, minutesAfter(3 * 60), ZONE);
+    const failing = "`ci` is failing on the head the Reviewer passed 3 hours ago. The Reviewer judged it an Unrelated failure";
+
+    it("says the Kit re-runs the check at its next hourly check, while its re-run at the gate is still to come", () => {
+      expect(wordsOf(heldWith())).toEqual({ pill: "Healing", sentence: `${failing}, and the Kit re-runs it at its next hourly check.`, remedy: null });
+    });
+
+    it("says the re-run is asked for, once the Kit's line asks it", () => {
+      expect(wordsOf(heldWith([aGateRerunAsk(["ci"], head, minutesAfter(30))]))).toEqual({ pill: "Healing", sentence: `${failing}, and the Kit has asked for one more re-run of it.`, remedy: null });
+    });
+
+    it("says the pull request waits for the check's fix once the re-run is done or skipped, naming the Check's issue where the facts give it", () => {
+      const done = [aGateRerunDone(["ci"], head, minutesAfter(30))];
+
+      expect(wordsOf(heldWith(done)).sentence).toBe(`${failing}, and the Kit's one more re-run of it is done or skipped, so #50 waits for the check's fix.`);
+      expect(wordsOf(heldWith(done, [aCheckIssue("ci")])).sentence).toBe(`${failing}, and the Kit's one more re-run of it is done or skipped, so #50 waits for the check's fix on #91.`);
+    });
+
+    it("says, once the Kit has mentioned the Operator, that the check was judged an Unrelated failure and the Kit has nothing left to try", () => {
+      expect(wordsOf(heldWith([anOperatorMention([{ name: "ci", issue: 91 }], head, minutesAfter(30))]))).toEqual({
+        pill: "ci",
+        sentence: `${failing}, and the Kit has nothing left to try.`,
+        remedy: null,
+      });
+    });
+
+    it("says, Stuck, that the Kit has made no move on it, with what is left to the Operator as its remedy", () => {
+      const stuck = heldWith([], [], minutesAfter(211));
+
+      expect(stuck.name).toBe("stuck");
+      expect(wordStanding(stuck, minutesAfter(4 * 60), ZONE)).toEqual({
+        pill: "Stuck",
+        sentence: "`ci` is failing on the head the Reviewer passed 4 hours ago. The Reviewer judged it an Unrelated failure, and the Kit has made no move on it since.",
+        remedy: "Check [the Loop's runs](https://github.com/owner/product/actions), then re-run `ci`, fix it, or merge #50 past it by hand.",
       });
     });
   });

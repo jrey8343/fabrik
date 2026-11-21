@@ -24,7 +24,7 @@ import { readable, spelled, wallClock } from "../loop/readable.ts";
 import { freeSubscriptions } from "../loop/subscriptions.ts";
 import { inForce } from "../loop/fableCap.ts";
 import { fableCapReadingsOf } from "./fableCapFacts.ts";
-import { type AgentRole, type BrokenRun, type DesignQueueSnapshot, type DispatchSnapshot, isBrokenRun, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
+import { type AgentRole, type BrokenRun, type ClosedCheckIssue, type DesignQueueSnapshot, type DispatchSnapshot, isBrokenRun, type KitConfig, type KitIssueSnapshot, STEP_UP_REASONS, type StepUpReason, STRENGTH_LABELS, STRENGTHS, type Strength } from "../loop/types.ts";
 import { heldCountHolder, heldCountIn } from "../monitor/core.ts";
 import { STORE_CALLER_PATH } from "../setup/shims.ts";
 import { DEFAULT_KIT_CONFIG, type KitConfigResult } from "./config.ts";
@@ -98,6 +98,8 @@ export interface OpenIssueFacts {
   readonly title: string;
   /** Who opened it: a `needs-info` issue the Fabrik App filed as the Monitor, or the Operator filed, waits on the Operator. */
   readonly author: string;
+  /** Its body as it stands: a Check's issue's opens with the marker naming its check, which the Standing of a pull request that check holds reads (#795). */
+  readonly body: string;
   readonly labels: readonly string[];
   /** ISO 8601. */
   readonly createdAt: string;
@@ -222,6 +224,13 @@ export interface GitHubFacts extends MetricFacts {
    * them, a Carrier closed since included (#442).
    */
   readonly weekCarriers: readonly KitIssueSnapshot[];
+  /**
+   * The Check's issues the Fabrik App filed that closed in the week before
+   * the read, read as the Tick reads them (#784): the clock of a pull request
+   * its check holds at the Merge gate restarts when one closes (#795). Left
+   * out, as in facts an earlier release gathered, no close is dated.
+   */
+  readonly closedCheckIssues?: readonly ClosedCheckIssue[];
 }
 
 /** An open Plain pull request (GLOSSARY.md): one that is no agent PR, whoever opened it. */
@@ -1553,13 +1562,15 @@ function skippedWeekLine(repo: string, { kind, carriers, stillWaiting }: Skipped
 
 /**
  * A Stuck Standing's line: the issue or pull request its Kit waits on, with
- * the Standing's sentence at the bar and its remedy. Null when the facts hold
- * no title for it.
+ * the Standing's sentence at the bar and its remedy. One an Unrelated failure
+ * holds at the Merge gate awaits no run (#795): its line is its pull
+ * request's, whose head the check is red on. Null when the facts hold no
+ * title for it.
  */
 function stuckItemOf(standing: StandingNamed<"stuck">, facts: GitHubFacts, items: Items, filedAt: string, timeZone: string): StuckItem | null {
   const pullRequest = facts.openPullRequests.find(({ number }) => number === standing.pullRequest);
   const issue = [...facts.openIssues, ...facts.openReplays].find(({ number }) => number === standing.issue);
-  const onPullRequest = pullRequest !== undefined && (standing.awaits?.on === "pullRequest" || issue === undefined);
+  const onPullRequest = pullRequest !== undefined && (standing.awaits?.on === "pullRequest" || standing.detail.was === "check-healing" || issue === undefined);
   const item = onPullRequest ? items.pullRequest(pullRequest, standing.since) : issue === undefined ? null : items.issue(issue, standing.since);
   if (item === null) return null;
   const { sentence, remedy } = wordStanding(standing, filedAt, timeZone);

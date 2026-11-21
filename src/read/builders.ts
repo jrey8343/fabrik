@@ -41,9 +41,13 @@ import {
   auditMarker,
   DESIGN_TURN_FAILED_MARKER,
   designRoundMarker,
+  flakyCheckIssueMarker,
   fromPullRequestLine,
+  gateRerunDoneMarker,
+  gateRerunMarker,
   handBackMarker,
   MAP_CAP_REFUSAL_OPENING,
+  operatorMentionMarker,
   REQUEST_CHANGES_RUN_MARKER,
   requestChangesAnswersMarker,
   type RollInText,
@@ -51,7 +55,7 @@ import {
 } from "../loop/markers.ts";
 import { type HeldRun, heldMarker } from "../loop/heldRun.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
-import type { KitIssueSnapshot, Verdict } from "../loop/types.ts";
+import type { ClosedCheckIssue, GateRerunDone, KitIssueSnapshot, Verdict } from "../loop/types.ts";
 import type { DeploymentsRead, DeployOf } from "./deployments.ts";
 import type { Facts } from "./gather.ts";
 import type { RunInFlight, RunsRead } from "./runs.ts";
@@ -204,6 +208,7 @@ export function factsOf(overrides: Partial<GitHubFacts> = {}): GitHubFacts {
     openMaps: [],
     kitIssues: [],
     weekCarriers: [],
+    closedCheckIssues: [],
     ...overrides,
   };
 }
@@ -331,6 +336,45 @@ export function aVerdictComment(verdict: Verdict, headSha: string, at: string, o
   return aComment(`${verdictMarker({ verdict, source: "reviewer", requestChanges: false, headSha })}\nVerdict: ${verdict}`, at, overrides);
 }
 
+/** The Fabrik App's passing Verdict on `headSha` at `at`, naming these red checks Unrelated failures (#780). */
+export function aPassNaming(unrelated: readonly string[], headSha: string, at: string): CommentFacts {
+  return aComment(`${verdictMarker({ verdict: "pass", source: "reviewer", requestChanges: false, unrelated, headSha })}\nVerdict: pass`, at);
+}
+
+/** The Fabrik App's line at `at` asking one more re-run of these checks at the Merge gate on `headSha` (#783). */
+export function aGateRerunAsk(checks: readonly string[], headSha: string, at: string): CommentFacts {
+  const asked = checks.map((name) => ({ name, link: "https://github.com/owner/product/actions/runs/9/job/1" }));
+  return aComment(`${gateRerunMarker(headSha, asked)}\nThe Kit is re-running its failed jobs once more.`, at);
+}
+
+/** The Fabrik App's line at `at` saying one more re-run of these checks at the Merge gate is done on `headSha`: red again, unless a test says why (#783). */
+export function aGateRerunDone(checks: readonly string[], headSha: string, at: string, why: GateRerunDone = "red-again"): CommentFacts {
+  return aComment(`${gateRerunDoneMarker(headSha, checks, why)}\nThe pull request waits for its fix.`, at);
+}
+
+/** The Fabrik App's mention of the Operator at `at`, on `headSha`, over these Unrelated failures, each with its Check's issue (#785). */
+export function anOperatorMention(checks: readonly { readonly name: string; readonly issue: number }[], headSha: string, at: string): CommentFacts {
+  return aComment(`${operatorMentionMarker({ headSha, checks })}\n@operator the Kit has nothing left to try.`, at);
+}
+
+/** Open issue 91, the Check's issue the Fabrik App filed for `check` on 2026-11-05, still `needs-triage`, unless a test says otherwise. */
+export function aCheckIssue(check: string, overrides: Partial<OpenIssueFacts> = {}): OpenIssueFacts {
+  return anOpenIssue({
+    number: 91,
+    title: "Flaky check or Unrelated failure",
+    author: "fabrik-app[bot]",
+    labels: ["needs-triage", "fabrik:flaky-check"],
+    createdAt: "2026-11-05T20:00:00Z",
+    body: `${flakyCheckIssueMarker(check)}\nThe Reviewer judged a red run of it an Unrelated failure.`,
+    ...overrides,
+  });
+}
+
+/** Issue 91, the Check's issue for `check`, closed as completed at `closedAt`, unless a test says otherwise. */
+export function aClosedCheckIssue(check: string, closedAt: string, overrides: Partial<ClosedCheckIssue> = {}): ClosedCheckIssue {
+  return { number: 91, check, closedAt, stateReason: "completed", ...overrides };
+}
+
 /**
  * The Fabrik App's Digest of pull request 50 of `owner/product` as of
  * `headSha`, posted at `at`, as Kit code writes one: its two hidden lines,
@@ -384,9 +428,9 @@ const WHAT_TO_BUILD: RollInText = {
   acceptanceCriteria: ["A page that shows forty products reads the prices once."],
 };
 
-/** Open issue 12, opened on 2026-10-01, with no labels, comments, label events, sub-issues or blockers, hidden ones among them, unless a test says so. */
+/** Open issue 12, opened on 2026-10-01, with an empty body and no labels, comments, label events, sub-issues or blockers, hidden ones among them, unless a test says so. */
 export function anOpenIssue(overrides: Partial<OpenIssueFacts> = {}): OpenIssueFacts {
-  return { number: 12, title: "An open issue", author: "someone", labels: [], createdAt: "2026-10-01T00:00:00Z", comments: [], labelEvents: [], subIssues: [], blockers: [], hiddenBlockers: 0, ...overrides };
+  return { number: 12, title: "An open issue", author: "someone", body: "", labels: [], createdAt: "2026-10-01T00:00:00Z", comments: [], labelEvents: [], subIssues: [], blockers: [], hiddenBlockers: 0, ...overrides };
 }
 
 /**

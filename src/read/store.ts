@@ -157,7 +157,8 @@ async function gatherStoreFacts(client: ReadClient, appLogin: string | null): Pr
       .map(({ number, title, createdAt, comments }) => ({ number, title, createdAt, appComments: appCommentsOf(comments) })),
     readyForHuman: stillOpen
       .filter(({ labels }) => labels.nodes.some(({ name }) => name === READY_FOR_HUMAN))
-      .map((issue) => openIssueOf({ ...issue, closedAt: null, subIssues: { nodes: [] } })),
+      // No body is asked for: the store has no Check's issue, the one kind whose body a Standing reads (#795).
+      .map((issue) => openIssueOf({ ...issue, closedAt: null, subIssues: { nodes: [] }, body: "" })),
   };
 }
 

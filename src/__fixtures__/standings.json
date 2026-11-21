@@ -288,6 +288,32 @@
     "subscription": null,
     "detail": { "plain": "setup", "check": "test", "checkIs": "failing", "head": "pppppppppppppppppppppppppppppppppppppppp" }
   },
+  "check-healing": {
+    "schema": 2,
+    "repo": "owner/product",
+    "issue": 10,
+    "pullRequest": 60,
+    "work": "ticket",
+    "place": "merge-gate",
+    "name": "check-healing",
+    "move": "kit",
+    "yours": false,
+    "stopsWork": false,
+    "since": "2026-11-05T19:30:00Z",
+    "stuckAt": "2026-11-05T23:30:00.000Z",
+    "awaits": null,
+    "subscription": null,
+    "detail": {
+      "plain": null,
+      "check": "ci",
+      "rerun": "to-come",
+      "issue": null,
+      "passedAt": "2026-11-05T20:00:00Z",
+      "passedHead": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh",
+      "healing": [{ "check": "ci", "rerun": "to-come", "issue": null, "stuckAt": "2026-11-05T23:30:00.000Z" }],
+      "head": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh"
+    }
+  },
   "conflicts": {
     "schema": 2,
     "repo": "owner/product",

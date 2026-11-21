@@ -17,7 +17,7 @@
 import { gatherWeeklyRunIssues, isAgent, openIssueOf, openKitIssueOf, openPullRequestOf, plainPullRequestOf } from "../github/facts.ts";
 import { pagesOf, type ReadClient, type Repo, whyUnread } from "../github/client.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
-import { byAppOf, gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, loginOf, readKitConfigSources } from "../github/snapshot.ts";
+import { byAppOf, gatherClosedCheckIssues, gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, loginOf, readKitConfigSources } from "../github/snapshot.ts";
 import { type EvidenceMarker, evidenceMarkerIn } from "../evidence/uiEvidence.ts";
 import { type ShotsMarker, shotsMarkerIn } from "../evidence/shotsEvidence.ts";
 import { checkCallerWorkflow, fabrikRefsIn } from "../kit/caller.ts";
@@ -239,7 +239,7 @@ async function gatherFacts(
 ): Promise<Facts> {
   // A held line is never activity, nor the last word on the work (#471).
   const github = leavingOutHeldLines(client);
-  const [pullRequests, issues, merged, { designQueue }, { kitIssues }, audits, retros, candidates] = await Promise.all([
+  const [pullRequests, issues, merged, { designQueue }, { kitIssues }, audits, retros, candidates, closedCheckIssues] = await Promise.all([
     pagesOf<RawHomePullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawHomeIssue>(github, OPEN_ISSUES_QUERY, repo, {}, (data) => data.repository.issues),
     github.graphql<MergedPullRequestsQueryResult>(MERGED_PULL_REQUESTS_QUERY, { owner: repo.owner, name: repo.name }),
@@ -250,6 +250,8 @@ async function gatherFacts(
     gatherWeeklyRunIssues(github, repo, RETRO_LABEL),
     // An invalid Kit config is read with the Kit's defaults, and Dispatch's candidates not at all, as the Loop does.
     kit.config.ok ? gatherDispatchCandidates(github, repo, appLogin) : Promise.resolve(null),
+    // The tick's own read of the Check's issues closed in the last week, so a Standing dates a check's fix landing as the tick does (#795).
+    gatherClosedCheckIssues(github, repo, appLogin, now),
   ]);
   const agent = pullRequests.filter(isAgent);
   const open = issues.filter(({ state }) => state === "OPEN");
@@ -295,6 +297,7 @@ async function gatherFacts(
       kitIssues,
       // Only the Weekly summary reads the Carriers closed since (#442): no Standing does.
       weekCarriers: [],
+      closedCheckIssues,
     },
     kit: { ...kit, dispatch: candidates === null ? null : { candidates } },
     operator,

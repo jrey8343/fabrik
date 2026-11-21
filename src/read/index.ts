@@ -27,7 +27,7 @@ export type { KitConfig, KitConfigResult, KitConfigSources } from "../kit/config
 export { STANDING_NAMES, STANDING_SCHEMA, standingAt, standingsOf } from "../kit/standing.ts";
 export { wordStanding } from "../kit/standingWording.ts";
 export { stuckBarMinutes, TICK_MINUTES } from "../loop/recoveryWaits.ts";
-export type { Standing, StandingFacts, StandingName } from "../kit/standing.ts";
+export type { HealingCheck, Standing, StandingFacts, StandingName } from "../kit/standing.ts";
 export type { StoreStandingFacts } from "../kit/standingStore.ts";
 export type { StandingWords } from "../kit/standingWording.ts";
 

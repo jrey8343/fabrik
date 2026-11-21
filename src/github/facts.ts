@@ -42,6 +42,7 @@ import { allBlockersOf, blockedByFields, type RawBlockedBy, type RawBlocker, typ
 import { leavingOutHeldLines } from "./heldLines.ts";
 import {
   gatherDesignQueueSlice,
+  gatherClosedCheckIssues,
   gatherKitIssues,
   gatherWeekCarriers,
   gatherOpenMaps,
@@ -183,11 +184,11 @@ async function gatherFacts(client: Pick<ReadClient, "graphql">, repo: Repo, now:
   const github = leavingOutHeldLines(client);
   const since = new Date(now - WINDOW_MS).toISOString();
   const escapeSince = new Date(reach).toISOString();
-  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros, audits, retros, firstAudits, openMaps, openReplays, { kitIssues }, weekCarriers] = await Promise.all([
+  const [closed, open, updatedIssues, openIssues, defaultBranchCommits, { designQueue }, monitorIssues, operatorIssues, openAudits, openRetros, audits, retros, firstAudits, openMaps, openReplays, { kitIssues }, weekCarriers, closedCheckIssues] = await Promise.all([
     gatherClosedPullRequests(github, repo, escapeSince),
     pagesOf<RawOpenPullRequest>(github, OPEN_PULL_REQUESTS_QUERY, repo, {}, (data) => data.repository.pullRequests),
     pagesOf<RawIssue>(github, UPDATED_ISSUES_QUERY, repo, { since }, (data) => data.repository.issues),
-    pagesOf<RawIssue>(github, OPEN_ISSUES_QUERY, repo, {}, (data) => data.repository.issues),
+    pagesOf<RawOpenIssue>(github, OPEN_ISSUES_QUERY, repo, {}, (data) => data.repository.issues),
     pagesOf<RawDefaultBranchCommit>(github, DEFAULT_BRANCH_QUERY, repo, { since: escapeSince }, (data) => data.repository.defaultBranchRef?.target.history ?? null),
     // The Design queue check's own slice, so Held and the check can't disagree. Its token can't read
     // workflow runs, so it reads Design turns in progress from the issues, as the scheduled tick does.
@@ -211,6 +212,9 @@ async function gatherFacts(client: Pick<ReadClient, "graphql">, repo: Repo, now:
     // The Carriers, closed ones included, whose waiting markers name an Audit or Retro week skipped for want of a free Subscription (#442).
     // It doesn't know the App's login either, so it takes any bot's text for the App's, as gatherKitIssues does here.
     gatherWeekCarriers(github, repo, null, new Date(now - CARRIERS_REACH_MS).toISOString()),
+    // The tick's own read of the Check's issues closed in the last week, so a Standing dates a check's fix landing as the tick does (#795).
+    // It doesn't know the App's login either.
+    gatherClosedCheckIssues(github, repo, null, new Date(now).toISOString()),
   ]);
   const issues = [...new Map([...updatedIssues, ...openIssues].map((issue) => [issue.number, issue])).values()];
   return {
@@ -238,6 +242,7 @@ async function gatherFacts(client: Pick<ReadClient, "graphql">, repo: Repo, now:
     openMaps: openMaps.map((map) => map.number),
     kitIssues,
     weekCarriers,
+    closedCheckIssues,
   };
 }
 
@@ -486,13 +491,14 @@ const UPDATED_ISSUES_QUERY = `
   }
 `;
 
-// Every open issue, however long it has sat: what Waiting on you and Stuck read.
+// Every open issue, however long it has sat: what Waiting on you and Stuck read. Each with its body,
+// whose marker says which check a Check's issue is about (#795).
 const OPEN_ISSUES_QUERY = `
   query ($owner: String!, $name: String!, $after: String) {
     repository(owner: $owner, name: $name) {
       issues(states: OPEN, first: 25, after: $after) {
         ${PAGE_INFO}
-        nodes { ${ISSUE_FIELDS} }
+        nodes { ${ISSUE_FIELDS} body }
       }
     }
   }
@@ -652,6 +658,9 @@ export interface RawIssue {
   issueDependenciesSummary: RawDependenciesSummary;
   subIssues: { nodes: { number: number }[] };
 }
+
+/** An open issue as OPEN_ISSUES_QUERY reads it: with its body. */
+type RawOpenIssue = RawIssue & { body: string };
 
 /** A `fabrik:retro` issue as a Retro's history reads it: as the tick does, with its comments on top. */
 type RawRetroIssue = RawWeeklyIssue & { comments: { nodes: RawComment[] } };
@@ -835,12 +844,13 @@ function specOf(issue: RawIssue): SpecFacts {
 }
 
 /** Open issue `issue` as the Standing rule reads it, from any read that asks for what OpenIssueFacts holds. */
-export function openIssueOf(issue: Omit<RawIssue, "blockedBy"> & { blockedBy: RawBlockedBy }): OpenIssueFacts {
+export function openIssueOf(issue: Omit<RawOpenIssue, "blockedBy"> & { blockedBy: RawBlockedBy }): OpenIssueFacts {
   const { blockers, hidden } = allBlockersOf(issue.blockedBy.nodes, issue.issueDependenciesSummary);
   return {
     number: issue.number,
     title: issue.title,
     author: loginOf(issue.author),
+    body: issue.body,
     labels: issue.labels.nodes.map((label) => label.name),
     createdAt: issue.createdAt,
     comments: issue.comments.nodes.map(commentOf),

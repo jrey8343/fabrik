@@ -21,6 +21,8 @@ import {
   anOpenPullRequest,
   anOpenReplay,
   anOpenRetro,
+  anOperatorMention,
+  aPassNaming,
   aPlainPullRequest,
   aReplayBody,
   aReplayRunRecord,
@@ -1482,6 +1484,63 @@ describe("the Weekly summary", () => {
         "- [#50](https://github.com/owner/product/pull/50) Build the thing: `ci` is failing on #50's head, pushed since the Reviewer passed it 5 hours ago.\n",
       );
       expect(bodyWith([{ name: "ci", is: "passed", at: ago(HOUR) }])).toContain("- [#50](https://github.com/owner/product/pull/50) Build the thing: at the Merge gate, Operator wait 5 hours\n");
+    });
+  });
+
+  describe("an agent PR an Unrelated failure holds at the Merge gate (#795)", () => {
+    const HOUR = 60 * 60 * 1000;
+    const HEAD = "h".repeat(40);
+    const ago = (ms: number) => new Date(Date.parse(NOW) - ms).toISOString();
+    /** PR 50 for open Ticket 7, passed `passedAgo` ago by a Verdict naming `ci` an Unrelated failure, `ci` failing since before the pass, with these later comments. */
+    const summaryWith = (passedAgo: number, comments: readonly CommentFacts[] = []) => {
+      const pullRequest = anOpenPullRequest({ draft: false, headSha: HEAD, comments: [aPassNaming(["ci"], HEAD, ago(passedAgo)), ...comments] });
+      const github = factsOf({ openIssues: [anOpenIssue({ number: 7, title: "Build the thing, please", labels: ["ready-for-agent"] })], openPullRequests: [pullRequest] });
+      const result = weeklySummary(input({ records: [aRunRecord()], facts: [github], kits: [aRepoKit({ headChecks: { [HEAD]: [{ name: "ci", is: "failing", at: ago(passedAgo + HOUR) }] } })] }));
+      if (result.kind !== "summary") throw new Error("expected a summary");
+      return { waiting: result.summary.repos[0]?.waitingOnYou, stuck: result.summary.repos[0]?.stuck, body: result.body };
+    };
+
+    it("is not listed as waiting on the Operator, nor as Stuck, while the Kit is healing the check", () => {
+      const { waiting, stuck, body } = summaryWith(2 * HOUR);
+
+      expect(waiting).toEqual([]);
+      expect(stuck).toEqual([]);
+      expect(body).not.toContain("`ci` is failing");
+    });
+
+    it("is listed as waiting on the Operator once the Kit has mentioned them, saying the Kit has nothing left to try", () => {
+      const { waiting, stuck } = summaryWith(2 * HOUR, [anOperatorMention([{ name: "ci", issue: 91 }], HEAD, ago(HOUR))]);
+
+      expect(waiting).toEqual([
+        {
+          kind: "merge-gate-check",
+          number: 50,
+          title: "Build the thing",
+          url: "https://github.com/owner/product/pull/50",
+          since: ago(3 * HOUR),
+          age: 3 * HOUR,
+          sentence: "`ci` is failing on the head the Reviewer passed 2 hours ago. The Reviewer judged it an Unrelated failure, and the Kit has nothing left to try.",
+        },
+      ]);
+      expect(stuck).toEqual([]);
+    });
+
+    it("is listed as Stuck, on the pull request, once the bar has passed with no move from the Kit, and still not as waiting on the Operator", () => {
+      const { waiting, stuck } = summaryWith(5 * HOUR);
+
+      expect(waiting).toEqual([]);
+      expect(stuck).toEqual([
+        {
+          kind: "silence",
+          number: 50,
+          title: "Build the thing",
+          url: "https://github.com/owner/product/pull/50",
+          since: ago(6 * HOUR),
+          age: 6 * HOUR,
+          sentence: "`ci` is failing on the head the Reviewer passed 5 hours ago. The Reviewer judged it an Unrelated failure, and the Kit has made no move on it since.",
+          remedy: "Check [the Loop's runs](https://github.com/owner/product/actions), then re-run `ci`, fix it, or merge #50 past it by hand.",
+        },
+      ]);
     });
   });
 
