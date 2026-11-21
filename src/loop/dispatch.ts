@@ -25,11 +25,12 @@ interface Candidate {
 /**
  * Whether this Ticket is a check's fix (#838): an open `ready-for-agent`
  * Ticket carrying fabrik:flaky-check, so a Check's issue Triage routed, or a
- * Ticket of the Spec a Design session wrote from one (#839). The label is the
- * whole test: Dispatch weighs it ahead of every other candidate and releases
- * it past caps.merge_gate, as the pull requests its red check holds are what
- * fill the gate. The Spec carries the label too, but has sub-issues, so it is
- * never a fix, never released and never named as one.
+ * Ticket of the Spec a Design session wrote from one (#839). No marker is
+ * read, nor which check the Ticket fixes: the label says it is a fix, and a
+ * Ticket has no sub-issues, so the Spec, which carries the label too (ADR-0036),
+ * is never a fix, never released and never named as one. Dispatch weighs a fix
+ * ahead of every other candidate and releases it past caps.merge_gate, as the
+ * pull requests its red check holds are what fill the gate.
  */
 export function isChecksFix(ticket: Pick<TicketSnapshot, "open" | "labels" | "subIssues">): boolean {
   return ticket.open && ticket.subIssues === 0 && ticket.labels.includes(READY_FOR_AGENT) && ticket.labels.includes(FLAKY_CHECK_LABEL);
