@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { workKeyOf } from "../kit/standing.ts";
-import { aLabelAdded, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
+import type { CommentFacts } from "../kit/weeklySummary.ts";
+import { aCheckIssue, aGateRerunAsk, aGateRerunDone, aLabelAdded, anOpenIssue, anOpenPullRequest, anOperatorMention, aPassNaming, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
 import type { Facts } from "./gather.ts";
 import { joinChecks } from "./joinChecks.ts";
 import type { HeadCheck, RequiredChecksRead } from "./requiredChecks.ts";
@@ -165,6 +166,138 @@ describe("the join of kept rows with a Required checks read", () => {
         expect(joined).toEqual(kept);
         expect(joined).toEqual(rule);
       }
+    });
+  });
+
+  describe("an agent row at the Merge gate held by an Unrelated failure settles with the checks it keeps as healing (#795)", () => {
+    const PASSED_AT = "2026-11-12T08:00:00Z";
+    /** Head 1's checks: `test` failed before the pass, `lint` passed. */
+    const TEST_FAILED = aChecksRead({ [head("1")]: [check("test", "failing", "2026-11-12T07:50:00Z"), check("lint", "passed", "2026-11-12T07:40:00Z")] });
+    /** A little later: `test` is running again. */
+    const TEST_RUNNING = aChecksRead({ [head("1")]: [check("test", "running", "2026-11-12T09:05:00Z"), check("lint", "passed", "2026-11-12T07:40:00Z")] });
+    /** Later still: `test` failed again. */
+    const TEST_FAILED_AGAIN = aChecksRead({ [head("1")]: [check("test", "failing", "2026-11-12T09:20:00Z"), check("lint", "passed", "2026-11-12T07:40:00Z")] });
+    /** Or: `test` passed, and everything with it. */
+    const TEST_PASSED = aChecksRead({ [head("1")]: [check("test", "passed", "2026-11-12T09:20:00Z"), check("lint", "passed", "2026-11-12T07:40:00Z")] });
+    /** Or: both failed. */
+    const BOTH_FAILED = aChecksRead({ [head("1")]: [check("test", "failing", "2026-11-12T09:20:00Z"), check("lint", "failing", "2026-11-12T09:25:00Z")] });
+
+    /** Agent PR 50 at the Merge gate on head 1, whose pass names these checks Unrelated failures, with these later comments of the Fabrik App's. */
+    const heldFacts = (unrelated: readonly string[] = ["test"], comments: readonly CommentFacts[] = [], github: Parameters<typeof factsOf>[0] = {}) =>
+      homeFactsOf({
+        github: factsOf({
+          openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] })],
+          openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, draft: false, headSha: head("1"), comments: [aPassNaming(unrelated, head("1"), PASSED_AT), ...comments] })],
+          ...github,
+        }),
+      });
+    const whose = (rows: readonly Row[]) => rows.map(({ standing: { name, move, yours, stopsWork, since, stuckAt } }) => ({ name, move, yours, stopsWork, since, stuckAt }));
+    /** 210 minutes after the pass: the bar on default timeouts. */
+    const BAR = "2026-11-12T11:30:00.000Z";
+
+    it("yours to merge, comes back the Kit's when the healing check fails, turning Stuck when the row kept that it would", () => {
+      const { kept, joined, rule } = joinedAndRule(heldFacts(), TEST_PASSED, TEST_FAILED_AGAIN);
+
+      expect(whose(kept)).toEqual([{ name: "yours-to-merge", move: "operator", yours: true, stopsWork: true, since: PASSED_AT, stuckAt: null }]);
+      expect(whose(joined)).toEqual([{ name: "check-healing", move: "kit", yours: false, stopsWork: false, since: "2026-11-12T09:20:00Z", stuckAt: BAR }]);
+      expect(joined).toEqual(rule);
+    });
+
+    it("kept with no checks read, comes back as the rule gives it with the read", () => {
+      const { joined, rule } = joinedAndRule(heldFacts(), null, TEST_FAILED);
+
+      expect(joined.map(({ standing }) => standing.name)).toEqual(["check-healing"]);
+      expect(joined).toEqual(rule);
+    });
+
+    it("the Kit's, goes waiting on the check once it runs again, and back to the Kit's, not the Operator's, when it fails again", () => {
+      const facts = heldFacts(["test"], [aGateRerunAsk(["test"], head("1"), "2026-11-12T09:00:00Z")]);
+      const kept = rowsOf(facts, null, TEST_FAILED, null, NOW);
+      const running = joinChecks(kept, TEST_RUNNING, NOW);
+      const failedAgain = joinChecks(running, TEST_FAILED_AGAIN, NOW);
+
+      expect(kept.map(({ standing }) => standing.name)).toEqual(["check-healing"]);
+      expect(running.map(({ standing }) => standing.name)).toEqual(["waiting-on-checks"]);
+      expect(running).toEqual(rowsOf(facts, null, TEST_RUNNING, null, NOW));
+      expect(failedAgain[0]?.standing).toMatchObject({ name: "check-healing", move: "kit", yours: false, stopsWork: false, since: "2026-11-12T09:20:00Z", detail: { check: "test", rerun: "asked" } });
+      expect(failedAgain).toEqual(rowsOf(facts, null, TEST_FAILED_AGAIN, null, NOW));
+    });
+
+    it("the Kit's, comes back yours to merge once the check passes, since the pass", () => {
+      const { joined, rule } = joinedAndRule(heldFacts(), TEST_FAILED, TEST_PASSED);
+
+      expect(whose(joined)).toEqual([{ name: "yours-to-merge", move: "operator", yours: true, stopsWork: true, since: PASSED_AT, stuckAt: null }]);
+      expect(joined).toEqual(rule);
+    });
+
+    it("the Kit's, comes back the Operator's when a check the pass did not name fails too, and the Kit's again once that one passes", () => {
+      const failing = joinedAndRule(heldFacts(), TEST_FAILED, BOTH_FAILED);
+      expect(failing.joined[0]?.standing).toMatchObject({ name: "check-failing", move: "operator", yours: true, stopsWork: true, stuckAt: null, detail: { check: "lint" } });
+      expect(failing.joined).toEqual(failing.rule);
+
+      const passing = joinedAndRule(heldFacts(), BOTH_FAILED, TEST_FAILED_AGAIN);
+      expect(passing.joined[0]?.standing).toMatchObject({ name: "check-healing", stuckAt: BAR, detail: { check: "test" } });
+      expect(passing.joined).toEqual(passing.rule);
+    });
+
+    it("names the next healing check, with its own re-run, issue and bar, when the first passes", () => {
+      const facts = heldFacts(["test", "lint"], [aGateRerunDone(["lint"], head("1"), "2026-11-12T09:00:00Z")], {
+        openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] }), aCheckIssue("lint", { number: 92, labels: ["ready-for-agent", "fabrik:flaky-check"] })],
+      });
+      const lintOnly = aChecksRead({ [head("1")]: [check("test", "passed", "2026-11-12T09:30:00Z"), check("lint", "failing", "2026-11-12T09:25:00Z")] });
+
+      const { kept, joined, rule } = joinedAndRule(facts, BOTH_FAILED, lintOnly);
+      const standingOf = (rows: readonly Row[]) => rows.find(({ standing }) => standing.pullRequest === 50)?.standing;
+
+      expect(standingOf(kept)).toMatchObject({ name: "check-healing", stuckAt: "2026-11-12T12:30:00.000Z", detail: { check: "test", rerun: "to-come", issue: null } });
+      expect(standingOf(joined)).toMatchObject({ name: "check-healing", stuckAt: null, detail: { check: "lint", rerun: "done", issue: 92 } });
+      expect(byWork(joined)).toEqual(byWork(rule));
+    });
+
+    it("waiting on a check the Kit mentioned the Operator over, comes back the Operator's when it fails, still saying it was mentioned", () => {
+      const facts = heldFacts(["test"], [anOperatorMention([{ name: "test", issue: 91 }], head("1"), "2026-11-12T09:00:00Z")]);
+
+      const { joined, rule } = joinedAndRule(facts, TEST_RUNNING, TEST_FAILED_AGAIN);
+
+      expect(joined[0]?.standing).toMatchObject({ name: "check-failing", move: "operator", yours: true, stopsWork: true, detail: { check: "test", mentioned: ["test"] } });
+      expect(joined).toEqual(rule);
+    });
+
+    describe("read past its bar", () => {
+      const PAST = "2026-11-12T11:31:00Z";
+      const at = (earlier: RequiredChecksRead, later: RequiredChecksRead) => {
+        const kept = rowsOf(heldFacts(), null, earlier, null, PAST);
+        return { kept, joined: joinChecks(kept, later, PAST), rule: rowsOf(heldFacts(), null, later, null, PAST) };
+      };
+
+      it("Stuck, stays Stuck while the check still fails, and comes back yours to merge once it passes", () => {
+        const still = at(TEST_FAILED, TEST_FAILED_AGAIN);
+        expect(still.kept[0]?.standing).toMatchObject({ name: "stuck", move: "kit", yours: true, stopsWork: true, detail: { was: "check-healing", check: "test" } });
+        expect(still.joined[0]?.standing).toMatchObject({ name: "stuck", since: "2026-11-12T09:20:00Z", stuckAt: BAR, detail: { was: "check-healing" } });
+        expect(still.joined).toEqual(still.rule);
+
+        const passed = at(TEST_FAILED, TEST_PASSED);
+        expect(whose(passed.joined)).toEqual([{ name: "yours-to-merge", move: "operator", yours: true, stopsWork: true, since: PASSED_AT, stuckAt: null }]);
+        expect(passed.joined).toEqual(passed.rule);
+      });
+
+      it("yours to merge, comes back Stuck when the healing check fails past the bar the row kept", () => {
+        const { joined, rule } = at(TEST_PASSED, TEST_FAILED_AGAIN);
+
+        expect(joined[0]?.standing).toMatchObject({ name: "stuck", yours: true, stopsWork: true, stuckAt: BAR, detail: { was: "check-healing" } });
+        expect(joined).toEqual(rule);
+      });
+    });
+
+    it("kept before #795 with no healing checks, settles as it did: the failing check is the Operator's", () => {
+      const kept = rowsOf(heldFacts(), null, TEST_PASSED, null, NOW);
+      const { healing: _, ...detail } = kept[0]?.standing.detail as { healing?: unknown };
+      const older = kept.map((row) => ({ ...row, standing: { ...row.standing, detail } }) as Row);
+
+      const joined = joinChecks(older, TEST_FAILED_AGAIN, NOW);
+
+      expect(whose(joined)).toEqual([{ name: "check-failing", move: "operator", yours: true, stopsWork: true, since: "2026-11-12T09:20:00Z", stuckAt: null }]);
+      expect(joined[0]?.standing.detail).toEqual({ plain: null, check: "test", checkIs: "failing", passedAt: PASSED_AT, passedHead: head("1"), head: head("1") });
     });
   });
 

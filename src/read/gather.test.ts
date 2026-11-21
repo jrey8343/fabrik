@@ -27,6 +27,8 @@ interface RawRepo {
   openPullRequests?: Record<string, unknown>[];
   /** The merged pull requests, newest-updated first. */
   mergedPullRequests?: Record<string, unknown>[];
+  /** The closed issues labelled as a Check's issue, updated in the last week. */
+  closedCheckIssues?: Record<string, unknown>[];
   /** Fail every query whose text holds this. */
   failing?: string;
   /** Refuse the read of this file, as GitHub refuses one for want of a permission. */
@@ -71,6 +73,11 @@ function repoWith(raw: RawRepo): { client: ReadClient; calls: Calls } {
       const candidate = (issue: Record<string, unknown>) => ({ ...issue, blockedBy: { nodes: [] }, issueDependenciesSummary: { blockedBy: 0 }, closedByPullRequestsReferences: { nodes: [] }, subIssues: { totalCount: 0 }, assignees: { nodes: [] }, parent: null });
       if (query.includes("labels: [$ready]")) return answer({ repository: { owner: { login: "jrey8343" }, issues: page(labelled(variables["ready"]).map(candidate)), pullRequests: { nodes: [] } } });
       if (query.includes("labels: [$research]")) return answer({ repository: { issues: page(labelled(variables["research"]).map(candidate)) } });
+      if (query.includes("issues(states: CLOSED, labels: $labels")) {
+        // The week before NOW.
+        expect(variables).toMatchObject({ labels: ["fabrik:flaky-check"], since: "2026-11-02T12:00:00.000Z" });
+        return answer({ repository: { issues: { nodes: raw.closedCheckIssues ?? [] } } });
+      }
       if (query.includes("labels: $labels")) return answer({ repository: { owner: { login: "jrey8343" }, issues: { nodes: [] } } });
       if (query.includes("issues(labels: [$label], states: [OPEN, CLOSED]")) return answer({ repository: { defaultBranchRef: null, issues: { nodes: labelled(variables["label"]) } } });
       if (query.includes("issues(states: OPEN")) return answer({ repository: { issues: page(asked(issues)) } });
@@ -202,10 +209,17 @@ describe("a gather shaped for Home", () => {
       expect(queries.length).toBeGreaterThan(5);
       for (const query of queries) {
         expect(query).not.toContain("pullRequests(states: [MERGED, CLOSED]");
-        expect(query).not.toContain("filterBy: { since: $since }");
+        // Every issue that moved in the window, and the Carriers closed in it: the one read by a time it does make is of the Check's issues, below.
+        expect(query).not.toMatch(/issues\((?!states: CLOSED, labels: \$labels)[^)]*filterBy: \{ since: \$since \}/);
         expect(query).not.toContain("history(");
         expect(query).not.toContain("filterBy: { createdBy: $operator }");
       }
+    });
+
+    it("asks for the Check's issues closed in the last week in one page, by their label, with no comments (#795)", async () => {
+      expect((await everyQuery()).filter((query) => query.includes("filterBy: { since: $since }"))).toEqual([
+        expect.stringMatching(/issues\(states: CLOSED, labels: \$labels, filterBy: \{ since: \$since \}, first: 50, [^)]*\) \{\s+nodes \{ number body closedAt stateReason author \{ login __typename \} \}/),
+      ]);
     });
 
     it("asks for the state of each open pull request's Ticket with the pull request", async () => {
@@ -282,6 +296,26 @@ describe("a gather shaped for Home", () => {
 
       expect(facts.issueBodies).toEqual([{ issue: 31, body: "From PR #50\n\nThe cart total rounds wrong." }]);
       expect(facts.github.openIssues.map(({ number }) => number)).toEqual([31, 32]);
+    });
+
+    it("hold what the rule reads of a check's fix (#795): each open issue's body, whose marker names a Check's issue's check, and the Check's issues the Fabrik App filed that closed in the last week", async () => {
+      const bot = { __typename: "Bot", login: "fabrik-app" };
+      const marker = (check: string) => `<!-- fabrik:flaky-check-issue {"check":"${check}"} -->\nIts red runs.`;
+      const facts = await factsOf(
+        {
+          issues: [aRawIssue({ number: 91, author: bot, body: marker("test"), labels: { nodes: [{ name: "fabrik:flaky-check" }] } })],
+          closedCheckIssues: [
+            { number: 88, body: marker("lint"), closedAt: "2026-11-08T09:00:00Z", stateReason: "COMPLETED", author: bot },
+            { number: 87, body: marker("e2e"), closedAt: "2026-11-08T08:00:00Z", stateReason: "COMPLETED", author: { __typename: "User", login: "kate" } },
+            // Updated in the week, but closed before it.
+            { number: 86, body: marker("build"), closedAt: "2026-10-20T08:00:00Z", stateReason: "NOT_PLANNED", author: bot },
+          ],
+        },
+        "fabrik-app[bot]",
+      );
+
+      expect(facts.github.openIssues.map(({ number, body }) => ({ number, body }))).toEqual([{ number: 91, body: marker("test") }]);
+      expect(facts.github.closedCheckIssues).toEqual([{ number: 88, check: "lint", closedAt: "2026-11-08T09:00:00Z", stateReason: "completed" }]);
     });
 
     describe("the blockers of each open issue (#770, #771)", () => {

@@ -148,6 +148,10 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
         const { was, ...detail } = standing.detail;
         return { pill: "Stuck", ...waitingOnKitWords({ ...standing, name: was, detail }, age, true) };
       }
+      if (standing.detail.was === "check-healing") {
+        const { was, ...detail } = standing.detail;
+        return { pill: "Stuck", ...checkHealingWords({ ...standing, name: was, detail }, now, true) };
+      }
       const { was, ...detail } = standing.detail;
       return { pill: "Stuck", ...notStartedWords({ ...standing, name: was, detail }, age, true) };
     }
@@ -198,10 +202,15 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
       // An agent PR at the Merge gate (#564): its head is the one the Reviewer passed, or one pushed since (#692).
       if (standing.place === "merge-gate") {
         const onHead = checkedHeadPhrase(standing, passedAt, now);
-        return { pill: check, sentence: checkIs === "failing" ? `\`${check}\` is failing on ${onHead}.` : `\`${check}\` has not reported on ${onHead}.`, remedy: null };
+        if (checkIs === "never-reported") return { pill: check, sentence: `\`${check}\` has not reported on ${onHead}.`, remedy: null };
+        // One the Kit mentioned the Operator over (#795): its own moves on the Unrelated failure are spent.
+        const spent = standing.detail.mentioned?.includes(check) === true ? ` ${JUDGED_UNRELATED}, and the Kit has nothing left to try.` : "";
+        return { pill: check, sentence: `\`${check}\` is failing on ${onHead}.${spent}`, remedy: null };
       }
       return { pill: check, sentence: checkIs === "failing" ? `\`${check}\` is failing.` : `\`${check}\` has not reported on its head.`, remedy: null };
     }
+    case "check-healing":
+      return { pill: "Healing", ...checkHealingWords(standing, now, false) };
     case "conflicts": {
       const then = standing.detail.plain === "kit-bump" ? "Dependabot rebases it by itself." : "Resolve it on GitHub.";
       return { pill: "Conflicts with `main`", sentence: `It conflicts with \`main\`. ${then}`, remedy: null };
@@ -329,6 +338,38 @@ function waitingOnKitWords({ repo, issue, pullRequest, detail }: StandingNamed<"
     case "left-over":
       return { sentence: `Waiting on the Kit for ${age}.`, remedy: null };
   }
+}
+
+/** What a Standing says of a red check the Reviewer's pass named an Unrelated failure (GLOSSARY.md). */
+const JUDGED_UNRELATED = "The Reviewer judged it an Unrelated failure";
+
+/**
+ * The sentence and remedy of an Unrelated failure the Kit is healing at the
+ * Merge gate (#795, ADR-0031), before the bar or at it (`stuck`): that the
+ * check is failing on the passed head, that the Reviewer judged it an
+ * Unrelated failure, and what the Kit does next, from what the pull
+ * request's own lines say of its re-run at the gate; once that is done or
+ * skipped, the pull request waits for the check's fix, on the Check's issue
+ * where the facts give it. At the bar no move of the Kit's came, so what is
+ * left is the Operator's, as the Kit's mention would have said.
+ */
+function checkHealingWords(standing: StandingNamed<"check-healing">, now: string, stuck: boolean): Omit<StandingWords, "pill"> {
+  const { repo, pullRequest, detail } = standing;
+  const { check, rerun, issue, passedAt } = detail;
+  const failing = `\`${check}\` is failing on ${checkedHeadPhrase(standing, passedAt, now)}. ${JUDGED_UNRELATED}`;
+  if (stuck) {
+    return {
+      sentence: `${failing}, and the Kit has made no move on it since.`,
+      remedy: `Check [the Loop's runs](https://github.com/${repo}/actions), then re-run \`${check}\`, fix it, or merge #${pullRequest} past it by hand.`,
+    };
+  }
+  const fix = issue === null ? "the check's fix" : `the check's fix on #${issue}`;
+  const next = {
+    "to-come": "and the Kit re-runs it at its next hourly check.",
+    asked: "and the Kit has asked for one more re-run of it.",
+    done: `and the Kit's one more re-run of it is done or skipped, so #${pullRequest} waits for ${fix}.`,
+  } as const;
+  return { sentence: `${failing}, ${next[rerun]}`, remedy: null };
 }
 
 /** What reading matter is, and how long it has waited. */

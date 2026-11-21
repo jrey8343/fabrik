@@ -7,7 +7,7 @@
 // Request changes, `needs-design` or a comment on one, so none is read.
 import { setupBranch } from "../setup/setupBranchName.ts";
 import { SKILLS_BUMP_BRANCH } from "../skills/bump.ts";
-import { type PlainKind, type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
+import { type HealingCheck, type PlainKind, type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
 import type { GitHubFacts, PlainPullRequestFacts, RequiredCheckFact, RequiredChecksFact } from "./weeklySummary.ts";
 
 /** What a Kit bump's branch starts with: Dependabot's branch for the Dependabot shim's `fabrik` group (templates/dependabot.yml). */
@@ -165,32 +165,66 @@ export function nameForChecks(plain: PlainKind | null, checks: RequiredChecksFac
 export type ChecksName = Exclude<PlainName, { readonly name: "draft" | "conflicts" }>;
 
 /** An agent pull request's Merge-gate name for its checks, with the fields that go with it. */
-export type MergeGateChecksName = ChecksName & { readonly stopsWork: boolean; readonly since: string };
+export type MergeGateChecksName = (ChecksName | Pick<StandingNamed<"check-healing">, "name" | "move" | "yours" | "detail">) & {
+  readonly stopsWork: boolean;
+  readonly since: string;
+  readonly stuckAt: string | null;
+};
 
 /**
- * The name of an agent pull request at the Merge gate, passed at `passedAt`,
- * for the Required checks on its head (#564), by the order a Plain one's are
- * read in (nameForChecks). Unlike a Plain one's, a failing or unreported
- * check stops work: it is out of draft, counted at the gate, and GitHub won't
- * merge it. A failing check stands since its report, else since the pass;
- * all passed, none required, or the checks unread, it is yours to merge,
- * since the pass, as before its checks were read. A red or running name
- * keeps `passedAt`, the time it goes back to once they pass again. Every name
- * carries `passedHead`, the head the Reviewer passed, which the head whose
- * checks these are may have moved from since (#692).
+ * The Reviewer's pass that opened an agent pull request's Merge gate: when it
+ * was given and on which head, which the pull request's head may have moved
+ * from since (#692); and, of the Unrelated failures it names on the head the
+ * pull request still has (#795), those the Kit is still healing and those it
+ * has mentioned the Operator over (StandingDetails). The rule reads it from
+ * the pull request's comments (src/kit/standingHealing.ts), and the join with
+ * checks from a kept row's detail (src/read/joinChecks.ts).
  */
-export function mergeGateNameForChecks(checks: RequiredChecksFact, passedAt: string, passedHead: string): MergeGateChecksName {
-  const ready = { name: "yours-to-merge", move: "operator", yours: true, stopsWork: true, since: passedAt, detail: { plain: null, passedHead } } as const;
+export interface MergeGatePass {
+  readonly passedAt: string;
+  readonly passedHead: string;
+  readonly healing: readonly HealingCheck[];
+  readonly mentioned: readonly string[];
+}
+
+/**
+ * The name of an agent pull request at the Merge gate for the Required checks
+ * on its head (#564), by the order a Plain one's are read in (nameForChecks).
+ * Unlike a Plain one's, a failing or unreported check stops work: it is out
+ * of draft, counted at the gate, and GitHub won't merge it. A failing check
+ * stands since its report, else since the pass; all passed, none required, or
+ * the checks unread, it is yours to merge, since the pass, as before its
+ * checks were read.
+ *
+ * A failing check the Kit is healing (#795) is not the Operator's: the other
+ * checks are read first, and when they name none failing or unreported, it is
+ * `check-healing`, the Kit's and stopping nothing, naming the first healing
+ * check that fails, since its report, and turning Stuck when that check's
+ * entry says.
+ *
+ * A red or running name keeps `passedAt`, the time it goes back to once they
+ * pass again. Every name carries `passedHead` and what the pass keeps of its
+ * Unrelated failures, so a later checks read settles it with no gather.
+ */
+export function mergeGateNameForChecks(checks: RequiredChecksFact, pass: MergeGatePass): MergeGateChecksName {
+  const { passedAt, passedHead, healing, mentioned } = pass;
+  const kept = { passedHead, ...(healing.length === 0 ? {} : { healing }), ...(mentioned.length === 0 ? {} : { mentioned }) };
+  const theOperators = { stopsWork: true, stuckAt: null } as const;
+  const ready = { name: "yours-to-merge", move: "operator", yours: true, ...theOperators, since: passedAt, detail: { plain: null, ...kept } } as const;
   if (checks === "unread") return ready;
-  const { name, decidedAt } = nameForChecks(null, checks);
-  switch (name.name) {
-    case "yours-to-merge":
-      return ready;
-    case "check-failing":
-      return { ...name, stopsWork: true, since: name.detail.checkIs === "failing" ? (decidedAt ?? passedAt) : passedAt, detail: { ...name.detail, passedAt, passedHead } };
-    case "waiting-on-checks":
-      return { ...name, stopsWork: false, since: passedAt, detail: { ...name.detail, passedAt, passedHead } };
+  const isHealing = ({ name, is }: RequiredCheckFact) => is === "failing" && healing.some(({ check }) => check === name);
+  const { name, decidedAt } = nameForChecks(null, checks.filter((check) => !isHealing(check)));
+  if (name.name === "check-failing") {
+    return { ...name, ...theOperators, since: name.detail.checkIs === "failing" ? (decidedAt ?? passedAt) : passedAt, detail: { ...name.detail, passedAt, ...kept } };
   }
+  const failing = checks.find(isHealing);
+  const entry = healing.find(({ check }) => check === failing?.name);
+  if (failing !== undefined && entry !== undefined) {
+    const { check, rerun, issue, stuckAt } = entry;
+    return { name: "check-healing", move: "kit", yours: false, stopsWork: false, since: failing.at ?? passedAt, stuckAt, detail: { plain: null, check, rerun, issue, passedAt, ...kept, healing } };
+  }
+  if (name.name === "yours-to-merge") return ready;
+  return { ...name, stopsWork: false, stuckAt: null, since: passedAt, detail: { ...name.detail, passedAt, ...kept } };
 }
 
 /** When the last of these passed checks passed, or null when there are none or one gives no time. */

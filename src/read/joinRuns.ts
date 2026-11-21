@@ -73,6 +73,8 @@ function waitsOnAnyRunOfItsRole(standing: Standing): boolean {
     case "waiting-on-kit":
       return SILENCES_ON_ANY_RUN.has(standing.detail.silence);
     case "stuck":
+      // A pull request an Unrelated failure holds at the Merge gate waits on no run (#795).
+      if (standing.detail.was === "check-healing") return false;
       return standing.detail.was === "not-started" ? labelWaitsOnAnyRun(standing.detail.label) : SILENCES_ON_ANY_RUN.has(standing.detail.silence);
     default:
       return false;
@@ -121,8 +123,9 @@ function isQuietDraft(standing: Standing): boolean {
     case "waiting-on-checks":
       return standing.detail.plain === null;
     case "waiting-on-kit":
-    case "stuck":
       return standing.detail.silence === "quiet-draft";
+    case "stuck":
+      return standing.detail.was === "waiting-on-kit" && standing.detail.silence === "quiet-draft";
     default:
       return false;
   }

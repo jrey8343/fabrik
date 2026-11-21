@@ -12,12 +12,13 @@
 // a PR for it is open, the fix is under way and nothing is posted. The Kit
 // never takes a check off the Required list, skips it or merges past it: the
 // mention says what's left, which is the Operator's. Pure.
+import { fixUnderWay, openCheckIssue } from "./checkIssue.ts";
 import { fixBroughtTo } from "./conflicts.ts";
 import { checkCode } from "../review/failureExcerpt.ts";
 import { passedHeadAtGate } from "./flakyChecks.ts";
 import { gateRerunSpent, stillRed } from "./gateRerun.ts";
-import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_AGENT, READY_FOR_HUMAN } from "./labels.ts";
-import { flakyCheckIssueOf, operatorMentionMarker } from "./markers.ts";
+import { NEEDS_DESIGN, NEEDS_INFO, NEEDS_TRIAGE, READY_FOR_HUMAN } from "./labels.ts";
+import { operatorMentionMarker } from "./markers.ts";
 import type { ClosedCheckIssue, KitIssueSnapshot, PassedHeadChecks, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
 
 /** How long a check's issue may sit in needs-triage before it counts as waiting on the Operator: Triage runs on it within minutes of its filing. */
@@ -48,8 +49,8 @@ interface Spent {
  * that issue is ready-for-agent or has a PR open.
  */
 function spentOn(now: string, pullRequest: PullRequestSnapshot, check: string, issues: CheckIssues): Spent | null {
-  const open = issues.open.find((issue) => flakyCheckIssueOf(issue.body) === check);
-  if (open !== undefined && (open.labels.includes(READY_FOR_AGENT) || issues.inFlight.has(open.number))) return null;
+  const open = openCheckIssue(issues.open, check);
+  if (fixUnderWay(open, issues.inFlight)) return null;
   const name = checkCode(check);
   const brought = fixBroughtTo(pullRequest, check);
   if (brought !== null) {

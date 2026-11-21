@@ -141,6 +141,7 @@ import type {
   EvidenceShot,
   Facts,
   HeadCheck,
+  HealingCheck,
   IssuesToRollIn,
   IssueToRollIn,
   KitConfig,
@@ -1239,6 +1240,7 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
 
   // The Standing
 
+  HealingCheck: { check: "test", rerun: "asked", issue: 91, stuckAt: null } satisfies HealingCheck,
   Standing: A_KEPT_STANDING satisfies Standing,
   StandingFacts: standingFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }) }) satisfies StandingFacts,
   StandingName: "not-started" satisfies StandingName,

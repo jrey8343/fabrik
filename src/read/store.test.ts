@@ -323,6 +323,8 @@ describe("the gather of the store", () => {
         number: 12,
         title: "Tick dead in jrey8343/shop",
         author: "fabrik-app[bot]",
+        // The store's read asks for no body: it has no Check's issue (#795).
+        body: "",
         labels: ["ready-for-human"],
         createdAt: "2026-11-01T00:00:00Z",
         comments: [{ url: `https://github.com/${RUN_STORE_REPO}/issues/12#issuecomment-1`, author: "fabrik-app[bot]", byBot: true, body: "The Fabrik App can't reach jrey8343/shop.", at: "2026-11-08T10:00:00Z" }],

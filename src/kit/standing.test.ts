@@ -16,6 +16,7 @@ import {
   anOpenPullRequest,
   anOpenReplay,
   anOpenRetro,
+  aPassNaming,
   aPlainPullRequest,
   aReplayBody,
   aReview,
@@ -169,6 +170,37 @@ describe("the Standing rule", () => {
         const runsInFlight = [aRunInFlight({ role: "review", job: "waiting-on-checks", createdAt: "2026-11-08T19:00:00Z" })];
         const [standing] = standingsIn({ openPullRequests: [draft] }, { kit: { ...withChecks({ [HEAD]: [{ name: "ci", is: "failing", at: "2026-11-08T19:30:00Z" }] }).kit, runsInFlight } });
         expect(standing).toEqual(expect.objectContaining({ place: "review", name: "waiting-on-checks", detail: { plain: null, check: null, checksUnread: false, head: HEAD } }));
+      });
+
+      // The rule for an Unrelated failure is tested in src/kit/standingHealing.test.ts: this one is the schema fixture's.
+      it("stands as check-healing, the Kit's and stopping nothing, while a failing check the pass named an Unrelated failure is the Kit's to heal (#795)", () => {
+        const named = atTheGate(60, { comments: [aPassNaming(["ci"], HEAD, "2026-11-05T20:00:00Z")] });
+        const kit = withChecks({ [HEAD]: [{ name: "ci", is: "failing", at: "2026-11-05T19:30:00Z" }] });
+
+        const standings = standingsIn({ openPullRequests: [named] }, kit, "2026-11-05T21:00:00Z");
+
+        expect(standings.map(fieldsOf)).toEqual([
+          {
+            pullRequest: 60,
+            issue: 10,
+            place: "merge-gate",
+            name: "check-healing",
+            move: "kit",
+            yours: false,
+            stopsWork: false,
+            since: "2026-11-05T19:30:00Z",
+            detail: {
+              plain: null,
+              check: "ci",
+              rerun: "to-come",
+              issue: null,
+              passedAt: "2026-11-05T20:00:00Z",
+              passedHead: HEAD,
+              healing: [{ check: "ci", rerun: "to-come", issue: null, stuckAt: "2026-11-05T23:30:00.000Z" }],
+              head: HEAD,
+            },
+          },
+        ]);
       });
     });
 

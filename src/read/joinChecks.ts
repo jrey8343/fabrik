@@ -6,7 +6,7 @@
 // agrees with the rule: for the same facts, the rows the rule gives with a
 // later checks read (rowsOf) equal the kept rows joined with that read.
 import { type Standing, standingAt } from "../kit/standing.ts";
-import { joined, mergeGateNameForChecks, nameForChecks } from "../kit/standingPlain.ts";
+import { joined, type MergeGatePass, mergeGateNameForChecks, nameForChecks } from "../kit/standingPlain.ts";
 import { requiredChecksFactOf, type RequiredChecksRead } from "./requiredChecks.ts";
 import { type Row, withOwnSettled } from "./rows.ts";
 
@@ -21,7 +21,9 @@ import { type Row, withOwnSettled } from "./rows.ts";
  * row at the Merge gate, yours to merge or named for its checks, takes the name
  * the rule gives it for them (mergeGateNameForChecks, #564), going back to the
  * pass time it keeps once they pass again, and keeping the head the Reviewer
- * passed (#692); an agent draft, and one handed back
+ * passed (#692) and which of its Unrelated failures the Kit is healing, so a
+ * healing check that fails again is the Kit's again, turning Stuck when the
+ * row kept that it would (#795); an agent draft, and one handed back
  * at the Merge gate, are left as they were. A head the read does not hold, or
  * holds as unread, leaves its row as it was. Every row is read at `now` as the
  * rule reads a kept Standing (standingAt).
@@ -41,10 +43,9 @@ function settledWith({ standing, plainPullRequest }: Row, read: RequiredChecksRe
   const checks = requiredChecksFactOf(read, head);
   if (checks === "unread") return standing;
   if (standing.detail.pullRequest !== undefined) return pairingSettled(standing, checks, head, plainPullRequest);
-  const pass = mergeGatePassOf(standing);
+  const pass = mergeGatePassOf(standing, head);
   if (pass !== null) {
-    // A row kept before #692 carries no passedHead: the rule then counted a pass on its head alone.
-    const name = mergeGateNameForChecks(checks, pass.passedAt, pass.passedHead ?? head);
+    const name = mergeGateNameForChecks(checks, pass);
     return { ...standing, ...name, detail: { ...name.detail, head } } as Standing;
   }
   if (standing.work !== "plain" || standing.name === "draft" || standing.name === "conflicts" || !("plain" in standing.detail) || standing.detail.plain === null) return standing;
@@ -53,18 +54,27 @@ function settledWith({ standing, plainPullRequest }: Row, read: RequiredChecksRe
 }
 
 /**
- * When the Reviewer passed a kept agent row at the Merge gate that is named
- * by its checks, and the head it passed where the row carries it: its own
- * time when yours to merge, else the pass it carries. Null for any other row.
+ * The pass a kept agent row at the Merge gate that is named by its checks
+ * carries, on `head`: when the Reviewer passed, its own time when yours to
+ * merge, else the time it keeps; the head it passed; and what it keeps of its
+ * Unrelated failures (#795), one that turned Stuck while the Kit was healing
+ * its check included. A row kept before #692 carries no passedHead: the rule
+ * then counted a pass on its head alone. One kept before #795 carries no
+ * Unrelated failures, and settles as it did. Null for any other row.
  */
-function mergeGatePassOf(standing: Standing): { readonly passedAt: string; readonly passedHead: string | undefined } | null {
+function mergeGatePassOf(standing: Standing, head: string): MergeGatePass | null {
   if (standing.work !== "ticket" || standing.place !== "merge-gate") return null;
+  const passOf = (passedAt: string, { passedHead = head, healing = [], mentioned = [] }: Partial<MergeGatePass>): MergeGatePass => ({ passedAt, passedHead, healing, mentioned });
   switch (standing.name) {
     case "yours-to-merge":
-      return standing.detail.plain === null ? { passedAt: standing.since, passedHead: standing.detail.passedHead } : null;
+      return standing.detail.plain === null ? passOf(standing.since, standing.detail) : null;
     case "check-failing":
     case "waiting-on-checks":
-      return standing.detail.passedAt === undefined ? null : { passedAt: standing.detail.passedAt, passedHead: standing.detail.passedHead };
+      return standing.detail.passedAt === undefined ? null : passOf(standing.detail.passedAt, standing.detail);
+    case "check-healing":
+      return passOf(standing.detail.passedAt, standing.detail);
+    case "stuck":
+      return standing.detail.was === "check-healing" ? passOf(standing.detail.passedAt, standing.detail) : null;
     default:
       return null;
   }

@@ -28,13 +28,15 @@ import { freeSubscriptions, kitIssueSubscriptionOf, makesUnusable } from "../loo
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
 import { handBackOfNotice } from "./standingHandBacks.ts";
+import { mergeGatePassOf } from "./standingHealing.ts";
 import { mergeGateNameForChecks } from "./standingPlain.ts";
 import { isOperatorsReplay, replayResultsIn } from "./replay.ts";
 import { type LabelEvent, verdictsOn } from "./retroEvidence.ts";
 import type { GitHubFacts, OpenIssueFacts, OpenPullRequestFacts, RepoKitFacts } from "./weeklySummary.ts";
 
 /** Every Standing of the repo's whose move is the Operator's, issues first, then pull requests. */
-export function operatorStandingsOf({ github, kit, operator, appLogin }: StandingFacts, now: string): Standing[] {
+export function operatorStandingsOf(facts: StandingFacts, now: string): Standing[] {
+  const { github, kit, operator, appLogin } = facts;
   const { repo, openIssues, openPullRequests } = github;
   return [
     ...openIssues.flatMap((issue) => designRoundStandingsOf(issue, repo, appLogin)),
@@ -44,7 +46,7 @@ export function operatorStandingsOf({ github, kit, operator, appLogin }: Standin
     ...subscriptionStandingsOf(github, kit),
     // A Subscription's issue carries ready-for-human too, but stands as above.
     ...openIssues.flatMap((issue) => (issue.labels.includes(READY_FOR_HUMAN) && !makesUnusable(issue.labels) ? [readyForHumanStandingOf(issue, repo, now)] : [])),
-    ...openPullRequests.flatMap((pullRequest) => pullRequestStandingsOf(pullRequest, repo, operator, kit)),
+    ...openPullRequests.flatMap((pullRequest) => pullRequestStandingsOf(pullRequest, facts)),
     // Last, so work that stops on the Operator is read so before it is read as reading matter.
     ...readingMatterOf(github, operator, appLogin),
   ];
@@ -296,14 +298,17 @@ function blockedStandingOf(issue: OpenIssueFacts, repo: string, work: "ready-for
  * the Ticket it closes. At the Merge gate it is named by the Required checks
  * on its head (mergeGateNameForChecks, #564), unread when the repo's Kit
  * facts hold none for it, carrying the head the Reviewer passed, which its
- * head may have moved from since (#692).
+ * head may have moved from since (#692), and what that pass keeps of its
+ * Unrelated failures: one the Kit is still healing leaves the Standing the
+ * Kit's (mergeGatePassOf, #795).
  */
-function pullRequestStandingsOf(pullRequest: OpenPullRequestFacts, repo: string, operator: string, kit: RepoKitFacts | null): Standing[] {
+function pullRequestStandingsOf(pullRequest: OpenPullRequestFacts, facts: StandingFacts): Standing[] {
+  const { github, kit, operator } = facts;
   const move = passedMoveOf(pullRequest, operator);
-  const base = { ...theOperators(repo, pullRequest.ticket, pullRequest.number, move?.since ?? pullRequest.createdAt), work: "ticket", place: "merge-gate" } as const;
+  const base = { ...theOperators(github.repo, pullRequest.ticket, pullRequest.number, move?.since ?? pullRequest.createdAt), work: "ticket", place: "merge-gate" } as const;
   switch (move?.kind) {
     case "merge-gate":
-      return [{ ...base, ...mergeGateNameForChecks(kit?.headChecks[pullRequest.headSha] ?? "unread", move.since, move.passedHead) }];
+      return [{ ...base, ...mergeGateNameForChecks(kit?.headChecks[pullRequest.headSha] ?? "unread", mergeGatePassOf(pullRequest, move.since, move.passedHead, facts)) }];
     case "handed-back":
       return [{ ...base, name: "yours-to-do", detail: { handBack: null, role: null, failure: null, label: null } }];
     default:
