@@ -8,6 +8,9 @@
 // ./trialResult.ts) it takes the result's name, on staging or not. One that
 // needs a trial and has no result stands until it has one or production
 // takes it; every other for 24 hours, from its result or from its merge.
+// At Production it stands for 24 hours from the production Deployment that
+// gave it its name, so one promoted days after its merge is Live for a day
+// from the Deployment that took it (#857).
 // Like the Standing at Production it reads facts only the read library
 // fills, so no Kit job works out a Standing past the merge, and nothing in
 // the Loop waits on it. Pure, no I/O.
@@ -15,6 +18,7 @@ import type { ShotsMarker } from "../evidence/shotsEvidence.ts";
 import type { EvidenceMarker } from "../evidence/uiEvidence.ts";
 import type { DeploymentsRead, DeployOf } from "../read/deployments.ts";
 import type { MainCheckOf, MainChecksRead } from "../read/mainChecks.ts";
+import type { KitConfig } from "./config.ts";
 import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed } from "./standing.ts";
 import {
   deployIn,
@@ -97,7 +101,8 @@ export interface StagingDetail {
    * or, untried, from its merge; null for one that needs a Staging trial,
    * has no result and production has not taken, which stands until it has a
    * result or a production Deployment contains it. At Production it stands
-   * by its merge, whatever this says.
+   * by the production Deployment that gave it its name, whatever this says
+   * (mergedStillStands).
    */
   readonly standsUntil: string | null;
   /** The Main checks the commit on staging must pass: those `monitor.main_checks` names, none with them off. */
@@ -117,22 +122,78 @@ export interface StagingDetail {
 const NO_TRIALS: TrialFacts = { pullRequests: [], problems: [] };
 
 /**
+ * An agent pull request a production Deployment took in the last 24 hours,
+ * as only the read library's gather keeps it, in a repo that declares
+ * `staging` (#857): what lets it be Live for 24 hours from that Deployment,
+ * however long before it merged.
+ */
+export interface PromotedFacts extends MergedLastDayFacts {
+  /**
+   * The production Deployment that took it: the first to succeed whose
+   * commit holds its merge. GitHub's id of it, or null where it gives none;
+   * the commit it deployed; and when it succeeded, ISO 8601.
+   */
+  readonly by: { readonly deployment: number | null; readonly commit: string; readonly at: string };
+}
+
+/**
  * The Standing of each merged agent pull request the facts hold: in a repo
  * whose valid Kit config declares `staging`, at Staging, of those merged in
- * the last 24 hours and those production has not taken (`unpromoted`), each
- * once, while it still stands (mergedStillStands); in any other, as the
- * Standing at Production gives it, unchanged.
+ * the last 24 hours and those production has not taken (`unpromoted`), and
+ * at Production of those a production Deployment took in the last 24 hours
+ * (`promoted`, #857), each once, while it still stands (mergedStillStands);
+ * in any other, as the Standing at Production gives it, unchanged.
  */
 export function mergedStandingsOf(facts: StandingFacts, now: string): Standing[] {
   const config = facts.kit?.config;
   if (config === undefined || !config.ok || config.config.staging === null) return productionStandingsOf(facts, now);
-  if (facts.mergedLastDay === undefined && facts.unpromoted === undefined) return [];
   const { repo } = facts.github;
-  const { staging, production, monitor } = config.config;
+  const { environment } = config.config.staging;
+  return mergesAtStagingOf(facts, config.config).flatMap(({ merge, context, by }) => {
+    const promoted = promotedStandingOf(repo, merge, context, facts.deployments ?? null, by);
+    const standing = promoted ?? stagingStandingOf(repo, merge, context, deployIn(facts.stagingDeployments ?? null, repo, environment, merge.mergeCommit), facts.mainChecks ?? null);
+    return mergedStillStands(standing, now) ? [standing] : [];
+  });
+}
+
+/**
+ * The Standing at Staging of each merged agent pull request the facts hold,
+ * in a repo whose valid Kit config declares `staging`: what the rule says of
+ * it at Staging for these facts, whether or not it still stands and whether
+ * or not a production Deployment has started on it, before it is read at a
+ * time (standingAt). None in any other repo. Anything else that says where
+ * a merged pull request is at Staging says it through this, as the promote
+ * list does (src/read/promoteList.ts, #857), so it can't say otherwise.
+ */
+export function stagingStandingsOf(facts: StandingFacts): StagingStanding[] {
+  const config = facts.kit?.config;
+  if (config === undefined || !config.ok || config.config.staging === null) return [];
+  const { repo } = facts.github;
+  const { environment } = config.config.staging;
+  return mergesAtStagingOf(facts, config.config).map(({ merge, context }) =>
+    stagingStandingOf(repo, merge, context, deployIn(facts.stagingDeployments ?? null, repo, environment, merge.mergeCommit), facts.mainChecks ?? null),
+  );
+}
+
+/**
+ * Each merged agent pull request the facts hold in a repo that declares
+ * `staging`, once: those merged in the last 24 hours, those production has
+ * not taken, then those a production Deployment took in the last 24 hours;
+ * with what its Standing carries there (StagingDetail), and, for one of the
+ * last, the Deployment that took it.
+ */
+function mergesAtStagingOf(
+  facts: StandingFacts,
+  { staging, production, monitor }: KitConfig,
+): { readonly merge: MergedLastDayFacts; readonly context: StagingDetail; readonly by: PromotedFacts["by"] | null }[] {
+  if (staging === null) return [];
   const unpromoted = facts.unpromoted ?? [];
+  const promoted = facts.promoted ?? [];
   const waiting = new Set(unpromoted.map(({ number }) => number));
   const trials = facts.trials ?? NO_TRIALS;
-  return [...(facts.mergedLastDay ?? []).filter(({ number }) => !waiting.has(number)), ...unpromoted].flatMap((merge) => {
+  const lastDay = (facts.mergedLastDay ?? []).filter(({ number }) => !waiting.has(number));
+  const held = new Set([...lastDay, ...unpromoted].map(({ number }) => number));
+  return [...lastDay, ...unpromoted, ...promoted.filter(({ number }) => !held.has(number))].map((merge) => {
     const trial = stagingTrialOf(merge.number, facts.needTrial ?? [], trials);
     const given = trialResultOf(merge.number, trials, facts.operator);
     const result = given.is === "untried" ? null : given;
@@ -147,9 +208,7 @@ export function mergedStandingsOf(facts: StandingFacts, now: string): Standing[]
       check: null,
       checksUnread: false,
     };
-    const promoted = promotedStandingOf(repo, merge, context, facts.deployments ?? null);
-    const standing = promoted ?? stagingStandingOf(repo, merge, context, deployIn(facts.stagingDeployments ?? null, repo, staging.environment, merge.mergeCommit), facts.mainChecks ?? null);
-    return mergedStillStands(standing, now) ? [standing] : [];
+    return { merge, context, by: promoted.find(({ number }) => number === merge.number)?.by ?? null };
   });
 }
 
@@ -172,13 +231,17 @@ function dayAfter(at: string): string {
 
 /**
  * Whether a merged agent pull request's Standing still stands at `now`, from
- * what it carries alone, so the rule and a join with no facts agree: at
- * Staging, up to and at its `standsUntil`, and with none for as long as it
- * waits on the Operator; at Production, and in a repo that declares no
- * `staging`, up to and at 24 hours from its merge.
+ * what it carries alone, so the rule and a join with no facts agree. In a
+ * repo that declares no `staging`: up to and at 24 hours from its merge. In
+ * one that does: at Staging, up to and at its `standsUntil`, and with none
+ * for as long as it waits on the Operator; at Production, up to and at 24
+ * hours from the production Deployment that gave it its name, its `since`
+ * (#857), so one promoted days after its merge is Live for a day from the
+ * Deployment that took it.
  */
-export function mergedStillStands({ place, detail }: MergedStanding, now: string): boolean {
-  if (place !== "staging" || detail.staging === undefined) return stillStands(detail.mergedAt, now);
+export function mergedStillStands({ place, since, detail }: MergedStanding, now: string): boolean {
+  if (detail.staging === undefined) return stillStands(detail.mergedAt, now);
+  if (place !== "staging") return stillStands(since, now);
   return detail.staging.standsUntil === null || Date.parse(now) <= Date.parse(detail.staging.standsUntil);
 }
 
@@ -189,15 +252,22 @@ export function mergedStillStands({ place, detail }: MergedStanding, now: string
  * Staging: with none started, with production's Deployments unread, or in a
  * repo that tracks no production deploys. So `merged` and `no-deploy-seen`
  * are never said at Production in such a repo.
+ *
+ * `by` is the gather's own word that a production Deployment took the merge
+ * (PromotedFacts, #857): where the read is missing or says nothing of the
+ * merge, it is Live by that Deployment, since it succeeded. A read that
+ * answers for the merge decides, being the nearer look.
  */
 export function promotedStandingOf(
   repo: string,
   merge: Pick<MergedLastDayFacts, "number" | "ticket" | "mergeCommit" | "mergedAt">,
   context: StagingDetail,
   production: DeploymentsRead | null,
+  by: PromotedFacts["by"] | null = null,
 ): ProductionStanding | null {
   if (context.production === null) return null;
-  const deploy = deployIn(production, repo, context.production, merge.mergeCommit);
+  const read = deployIn(production, repo, context.production, merge.mergeCommit);
+  const deploy = read !== "unread" || by === null ? read : ({ is: "succeeded", deployment: by.deployment, commit: by.commit, at: by.at, log: null } as const);
   if (deploy === "unread" || deploy.is === "none") return null;
   return productionStandingOf(repo, merge, context.production, deploy, { ...context, check: null, checksUnread: false });
 }

@@ -17,7 +17,7 @@ import { operatorStandingsOf } from "./standingOperator.ts";
 import type { DeploymentsRead } from "../read/deployments.ts";
 import type { MainChecksRead } from "../read/mainChecks.ts";
 import { type MergedLastDayFacts, type ProductionDetail, productionAt } from "./standingProduction.ts";
-import { mergedStandingsOf, type StagingDetail } from "./standingStaging.ts";
+import { mergedStandingsOf, type PromotedFacts, type StagingDetail } from "./standingStaging.ts";
 import { joinPairing, pairingsOf, plainStandingsOf } from "./standingPlain.ts";
 import { silenceStandingsOf, type WaitingOnKitSilence } from "./standingSilence.ts";
 import { type StoreStandingFacts, storeStandingsOf } from "./standingStore.ts";
@@ -356,6 +356,15 @@ export interface StandingFacts {
    * none.
    */
   readonly unpromoted?: readonly MergedLastDayFacts[];
+  /**
+   * In a repo that declares `staging` (#857), the agent pull requests a
+   * production Deployment took in the last 24 hours, each with that
+   * Deployment, as only the read library's gather keeps them: one is Live
+   * for 24 hours from it, however long before it merged, on the gather's
+   * word where no Deployments read answers for its merge. Left out, there
+   * is none.
+   */
+  readonly promoted?: readonly PromotedFacts[];
   /**
    * What the Staging trial's result is read from (./trialResult.ts): the
    * label events of the merged pull requests and the Trial problems. Left

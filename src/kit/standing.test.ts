@@ -1477,15 +1477,15 @@ describe("a merged agent pull request at Staging (#855)", () => {
     });
   });
 
-  it("stands at 24 hours from the merge and is gone a minute after, at Staging or at Production", () => {
+  it("stands at 24 hours from the merge and is gone a minute after at Staging, and at Production at 24 hours from the production Deployment that took it (#857)", () => {
     const onStaging = staged({ is: "succeeded", deployment: 900, commit: MERGE, at: "2026-11-08T19:40:00Z" });
     const live = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 950, commit: MERGE, at: "2026-11-08T19:58:00Z" }) });
     // Read straight from the rule: a minute later the rule drops it, which a kept Standing read later cannot.
     const ruleAt = (now: string, facts: Partial<StandingFacts>) => standingsOf(standingFactsOf({ kit: kit(), mergedLastDay: [aMergedLastDay(MERGED)], needTrial: [50], ...facts }), now);
     expect(ruleAt("2026-11-09T19:30:00Z", { stagingDeployments: onStaging })).toMatchObject([{ place: "staging", name: "on-staging", move: "operator" }]);
     expect(ruleAt("2026-11-09T19:31:00Z", { stagingDeployments: onStaging })).toEqual([]);
-    expect(ruleAt("2026-11-09T19:30:00Z", { stagingDeployments: onStaging, deployments: live })).toMatchObject([{ place: "production", name: "live" }]);
-    expect(ruleAt("2026-11-09T19:31:00Z", { stagingDeployments: onStaging, deployments: live })).toEqual([]);
+    expect(ruleAt("2026-11-09T19:58:00Z", { stagingDeployments: onStaging, deployments: live })).toMatchObject([{ place: "production", name: "live", since: "2026-11-08T19:58:00Z" }]);
+    expect(ruleAt("2026-11-09T19:59:00Z", { stagingDeployments: onStaging, deployments: live })).toEqual([]);
   });
 
   it("gives none with an invalid Kit config or with the merges unread, and none from the Weekly summary's facts", () => {
@@ -1760,15 +1760,69 @@ describe("a merged agent pull request at Staging (#855)", () => {
         expect(fixed("2026-11-08T15:01:00Z", accepted)).toEqual([]);
       });
 
-      it("moves to Production once a production Deployment that contains it has started, with production's names, result or none; and there stands 24 hours from its merge", () => {
+      it("moves to Production once a production Deployment that contains it has started, with production's names, result or none; and there stands 24 hours from that Deployment, however long ago it merged (#857)", () => {
         const started = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "running", deployment: 950, commit: MERGE, at: "2026-11-08T19:55:00Z" }) });
         const accepted = trials([added(TRIAL_ACCEPTED_LABEL)]);
         expect(atStaging({ needTrial: [50], unpromoted: [aMergedLastDay(MERGED)], stagingDeployments: ON_STAGING, deployments: started, ...accepted })).toMatchObject([
           { place: "production", name: "deploying", move: "kit", detail: { environment: "production", staging: { result: { is: "accepted", at: LABELLED } } } },
         ]);
-        // Live counted from the production Deployment is the promote list's Ticket (#857): until then a merge at Production stands by its merge.
-        expect(ruleAt(NOW, { ...unpromoted, needTrial: [50], stagingDeployments: ON_STAGING, deployments: started })).toEqual([]);
-        expect(ruleAt(NOW, { ...unpromoted, needTrial: [50], stagingDeployments: ON_STAGING, deployments: started, ...trials([added(TRIAL_ACCEPTED_LABEL, "2026-11-08T19:00:00Z")]) })).toEqual([]);
+        // One merged a week ago, untried or long since accepted, stands by the Deployment that gave it its name, not by its merge.
+        const promoting = [
+          { ...unpromoted, needTrial: [50], stagingDeployments: ON_STAGING, deployments: started },
+          { ...unpromoted, needTrial: [50], stagingDeployments: ON_STAGING, deployments: started, ...trials([added(TRIAL_ACCEPTED_LABEL, "2026-11-02T19:00:00Z")]) },
+        ];
+        for (const facts of promoting) {
+          expect(ruleAt(NOW, facts)).toMatchObject([{ place: "production", name: "deploying", move: "kit", since: "2026-11-08T19:55:00Z", detail: { mergedAt: WEEK_OLD } }]);
+          expect(ruleAt("2026-11-09T19:55:00Z", facts)).toMatchObject([{ place: "production", name: "deploying" }]);
+          expect(ruleAt("2026-11-09T19:56:00Z", facts)).toEqual([]);
+        }
+        const failed = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "failed", deployment: 950, commit: MERGE, at: "2026-11-08T19:58:00Z", log: "https://github.com/owner/product/actions/runs/60/job/61" }) });
+        expect(ruleAt("2026-11-09T19:58:00Z", { ...unpromoted, deployments: failed })).toMatchObject([{ place: "production", name: "deploy-failed", since: "2026-11-08T19:58:00Z" }]);
+        expect(ruleAt("2026-11-09T19:59:00Z", { ...unpromoted, deployments: failed })).toEqual([]);
+      });
+
+      it("is live for 24 hours from the production Deployment that took it, not from its merge: live an hour after that Deployment, five days after its merge, and with no Standing 25 hours after it (#857)", () => {
+        const taken = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 960, commit: "9".repeat(40), at: "2026-11-08T19:00:00Z" }) });
+        const fiveDaysBefore = { unpromoted: [aMergedLastDay("2026-11-03T19:00:00Z")], deployments: taken };
+        expect(ruleAt("2026-11-08T20:00:00Z", fiveDaysBefore)).toMatchObject([
+          { place: "production", name: "live", move: "nobody", yours: false, since: "2026-11-08T19:00:00Z", detail: { mergedAt: "2026-11-03T19:00:00Z", environment: "production", deployment: 960 } },
+        ]);
+        expect(ruleAt("2026-11-09T19:00:00Z", fiveDaysBefore)).toMatchObject([{ name: "live" }]);
+        expect(ruleAt("2026-11-09T19:01:00Z", fiveDaysBefore)).toEqual([]);
+        expect(ruleAt("2026-11-09T20:00:00Z", fiveDaysBefore)).toEqual([]);
+        // Whether or not it needed a trial, and whatever came of it.
+        for (const more of [{ needTrial: [50] }, trials([added(TRIAL_PROBLEM_LABEL, "2026-11-04T10:00:00Z")])]) {
+          expect(ruleAt("2026-11-08T20:00:00Z", { ...fiveDaysBefore, ...more })).toMatchObject([{ place: "production", name: "live", since: "2026-11-08T19:00:00Z" }]);
+          expect(ruleAt("2026-11-09T20:00:00Z", { ...fiveDaysBefore, ...more })).toEqual([]);
+        }
+      });
+
+      describe("one a production Deployment took in the last 24 hours, as the gather keeps it (#857)", () => {
+        /** Pull request 50, merged five days before the production Deployment 960 that took it, which succeeded at 19:00. */
+        const promoted = { promoted: [{ ...aMergedLastDay("2026-11-03T19:00:00Z"), by: { deployment: 960, commit: "9".repeat(40), at: "2026-11-08T19:00:00Z" } }] };
+
+        it("is live since that Deployment on the gather's word alone, with no Deployments read, though its Standing at Staging ended days ago; and has none 25 hours after it", () => {
+          expect(ruleAt("2026-11-08T20:00:00Z", promoted)).toMatchObject([
+            { place: "production", name: "live", move: "nobody", yours: false, stopsWork: false, since: "2026-11-08T19:00:00Z", detail: { mergedAt: "2026-11-03T19:00:00Z", environment: "production", deployment: 960, deploysUnread: false, staging: { environment: "staging", production: "production" } } },
+          ]);
+          expect(ruleAt("2026-11-09T19:00:00Z", promoted)).toMatchObject([{ name: "live" }]);
+          expect(ruleAt("2026-11-09T20:00:00Z", promoted)).toEqual([]);
+          expect(ruleAt("2026-11-08T20:00:00Z", { ...promoted, deployments: aDeploymentsRead({ [MERGE]: "unread" }) })).toMatchObject([{ name: "live", detail: { deployment: 960 } }]);
+          expect(ruleAt("2026-11-08T20:00:00Z", { ...promoted, deployments: aDeploymentsRead({}) })).toMatchObject([{ name: "live", detail: { deployment: 960 } }]);
+        });
+
+        it("is as a Deployments read of production says, where one answers for its merge: the read is the nearer look", () => {
+          const earlier = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 955, commit: MERGE, at: "2026-11-08T18:00:00Z" }) });
+          const rerun = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "running", deployment: 970, commit: MERGE, at: "2026-11-08T19:30:00Z" }) });
+          expect(ruleAt("2026-11-08T20:00:00Z", { ...promoted, deployments: earlier })).toMatchObject([{ name: "live", since: "2026-11-08T18:00:00Z", detail: { deployment: 955 } }]);
+          expect(ruleAt("2026-11-08T20:00:00Z", { ...promoted, deployments: rerun })).toMatchObject([{ place: "production", name: "deploying", since: "2026-11-08T19:30:00Z", detail: { deployment: 970 } }]);
+        });
+
+        it("has one Standing where the gather kept it for its last day too, and none in a repo that tracks no production deploys", () => {
+          const lastDay = { mergedLastDay: [aMergedLastDay(MERGED)], promoted: [{ ...aMergedLastDay(MERGED), by: { deployment: 960, commit: "9".repeat(40), at: "2026-11-08T19:45:00Z" } }], needTrial: [50] };
+          expect(standingsIn({}, { kit: kit(), ...lastDay })).toMatchObject([{ pullRequest: 50, place: "production", name: "live", since: "2026-11-08T19:45:00Z", detail: { staging: { trial: { needed: true } } } }]);
+          expect(ruleAt("2026-11-08T20:00:00Z", { ...promoted, kit: kit({ production: { url: "https://shop.example", environment: null } }) })).toEqual([]);
+        });
       });
 
       it("gives one Standing to a pull request the gather kept both ways, and none where neither was read", () => {
