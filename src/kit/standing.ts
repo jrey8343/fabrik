@@ -21,6 +21,7 @@ import { mergedStandingsOf, type StagingDetail } from "./standingStaging.ts";
 import { joinPairing, pairingsOf, plainStandingsOf } from "./standingPlain.ts";
 import { silenceStandingsOf, type WaitingOnKitSilence } from "./standingSilence.ts";
 import { type StoreStandingFacts, storeStandingsOf } from "./standingStore.ts";
+import type { TrialFacts } from "./trialResult.ts";
 import type { GitHubFacts, RepoKitFacts } from "./weeklySummary.ts";
 
 /** Goes up only when a field is removed or changes meaning: a new name or a new `detail` key leaves it. */
@@ -86,6 +87,8 @@ export const STANDING_NAMES = [
   "no-deploy-seen",
   "merged",
   "on-staging",
+  "trial-accepted",
+  "trial-problem",
 ] as const;
 
 export type StandingName = (typeof STANDING_NAMES)[number];
@@ -249,6 +252,15 @@ export interface StandingDetails {
    * `staging.trial` saying whether it needs a Staging trial and why.
    */
   readonly "on-staging": ProductionDetail & { readonly staging: StagingDetail };
+  /**
+   * A merged agent pull request whose Staging trial has a result (#856,
+   * ./trialResult.ts), at Staging whether or not it is on staging: what
+   * `on-staging` carries, its `staging.result` holding the result, with its
+   * Trial problems and, where it was accepted through its fix, the fix. No
+   * deploy decides its name, so it names no Deployment.
+   */
+  readonly "trial-accepted": ProductionDetail & { readonly staging: StagingDetail };
+  readonly "trial-problem": ProductionDetail & { readonly staging: StagingDetail };
 }
 
 /** The fields every Standing has, whatever its name. */
@@ -328,11 +340,28 @@ export interface StandingFacts {
   /** The Main checks read of the commits on staging (src/read/mainChecks.ts); left out or null, their Main checks are unread. */
   readonly mainChecks?: MainChecksRead | null;
   /**
-   * The numbers of those merges that need a Staging trial: the ones that
-   * carry UI evidence whose Implementer did not say nothing visible changes
-   * (asksAStagingTrial). Left out, none does.
+   * The numbers of those merges that need a Staging trial for the UI
+   * evidence they carry: the ones whose Implementer did not say nothing
+   * visible changes (asksAStagingTrial). Left out, none does. One that
+   * closes a Trial problem needs a trial too, which `trials` says.
    */
   readonly needTrial?: readonly number[];
+  /**
+   * In a repo that declares `staging` (#856), the agent pull requests merged
+   * that production has not taken, as only the read library's gather keeps
+   * them: merged since the newest successful production Deployment, however
+   * long ago. One of them that needs a Staging trial and has no result keeps
+   * its Standing until it has one or a production Deployment contains it;
+   * one in `mergedLastDay` alone stands for its 24 hours. Left out, there is
+   * none.
+   */
+  readonly unpromoted?: readonly MergedLastDayFacts[];
+  /**
+   * What the Staging trial's result is read from (./trialResult.ts): the
+   * label events of the merged pull requests and the Trial problems. Left
+   * out, every merge is untried and none closes a Trial problem.
+   */
+  readonly trials?: TrialFacts;
 }
 
 /** A run that ended, on an issue or a pull request, and when: a sign from the Kit on that work. */
@@ -384,6 +413,8 @@ const READING_OF: Readonly<Record<StandingName, keyof typeof READING_ORDER>> = {
   merged: "silence",
   // The Operator's when it needs a Staging trial, as reading matter is theirs.
   "on-staging": "operator",
+  "trial-accepted": "silence",
+  "trial-problem": "silence",
 };
 
 /**

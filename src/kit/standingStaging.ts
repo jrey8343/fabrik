@@ -3,10 +3,14 @@
 // from its merge until a production Deployment that contains it has started,
 // and at Production from then on (./standingProduction.ts). It is on staging
 // once a staging Deployment that contains it has succeeded and every Main
-// check is green on the commit of the newest such Deployment. Like the
-// Standing at Production it reads facts only the read library fills, so no
-// Kit job works out a Standing past the merge, and nothing in the Loop waits
-// on it. Pure, no I/O.
+// check is green on the commit of the newest such Deployment. Once the
+// Operator's own label gives its Staging trial a result (#856,
+// ./trialResult.ts) it takes the result's name, on staging or not. One that
+// needs a trial and has no result stands until it has one or production
+// takes it; every other for 24 hours, from its result or from its merge.
+// Like the Standing at Production it reads facts only the read library
+// fills, so no Kit job works out a Standing past the merge, and nothing in
+// the Loop waits on it. Pure, no I/O.
 import type { ShotsMarker } from "../evidence/shotsEvidence.ts";
 import type { EvidenceMarker } from "../evidence/uiEvidence.ts";
 import type { DeploymentsRead, DeployOf } from "../read/deployments.ts";
@@ -15,6 +19,7 @@ import { type Standing, STANDING_SCHEMA, type StandingFacts, type StandingNamed 
 import {
   deployIn,
   isProductionStanding,
+  MERGED_STANDS_HOURS,
   type MergedLastDayFacts,
   noDeployAtOf,
   type ProductionDetail,
@@ -24,23 +29,36 @@ import {
   productionStandingsOf,
   stillStands,
 } from "./standingProduction.ts";
+import { closesATrialProblem, type TrialFacts, type TrialResultGiven, trialResultOf } from "./trialResult.ts";
+
+/** The names a Staging trial's result gives a merged agent pull request's Standing (#856). */
+type TrialName = "trial-accepted" | "trial-problem";
 
 /** The names a merged agent pull request's Standing can have at Staging. */
-export type StagingName = Exclude<ProductionName, "live"> | "on-staging";
+export type StagingName = Exclude<ProductionName, "live"> | "on-staging" | TrialName;
 
 /** A merged agent pull request's Standing at Staging. */
 export type StagingStanding = StandingNamed<StagingName> & { readonly place: "staging"; readonly detail: { readonly staging: StagingDetail } };
 
 /** A merged agent pull request's Standing, at Staging, at Production or at no place. */
-export type MergedStanding = ProductionStanding | StandingNamed<"on-staging">;
+export type MergedStanding = ProductionStanding | StandingNamed<"on-staging" | TrialName>;
 
 /** Whether a Standing is a merged agent pull request's, whatever its place and name. */
 export function isMergedStanding(standing: Standing): standing is MergedStanding {
-  return standing.name === "on-staging" || isProductionStanding(standing);
+  return standing.name === "on-staging" || isTried(standing) || isProductionStanding(standing);
 }
 
-/** Whether a merged agent pull request needs a Staging trial, and why: it carries UI evidence, or it changes no screen. */
-export type StagingTrial = { readonly needed: true; readonly why: "ui-evidence" } | { readonly needed: false; readonly why: "no-screen" };
+/** Whether a Standing is one a Staging trial's result names: settled, so no deploy and no check moves it. */
+export function isTried(standing: Standing): standing is StandingNamed<TrialName> {
+  return standing.name === "trial-accepted" || standing.name === "trial-problem";
+}
+
+/**
+ * Whether a merged agent pull request needs a Staging trial, and why: it
+ * carries UI evidence, or, with none that asks, it closes a Trial problem
+ * (#856); or it changes no screen.
+ */
+export type StagingTrial = { readonly needed: true; readonly why: "ui-evidence" | "closes-trial-problem" } | { readonly needed: false; readonly why: "no-screen" };
 
 /**
  * Whether a merged agent pull request needs a Staging trial, from the marker
@@ -66,6 +84,22 @@ export interface StagingDetail {
   readonly production: string | null;
   /** Whether it needs a Staging trial, and why. Only on staging is that the Operator's move. */
   readonly trial: StagingTrial;
+  /**
+   * Its Staging trial's result (#856, ./trialResult.ts), or null while it is
+   * untried: accepted or a problem, since when, its Trial problems, each with
+   * whether it is open, none being a problem with no issue named, and, where
+   * it was accepted through its fix, the merged pull requests that are the
+   * fix. At Staging it decides the name; at Production it is carried along.
+   */
+  readonly result: TrialResultGiven | null;
+  /**
+   * When its Standing at Staging ends, ISO 8601: 24 hours from its result,
+   * or, untried, from its merge; null for one that needs a Staging trial,
+   * has no result and production has not taken, which stands until it has a
+   * result or a production Deployment contains it. At Production it stands
+   * by its merge, whatever this says.
+   */
+  readonly standsUntil: string | null;
   /** The Main checks the commit on staging must pass: those `monitor.main_checks` names, none with them off. */
   readonly mainChecks: readonly string[];
   /**
@@ -79,30 +113,73 @@ export interface StagingDetail {
   readonly checksUnread: boolean;
 }
 
+/** No merged pull request's label events and no Trial problem: every merge untried. */
+const NO_TRIALS: TrialFacts = { pullRequests: [], problems: [] };
+
 /**
- * The Standing of each agent pull request merged in the last 24 hours: in a
- * repo whose valid Kit config declares `staging`, at Staging; in any other,
- * as the Standing at Production gives it, unchanged.
+ * The Standing of each merged agent pull request the facts hold: in a repo
+ * whose valid Kit config declares `staging`, at Staging, of those merged in
+ * the last 24 hours and those production has not taken (`unpromoted`), each
+ * once, while it still stands (mergedStillStands); in any other, as the
+ * Standing at Production gives it, unchanged.
  */
 export function mergedStandingsOf(facts: StandingFacts, now: string): Standing[] {
   const config = facts.kit?.config;
-  if (facts.mergedLastDay === undefined || config === undefined || !config.ok || config.config.staging === null) return productionStandingsOf(facts, now);
+  if (config === undefined || !config.ok || config.config.staging === null) return productionStandingsOf(facts, now);
+  if (facts.mergedLastDay === undefined && facts.unpromoted === undefined) return [];
   const { repo } = facts.github;
   const { staging, production, monitor } = config.config;
-  return facts.mergedLastDay
-    .filter(({ mergedAt }) => stillStands(mergedAt, now))
-    .map((merge) => {
-      const context: StagingDetail = {
-        environment: staging.environment,
-        production: production?.environment ?? null,
-        trial: facts.needTrial?.includes(merge.number) === true ? { needed: true, why: "ui-evidence" } : { needed: false, why: "no-screen" },
-        mainChecks: monitor.redMain ? monitor.mainChecks : [],
-        check: null,
-        checksUnread: false,
-      };
-      const promoted = promotedStandingOf(repo, merge, context, facts.deployments ?? null);
-      return promoted ?? stagingStandingOf(repo, merge, context, deployIn(facts.stagingDeployments ?? null, repo, staging.environment, merge.mergeCommit), facts.mainChecks ?? null);
-    });
+  const unpromoted = facts.unpromoted ?? [];
+  const waiting = new Set(unpromoted.map(({ number }) => number));
+  const trials = facts.trials ?? NO_TRIALS;
+  return [...(facts.mergedLastDay ?? []).filter(({ number }) => !waiting.has(number)), ...unpromoted].flatMap((merge) => {
+    const trial = stagingTrialOf(merge.number, facts.needTrial ?? [], trials);
+    const given = trialResultOf(merge.number, trials, facts.operator);
+    const result = given.is === "untried" ? null : given;
+    const context: StagingDetail = {
+      environment: staging.environment,
+      production: production?.environment ?? null,
+      trial,
+      result,
+      // Untried and needing a trial, it waits on the Operator for as long as production leaves it.
+      standsUntil: result !== null ? dayAfter(result.at) : trial.needed && waiting.has(merge.number) ? null : dayAfter(merge.mergedAt),
+      mainChecks: monitor.redMain ? monitor.mainChecks : [],
+      check: null,
+      checksUnread: false,
+    };
+    const promoted = promotedStandingOf(repo, merge, context, facts.deployments ?? null);
+    const standing = promoted ?? stagingStandingOf(repo, merge, context, deployIn(facts.stagingDeployments ?? null, repo, staging.environment, merge.mergeCommit), facts.mainChecks ?? null);
+    return mergedStillStands(standing, now) ? [standing] : [];
+  });
+}
+
+/**
+ * Whether merged pull request `pullRequest` needs a Staging trial, and why:
+ * one of `needTrial`, whose UI evidence asks (asksAStagingTrial), first,
+ * then one that closes a Trial problem, UI evidence or not; every other
+ * changes no screen. The one rule for it, whoever says whether a merged pull
+ * request needs a trial.
+ */
+export function stagingTrialOf(pullRequest: number, needTrial: readonly number[], trials: TrialFacts): StagingTrial {
+  if (needTrial.includes(pullRequest)) return { needed: true, why: "ui-evidence" };
+  return closesATrialProblem(pullRequest, trials) ? { needed: true, why: "closes-trial-problem" } : { needed: false, why: "no-screen" };
+}
+
+/** 24 hours after `at`, ISO 8601: how long a settled Standing past the merge stands. */
+function dayAfter(at: string): string {
+  return new Date(Date.parse(at) + MERGED_STANDS_HOURS * 60 * 60 * 1000).toISOString();
+}
+
+/**
+ * Whether a merged agent pull request's Standing still stands at `now`, from
+ * what it carries alone, so the rule and a join with no facts agree: at
+ * Staging, up to and at its `standsUntil`, and with none for as long as it
+ * waits on the Operator; at Production, and in a repo that declares no
+ * `staging`, up to and at 24 hours from its merge.
+ */
+export function mergedStillStands({ place, detail }: MergedStanding, now: string): boolean {
+  if (place !== "staging" || detail.staging === undefined) return stillStands(detail.mergedAt, now);
+  return detail.staging.standsUntil === null || Date.parse(now) <= Date.parse(detail.staging.standsUntil);
 }
 
 /**
@@ -135,9 +212,14 @@ export function promotedStandingOf(
  * its page as the log; one not green yet, or the checks unread, as deploying
  * since that Deployment succeeded. On staging it stands since the first
  * deploy that contained it, the Operator's move when it needs a Staging
- * trial, which never stops work; every other name is nobody's move. The
- * rule and the join with staging (src/read/joinStaging.ts) both build it
- * here, which is why they agree.
+ * trial, which never stops work; every other name is nobody's move.
+ *
+ * One whose Staging trial has a result (`context.result`, #856) takes the
+ * result's name instead, since the result, whatever its deploys and their
+ * checks say and whether or not it is on staging: it is settled, and a
+ * later deploy never moves it. The rule and the joins
+ * (src/read/joinStaging.ts, src/read/joinDeployments.ts) all build it here,
+ * which is why they agree.
  */
 export function stagingStandingOf(
   repo: string,
@@ -170,6 +252,7 @@ export function stagingStandingOf(
     deploysUnread: false,
     staging: { ...context, check: null, checksUnread: false },
   };
+  if (context.result !== null) return { ...base, name: context.result.is === "accepted" ? "trial-accepted" : "trial-problem", since: context.result.at, detail };
   if (deploy === "unread") return { ...base, name: "merged", since: merge.mergedAt, detail: { ...detail, deploysUnread: true } };
   const decided = { ...detail, deployment: deploy.deployment };
   switch (deploy.is) {

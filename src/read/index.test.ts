@@ -110,7 +110,7 @@ describe("the read library's Standing at Staging (#855)", () => {
       deployment: 905,
       log: null,
       deploysUnread: false,
-      staging: { environment: "staging", production: "production", trial: { needed: true, why: "ui-evidence" }, mainChecks: ["e2e"], check: null, checksUnread: false },
+      staging: { environment: "staging", production: "production", trial: { needed: true, why: "ui-evidence" }, result: null, standsUntil: "2026-11-10T11:30:00.000Z", mainChecks: ["e2e"], check: null, checksUnread: false },
     });
     expect(rows[0]?.staging).toEqual({
       site: "https://staging.shop.example",

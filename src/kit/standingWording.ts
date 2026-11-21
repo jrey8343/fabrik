@@ -256,10 +256,32 @@ export function wordStanding(standing: Standing, now: string, timeZone: string):
     }
     case "on-staging": {
       const { environment, staging } = standing.detail;
-      const trial = staging.trial.needed ? "It carries UI evidence, so it needs a Staging trial." : "It changes no screen, so it needs no Staging trial.";
-      return { pill: "On staging", sentence: `On \`${environment}\` since ${age} ago. ${trial}`, remedy: null };
+      return { pill: "On staging", sentence: `On \`${environment}\` since ${age} ago. ${TRIAL_REASONS[staging.trial.why]}`, remedy: null };
+    }
+    case "trial-accepted": {
+      // Accepted through its fix (#856): each merged pull request that closed one of its Trial problems, itself accepted.
+      const fix = standing.detail.staging.result?.is === "accepted" ? standing.detail.staging.result.fix : null;
+      if (fix === null) return { pill: "Accepted", sentence: `Accepted in its Staging trial ${age} ago.`, remedy: null };
+      return { pill: "Accepted", sentence: `Accepted through its ${fix.length === 1 ? "fix" : "fixes"}, ${listed(fix.map((pullRequest) => `#${pullRequest}`))}, ${age} ago.`, remedy: null };
+    }
+    case "trial-problem": {
+      const problems = standing.detail.staging.result?.problems ?? [];
+      const named = problems.length === 0 ? ", with no issue named" : `: ${listed(problems.map(({ issue, open }) => `#${issue} (${open ? "open" : "closed"})`))}`;
+      return { pill: "Problem found", sentence: `Its Staging trial found a problem ${age} ago${named}.`, remedy: null };
     }
   }
+}
+
+/** Why a merged pull request on staging needs a Staging trial, or needs none, as its sentence says it. */
+const TRIAL_REASONS: Readonly<Record<StagingDetail["trial"]["why"], string>> = {
+  "ui-evidence": "It carries UI evidence, so it needs a Staging trial.",
+  "closes-trial-problem": "It closes a Trial problem, so it needs a Staging trial.",
+  "no-screen": "It changes no screen, so it needs no Staging trial.",
+};
+
+/** These as a sentence lists them: "#70", "#70 and #71", "#70, #71 and #72". */
+function listed(names: readonly string[]): string {
+  return names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
 /** What a merged agent pull request's Standing at Staging carries of it (#855), or null at any other place. */

@@ -29,11 +29,13 @@ import {
 } from "../read/builders.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { resetsAtMarker } from "../loop/kitIssueMarks.ts";
+import { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
 import { designRoundMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import { subscriptionMarker } from "../loop/subscriptions.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingsOf } from "./standing.ts";
 import { ageSince, wordStanding } from "./standingWording.ts";
+import type { TrialFacts } from "./trialResult.ts";
 import type { CommentFacts, GitHubFacts, RequiredChecksFact } from "./weeklySummary.ts";
 
 const SINCE = "2026-11-08T12:00:00Z";
@@ -653,7 +655,7 @@ describe("the wording of a merged agent pull request at Staging (#855)", () => {
   type Check = { readonly name: string; readonly is: "green" | "red" | "undecided"; readonly url: string | null; readonly at: string | null };
   const read = (deploy: Deploy) => (deploy === null ? null : aDeploymentsRead({ [MERGE]: deploy === "unread" ? "unread" : aDeployOf(deploy) }));
   /** The one Standing of pull request 50, merged at SINCE, read at `now`: its staging deploy, the Main checks on DEPLOYED, whether it needs a trial, and its production deploy. */
-  const standing = (staging: Deploy, now: string, { checks = null as readonly Check[] | null, needsTrial = false, production = null as Deploy } = {}): Standing => {
+  const standing = (staging: Deploy, now: string, { checks = null as readonly Check[] | null, needsTrial = false, production = null as Deploy, trials = undefined as TrialFacts | undefined } = {}): Standing => {
     const stagingDeployments = read(staging);
     const [one, ...rest] = standingsOf(
       standingFactsOf({
@@ -663,6 +665,7 @@ describe("the wording of a merged agent pull request at Staging (#855)", () => {
         mainChecks: checks === null ? null : { repo: "owner/product", readAt: now, commits: { [DEPLOYED]: checks } },
         needTrial: needsTrial ? [50] : [],
         deployments: read(production),
+        ...(trials === undefined ? {} : { trials }),
       }),
       now,
     );
@@ -740,6 +743,69 @@ describe("the wording of a merged agent pull request at Staging (#855)", () => {
       pill: "On staging",
       sentence: "On `staging` since 1 hour ago. It changes no screen, so it needs no Staging trial.",
       remedy: null,
+    });
+  });
+
+  it("says it needs a Staging trial because it closes a Trial problem, where it carries no UI evidence (#856)", () => {
+    const closing = { pullRequests: [{ pullRequest: 50, labelEvents: [], closes: [70] }], problems: [{ issue: 70, pullRequest: 12, title: "The cart total reads 0", open: false, closedAs: "completed" }] } as const;
+    expect(wordStanding(standing(SUCCEEDED, minutesAfter(20), { checks: [green("e2e"), green("smoke")], trials: closing }), minutesAfter(70), ZONE)).toEqual({
+      pill: "On staging",
+      sentence: "On `staging` since 1 hour ago. It closes a Trial problem, so it needs a Staging trial.",
+      remedy: null,
+    });
+  });
+
+  describe("with a Staging trial's result (#856)", () => {
+    /** The Operator adding `label` at `at`. */
+    const added = (label: string, at: string) => aLabelAdded(label, at, { actor: "operator" });
+    const aTrialProblem = (issue: number, open: boolean) => ({ issue, pullRequest: 50, title: "The cart total reads 0", open, closedAs: open ? null : "completed" }) as const;
+    /** Pull request 50 with these label events, read 3 hours after its merge. */
+    const tried = (labelEvents: TrialFacts["pullRequests"][number]["labelEvents"], others: TrialFacts["pullRequests"] = [], problems: TrialFacts["problems"] = []) =>
+      standing(SUCCEEDED, minutesAfter(180), { needsTrial: true, trials: { pullRequests: [{ pullRequest: 50, labelEvents, closes: [] }, ...others], problems } });
+
+    it("says the Operator accepted it, since their label", () => {
+      expect(wordStanding(tried([added(TRIAL_ACCEPTED_LABEL, minutesAfter(60))]), minutesAfter(180), ZONE)).toEqual({
+        pill: "Accepted",
+        sentence: "Accepted in its Staging trial 2 hours ago.",
+        remedy: null,
+      });
+    });
+
+    it("says it was accepted through its fix, naming each pull request that is the fix, since the fix's acceptance", () => {
+      const found = [added(TRIAL_PROBLEM_LABEL, minutesAfter(30))];
+      const fix = (pullRequest: number, at: string, closes: readonly number[]) => ({ pullRequest, labelEvents: [added(TRIAL_ACCEPTED_LABEL, at)], closes });
+      expect(wordStanding(tried(found, [fix(61, minutesAfter(120), [70])], [aTrialProblem(70, false)]), minutesAfter(180), ZONE)).toEqual({
+        pill: "Accepted",
+        sentence: "Accepted through its fix, #61, 1 hour ago.",
+        remedy: null,
+      });
+      expect(wordStanding(tried(found, [fix(61, minutesAfter(90), [70]), fix(62, minutesAfter(120), [71])], [aTrialProblem(70, false), aTrialProblem(71, false)]), minutesAfter(180), ZONE)).toEqual({
+        pill: "Accepted",
+        sentence: "Accepted through its fixes, #61 and #62, 1 hour ago.",
+        remedy: null,
+      });
+    });
+
+    it("says its Staging trial found a problem, naming each Trial problem with whether it is open, since the Operator's label", () => {
+      const found = [added(TRIAL_PROBLEM_LABEL, minutesAfter(60))];
+      expect(wordStanding(tried(found, [], [aTrialProblem(70, true)]), minutesAfter(180), ZONE)).toEqual({
+        pill: "Problem found",
+        sentence: "Its Staging trial found a problem 2 hours ago: #70 (open).",
+        remedy: null,
+      });
+      expect(wordStanding(tried(found, [], [aTrialProblem(72, true), aTrialProblem(70, false), aTrialProblem(71, true)]), minutesAfter(180), ZONE)).toEqual({
+        pill: "Problem found",
+        sentence: "Its Staging trial found a problem 2 hours ago: #70 (closed), #71 (open) and #72 (open).",
+        remedy: null,
+      });
+    });
+
+    it("says a problem with no Trial problem naming it has no issue named", () => {
+      expect(wordStanding(tried([added(TRIAL_PROBLEM_LABEL, minutesAfter(60))]), minutesAfter(180), ZONE)).toEqual({
+        pill: "Problem found",
+        sentence: "Its Staging trial found a problem 2 hours ago, with no issue named.",
+        remedy: null,
+      });
     });
   });
 
