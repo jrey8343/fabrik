@@ -6,11 +6,13 @@
 // check is green on the commit of the newest such Deployment. Once the
 // Operator's own label gives its Staging trial a result (#856,
 // ./trialResult.ts) it takes the result's name, on staging or not. One that
-// needs a trial and has no result stands until it has one or production
-// takes it; every other for 24 hours, from its result or from its merge.
-// At Production it stands for 24 hours from the production Deployment that
-// gave it its name, so one promoted days after its merge is Live for a day
-// from the Deployment that took it (#857).
+// needs a trial and has no result stands, at Staging and at Production
+// alike, until it has one or production takes it, which a production
+// Deployment that failed or is still running has not; every other for 24
+// hours, from its result or from its merge. At Production those, and one
+// that is Live, stand for 24 hours from the production Deployment that gave
+// the name, so one promoted days after its merge is Live for a day from the
+// Deployment that took it (#857).
 // Like the Standing at Production it reads facts only the read library
 // fills, so no Kit job works out a Standing past the merge, and nothing in
 // the Loop waits on it. Pure, no I/O.
@@ -99,10 +101,11 @@ export interface StagingDetail {
   /**
    * When its Standing at Staging ends, ISO 8601: 24 hours from its result,
    * or, untried, from its merge; null for one that needs a Staging trial,
-   * has no result and production has not taken, which stands until it has a
-   * result or a production Deployment contains it. At Production it stands
-   * by the production Deployment that gave it its name, whatever this says
-   * (mergedStillStands).
+   * has no result and production has not taken, which waits on the Operator:
+   * it stands, at Staging and at Production alike, until it has a result or
+   * a production Deployment that contains it has succeeded. With a time
+   * here, one at Production stands by the production Deployment that gave
+   * it its name, whatever the time (mergedStillStands).
    */
   readonly standsUntil: string | null;
   /** The Main checks the commit on staging must pass: those `monitor.main_checks` names, none with them off. */
@@ -233,16 +236,21 @@ function dayAfter(at: string): string {
  * Whether a merged agent pull request's Standing still stands at `now`, from
  * what it carries alone, so the rule and a join with no facts agree. In a
  * repo that declares no `staging`: up to and at 24 hours from its merge. In
- * one that does: at Staging, up to and at its `standsUntil`, and with none
- * for as long as it waits on the Operator; at Production, up to and at 24
- * hours from the production Deployment that gave it its name, its `since`
- * (#857), so one promoted days after its merge is Live for a day from the
- * Deployment that took it.
+ * one that does, one that waits on the Operator, which has no `standsUntil`,
+ * stands whatever its name and place until production has taken it: a
+ * production Deployment that contains it and failed, or is still running,
+ * has not. Every other stands, at Staging, up to and at its `standsUntil`;
+ * and at Production, as one that waits on the Operator does once it is
+ * Live, up to and at 24 hours from the production Deployment that gave it
+ * its name, its `since` (#857), so one promoted days after its merge is Live
+ * for a day from the Deployment that took it.
  */
-export function mergedStillStands({ place, since, detail }: MergedStanding, now: string): boolean {
+export function mergedStillStands({ place, name, since, detail }: MergedStanding, now: string): boolean {
   if (detail.staging === undefined) return stillStands(detail.mergedAt, now);
-  if (place !== "staging") return stillStands(since, now);
-  return detail.staging.standsUntil === null || Date.parse(now) <= Date.parse(detail.staging.standsUntil);
+  const { standsUntil } = detail.staging;
+  if (standsUntil === null && name !== "live") return true;
+  if (place !== "staging" || standsUntil === null) return stillStands(since, now);
+  return Date.parse(now) <= Date.parse(standsUntil);
 }
 
 /**

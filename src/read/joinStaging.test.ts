@@ -483,20 +483,51 @@ describe("the joins and a Staging trial's result (#856)", () => {
       }
     });
 
-    it("keep a week-old row once a production Deployment that contains it has started, at Production, where it stands 24 hours from that Deployment and not from its merge, as the rule does (#857)", () => {
-      const waiting = tried([], WAITING);
-      const kept = rowsOf(waiting, null, null, null, KEPT_AT, WEEK_OLD);
-      const started = aDeploymentsRead({ [merge("9")]: aDeployOf({ is: "running", deployment: 950, commit: DEPLOYED, at: "2026-11-12T10:15:00Z" }) }, NOW);
+    it("keep a week-old row that changes no screen once a production Deployment that contains it has started, at Production, where it stands 24 hours from that Deployment and not from its merge, as the rule does (#857)", () => {
+      // It waits on nobody, and merged a day and a half before: the gather's last day no longer holds it.
+      const settled = tried([], { unpromoted: [aMergedLastDay("2026-11-11T09:30:00Z", { number: 44, ticket: 3, mergeCommit: merge("9"), title: "Show the cart total" })] });
+      const kept = rowsOf(settled, null, null, null, "2026-11-12T09:30:00Z", WEEK_OLD);
+      const started = aDeploymentsRead({ [merge("9")]: aDeployOf({ is: "running", deployment: 950, commit: DEPLOYED, at: "2026-11-12T09:15:00Z" }) }, NOW);
 
       const joined = joinDeployments(kept, started, NOW);
 
-      expect(of(joined, 44)?.standing).toMatchObject({ place: "production", name: "deploying", move: "kit", since: "2026-11-12T10:15:00Z", detail: { mergedAt: "2026-11-05T09:30:00Z", deployment: 950 } });
-      expect(joined).toEqual(rowsOf(waiting, null, null, started, NOW, WEEK_OLD));
-      for (const [now, stands] of [["2026-11-13T10:15:00Z", true], ["2026-11-13T10:16:00Z", false]] as const) {
+      expect(of(kept, 44)?.standing).toMatchObject({ place: "staging", name: "on-staging", move: "nobody", detail: { staging: { trial: { needed: false }, standsUntil: "2026-11-12T09:30:00.000Z" } } });
+      expect(of(joined, 44)?.standing).toMatchObject({ place: "production", name: "deploying", move: "kit", since: "2026-11-12T09:15:00Z", detail: { mergedAt: "2026-11-11T09:30:00Z", deployment: 950 } });
+      expect(joined).toEqual(rowsOf(settled, null, null, started, NOW, WEEK_OLD));
+      for (const [now, stands] of [["2026-11-13T09:15:00Z", true], ["2026-11-13T09:16:00Z", false]] as const) {
         expect(of(joinDeployments(kept, started, now), 44) !== undefined).toBe(stands);
         expect(of(joinDeployments(joined, aDeploymentsRead({}, now), now), 44) !== undefined).toBe(stands);
         expect(of(joinStaging(joined, WEEK_OLD, now), 44) !== undefined).toBe(stands);
-        expect(of(rowsOf(waiting, null, null, started, now, WEEK_OLD), 44) !== undefined).toBe(stands);
+        expect(of(rowsOf(settled, null, null, started, now, WEEK_OLD), 44) !== undefined).toBe(stands);
+      }
+    });
+
+    it("keep an untried row that needs a trial at Production while the production Deployment that contains it is running or has failed, however long, through both joins, as the rule does: production has not taken it", () => {
+      const waiting = tried([], WAITING);
+      const kept = rowsOf(waiting, null, null, null, KEPT_AT, WEEK_OLD);
+      const running = aDeploymentsRead({ [merge("9")]: aDeployOf({ is: "running", deployment: 950, commit: DEPLOYED, at: "2026-11-12T10:15:00Z" }) }, NOW);
+      const failed = aDeploymentsRead({ [merge("9")]: aDeployOf({ is: "failed", deployment: 950, commit: DEPLOYED, at: "2026-11-12T10:18:00Z", log: "https://github.com/owner/product/actions/runs/60/job/61" }) }, NOW);
+
+      for (const [started, name] of [[running, "deploying"], [failed, "deploy-failed"]] as const) {
+        const joined = joinDeployments(kept, started, NOW);
+
+        expect(of(joined, 44)?.standing).toMatchObject({ place: "production", name, detail: { mergedAt: "2026-11-05T09:30:00Z", deployment: 950, staging: { trial: { needed: true }, result: null, standsUntil: null } } });
+        expect(joined).toEqual(rowsOf(waiting, null, null, started, NOW, WEEK_OLD));
+        expect(mergesToRead(joined)).toContainEqual({ mergeCommit: merge("9"), mergedAt: "2026-11-05T09:30:00Z" });
+        // 25 hours after the Deployment, and eight days after it.
+        for (const now of ["2026-11-13T11:18:00Z", "2026-11-20T10:00:00Z"]) {
+          expect(of(joinDeployments(kept, started, now), 44)?.standing).toMatchObject({ place: "production", name });
+          expect(of(joinDeployments(joined, aDeploymentsRead({}, now), now), 44)?.standing).toMatchObject({ place: "production", name });
+          expect(of(joinStaging(joined, WEEK_OLD, now), 44)?.standing).toMatchObject({ place: "production", name });
+          expect(of(rowsOf(waiting, null, null, started, now, WEEK_OLD), 44)?.standing).toMatchObject({ place: "production", name });
+        }
+      }
+      // A later production Deployment that contains it succeeds: Live for 24 hours from that one.
+      const stuck = joinDeployments(kept, failed, NOW);
+      const taken = aDeploymentsRead({ [merge("9")]: aDeployOf({ is: "succeeded", deployment: 960, commit: DEPLOYED, at: "2026-11-15T08:00:00Z" }) }, "2026-11-15T08:05:00Z");
+      for (const [now, stands] of [["2026-11-15T08:05:00Z", true], ["2026-11-16T08:00:00Z", true], ["2026-11-16T08:01:00Z", false]] as const) {
+        expect(of(joinDeployments(stuck, taken, now), 44)?.standing.name).toBe(stands ? "live" : undefined);
+        expect(joinDeployments(stuck, taken, now)).toEqual(rowsOf(waiting, null, null, taken, now, WEEK_OLD));
       }
     });
 

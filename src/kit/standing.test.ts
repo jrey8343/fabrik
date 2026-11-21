@@ -1760,16 +1760,16 @@ describe("a merged agent pull request at Staging (#855)", () => {
         expect(fixed("2026-11-08T15:01:00Z", accepted)).toEqual([]);
       });
 
-      it("moves to Production once a production Deployment that contains it has started, with production's names, result or none; and there stands 24 hours from that Deployment, however long ago it merged (#857)", () => {
+      it("moves to Production once a production Deployment that contains it has started, with production's names, result or none; and one that waits on nobody stands there 24 hours from that Deployment, however long ago it merged (#857)", () => {
         const started = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "running", deployment: 950, commit: MERGE, at: "2026-11-08T19:55:00Z" }) });
         const accepted = trials([added(TRIAL_ACCEPTED_LABEL)]);
         expect(atStaging({ needTrial: [50], unpromoted: [aMergedLastDay(MERGED)], stagingDeployments: ON_STAGING, deployments: started, ...accepted })).toMatchObject([
           { place: "production", name: "deploying", move: "kit", detail: { environment: "production", staging: { result: { is: "accepted", at: LABELLED } } } },
         ]);
-        // One merged a week ago, untried or long since accepted, stands by the Deployment that gave it its name, not by its merge.
+        // One merged a week ago that waits on nobody, long since accepted or changing no screen, stands by the Deployment that gave it its name, not by its merge.
         const promoting = [
-          { ...unpromoted, needTrial: [50], stagingDeployments: ON_STAGING, deployments: started },
           { ...unpromoted, needTrial: [50], stagingDeployments: ON_STAGING, deployments: started, ...trials([added(TRIAL_ACCEPTED_LABEL, "2026-11-02T19:00:00Z")]) },
+          { ...unpromoted, stagingDeployments: ON_STAGING, deployments: started },
         ];
         for (const facts of promoting) {
           expect(ruleAt(NOW, facts)).toMatchObject([{ place: "production", name: "deploying", move: "kit", since: "2026-11-08T19:55:00Z", detail: { mergedAt: WEEK_OLD } }]);
@@ -1779,6 +1779,27 @@ describe("a merged agent pull request at Staging (#855)", () => {
         const failed = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "failed", deployment: 950, commit: MERGE, at: "2026-11-08T19:58:00Z", log: "https://github.com/owner/product/actions/runs/60/job/61" }) });
         expect(ruleAt("2026-11-09T19:58:00Z", { ...unpromoted, deployments: failed })).toMatchObject([{ place: "production", name: "deploy-failed", since: "2026-11-08T19:58:00Z" }]);
         expect(ruleAt("2026-11-09T19:59:00Z", { ...unpromoted, deployments: failed })).toEqual([]);
+      });
+
+      it("keeps its Standing at Production, untried and needing a trial, while the production Deployment that contains it has failed or is still running, however long: production has not taken it until one succeeds", () => {
+        const untried = { ...unpromoted, needTrial: [50], stagingDeployments: ON_STAGING };
+        const failed = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "failed", deployment: 950, commit: MERGE, at: "2026-11-08T19:58:00Z", log: "https://github.com/owner/product/actions/runs/60/job/61" }) });
+        const running = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "running", deployment: 951, commit: MERGE, at: "2026-11-08T19:55:00Z" }) });
+        // 25 hours after the Deployment, and eleven days after it.
+        for (const now of ["2026-11-09T20:58:00Z", "2026-11-19T20:00:00Z"]) {
+          expect(ruleAt(now, { ...untried, deployments: failed })).toMatchObject([
+            { place: "production", name: "deploy-failed", move: "nobody", since: "2026-11-08T19:58:00Z", detail: { mergedAt: WEEK_OLD, staging: { trial: { needed: true }, result: null, standsUntil: null } } },
+          ]);
+          expect(ruleAt(now, { ...untried, deployments: running })).toMatchObject([{ place: "production", name: "deploying", move: "kit", since: "2026-11-08T19:55:00Z", detail: { staging: { result: null, standsUntil: null } } }]);
+        }
+        // Once one that contains it has succeeded, production has taken it: Live for 24 hours from that Deployment, tried or not.
+        const taken = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 960, commit: MERGE, at: "2026-11-10T09:00:00Z" }) });
+        expect(ruleAt("2026-11-11T09:00:00Z", { ...untried, deployments: taken })).toMatchObject([{ place: "production", name: "live", since: "2026-11-10T09:00:00Z" }]);
+        expect(ruleAt("2026-11-11T09:01:00Z", { ...untried, deployments: taken })).toEqual([]);
+        // And once it has a result it waits on nobody: 24 hours from the failed Deployment, as every other at Production.
+        const tried = { ...untried, deployments: failed, ...trials([added(TRIAL_PROBLEM_LABEL, "2026-11-08T12:00:00Z")]) };
+        expect(ruleAt("2026-11-09T19:58:00Z", tried)).toMatchObject([{ place: "production", name: "deploy-failed" }]);
+        expect(ruleAt("2026-11-09T19:59:00Z", tried)).toEqual([]);
       });
 
       it("is live for 24 hours from the production Deployment that took it, not from its merge: live an hour after that Deployment, five days after its merge, and with no Standing 25 hours after it (#857)", () => {

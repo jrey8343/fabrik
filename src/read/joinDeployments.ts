@@ -48,10 +48,12 @@ function wantsProductionRead({ place, name, detail }: MergedStanding): boolean {
  * environment. A merged pull request's row whose 24 hours from its merge
  * have passed at `now` is left out, at Production or not. In a repo that
  * declares `staging`, a row at Staging stands as its own `standsUntil` says
- * (#856), so one that waits on the Operator is kept however old, and a row
- * at Production stands for 24 hours from the production Deployment that
- * gave it its name (#857), so one promoted days after its merge is Live for
- * a day from the Deployment that took it. Every row is read
+ * (#856), and one that waits on the Operator is kept however old, at
+ * Production too while the Deployment that contains it is running or has
+ * failed: production has not taken it. Every other row at Production, and
+ * a Live one, stands for 24 hours from the production Deployment that gave
+ * it its name (#857), so one promoted days after its merge is Live for a
+ * day from the Deployment that took it. Every row is read
  * at `now` as the rule reads a kept Standing (standingAt). Rows holding a
  * Standing of another schema are refused, one that would be left out among
  * them: a kept row comes back through readRow (./keptRow.ts).
