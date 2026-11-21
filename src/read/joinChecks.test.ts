@@ -365,6 +365,55 @@ describe("the join of kept rows with a Required checks read", () => {
     });
   });
 
+  describe("a Pairing session's pull request beside a Ticket whose agent PR is not handed to the Operator stands by itself, and settles so (#851)", () => {
+    const agentHead = head("1");
+    const pairHead = head("2");
+    const factsWith = (ticket: Parameters<typeof anOpenIssue>[0], comments: readonly CommentFacts[]) =>
+      homeFactsOf({
+        github: factsOf({
+          openIssues: [anOpenIssue({ number: 8, ...ticket })],
+          openPullRequests: [anOpenPullRequest({ number: 50, ticket: 8, draft: false, headSha: agentHead, comments })],
+          plainPullRequests: [aPlainPullRequest({ number: 74, author: "operator", headRef: "fabrik/pair-8", closes: [8], headSha: pairHead })],
+        }),
+      });
+    const atGate = factsWith({ labels: ["ready-for-agent"] }, [aVerdictComment("pass", agentHead, "2026-11-11T20:00:00Z")]);
+    const handedOver = factsWith({ labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-11T09:00:00Z")] }, []);
+    const passed = [check("test", "passed", "2026-11-12T09:00:00Z"), check("lint", "passed", "2026-11-12T09:40:00Z")];
+    const running = [check("test", "running", "2026-11-12T09:41:00Z"), check("lint", "passed", "2026-11-12T09:40:00Z")];
+    const failing = [check("test", "failing", "2026-11-12T09:42:00Z"), check("lint", "passed", "2026-11-12T09:40:00Z")];
+    const reads = { passed, running, failing };
+    const readOf = (agent: keyof typeof reads, pairing: keyof typeof reads) => aChecksRead({ [agentHead]: reads[agent], [pairHead]: reads[pairing] });
+    const named = (rows: readonly Row[]) =>
+      byWork(rows).map(({ standing }) => [standing.issue, standing.pullRequest, standing.work, standing.name, standing.detail.head, "check" in standing.detail ? standing.detail.check : null]);
+
+    it.each([
+      ["passed", "running", [[8, 50, "ticket", "yours-to-merge", agentHead, null], [8, 74, "plain", "waiting-on-checks", pairHead, "test"]]],
+      ["passed", "failing", [[8, 50, "ticket", "yours-to-merge", agentHead, null], [8, 74, "plain", "check-failing", pairHead, "test"]]],
+      ["failing", "running", [[8, 50, "ticket", "check-failing", agentHead, "test"], [8, 74, "plain", "waiting-on-checks", pairHead, "test"]]],
+    ] as const)("the agent head %s and the Pairing head %s, kept from any read, settle as the rule gives them", (agent, pairing, rows) => {
+      for (const earlier of [null, readOf("passed", "passed"), readOf("failing", "failing"), readOf("running", "running")]) {
+        const { joined, rule } = joinedAndRule(atGate, earlier, readOf(agent, pairing));
+
+        expect(named(rule)).toEqual(rows);
+        expect(byWork(joined)).toEqual(byWork(rule));
+      }
+    });
+
+    it("joins a ready-for-human Ticket's row with its agent PR, carrying the Pairing session's number, and settles it as the rule does (#611)", () => {
+      for (const [earlier, later] of [
+        [null, readOf("passed", "running")],
+        [readOf("passed", "running"), readOf("passed", "passed")],
+        [readOf("passed", "passed"), readOf("passed", "failing")],
+      ] as const) {
+        const { joined, rule } = joinedAndRule(handedOver, earlier, later);
+
+        expect(rule.map(({ standing }) => [standing.issue, standing.pullRequest])).toEqual([[8, 74]]);
+        expect(joined).toEqual(rule);
+      }
+      expect(rowsOf(handedOver, null, readOf("passed", "running"), null, NOW).map(({ standing }) => [standing.name, standing.detail.pullRequest])).toEqual([["yours-to-do", "waiting-on-checks"]]);
+    });
+  });
+
   it("agrees with the rule for a repo of every kind of row at once", () => {
     const facts = homeFactsOf({
       github: factsOf({
