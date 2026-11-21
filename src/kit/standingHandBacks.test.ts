@@ -227,7 +227,7 @@ describe("work the Kit hands back", () => {
       ["a conflict-only run that didn't land", conflictRunEnded(50, "d".repeat(40), "operator", "it changed nothing", "https://github.com/owner/product/actions/runs/42"), "conflict-run-unlanded"],
       [
         "a conflict-only run that found the PR superseded (#845)",
-        conflictRunEnded(50, "d".repeat(40), "operator", "it found main holds it", "https://github.com/owner/product/actions/runs/42", true, null, { by: 49, byTicket: 6, ticket: 7, said: "Compared the diffs." }),
+        conflictRunEnded(50, "d".repeat(40), "operator", "it found main holds it", "https://github.com/owner/product/actions/runs/42", true, null, { by: 49, byTicket: 6, supersededTicket: 7, compared: "Compared the diffs." }),
         "conflict-run-superseded",
       ],
       ["a Request-changes run that didn't land", requestChangesRunEnded(50, "d".repeat(40), "operator", "it still conflicts", "https://github.com/owner/product/actions/runs/42"), "request-changes-unlanded"],

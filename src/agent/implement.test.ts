@@ -604,6 +604,12 @@ describe("A conflict-only run (#304)", () => {
     expect(text).toMatch(/every conflicted file/);
   });
 
+  it("is told what to do when a merged pull request already makes the whole PR's change: stop without pushing and name it in supersededBy (#845)", async () => {
+    const text = (await conflictContext(await fileOf(pullRequest), MAIN)).parts.join("\n");
+
+    expect(text).toContain("If a pull request already merged into `main` makes the whole of this PR's change, abort the rebase, stop without pushing, name it in `supersededBy` and say in your `fix` what you compared instead.");
+  });
+
   it("is given no findings to fix and no new requirements, as neither a Retry nor a Request-changes run", async () => {
     const text = (await conflictContext(await fileOf(pullRequest), MAIN)).parts.join("\n");
 

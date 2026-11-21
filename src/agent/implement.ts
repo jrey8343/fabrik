@@ -309,6 +309,8 @@ export async function conflictContext(pullRequestFile: string, main: string): Pr
       ...currentDescription(body),
       "## A conflict-only run",
       `\`main\` moved to ${main} and this PR now conflicts with it. Rebase the branch onto it (\`git rebase origin/main\`), resolve the conflicts, and change nothing else. Your \`fix\` must list every conflicted file and say how you resolved each conflict.`,
+      // A run that finds the PR's work on main already says so, as "When main moved under the PR" says (#845).
+      "If a pull request already merged into `main` makes the whole of this PR's change, abort the rebase, stop without pushing, name it in `supersededBy` and say in your `fix` what you compared instead.",
       ...fromOperator.parts,
     ],
     operatorComments: fromOperator.given,

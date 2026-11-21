@@ -594,9 +594,9 @@ export interface Supersession {
   /** The Ticket that PR closed, or null when it closed none. */
   readonly byTicket: number | null;
   /** The Ticket of the PR it supersedes. */
-  readonly ticket: number;
+  readonly supersededTicket: number;
   /** What the run said it compared: its `fix`. */
-  readonly said: string;
+  readonly compared: string;
 }
 
 /**
@@ -638,11 +638,11 @@ export function conflictRunEnded(
         ...(superseded === null
           ? [`The PR still conflicts with \`main\`, so it's yours to resolve. ${stands}`]
           : [
-              `#${pullRequest} is probably superseded by #${superseded.by}${superseded.byTicket === null ? "" : `, which closed #${superseded.byTicket}`}. Check #${superseded.by} first; if it does hold this PR's work, close #${pullRequest} and its Ticket #${superseded.ticket} as duplicates. ${stands}`,
+              `#${pullRequest} is probably superseded by #${superseded.by}${superseded.byTicket === null ? "" : `, which closed #${superseded.byTicket}`}. Check #${superseded.by} first; if it does hold this PR's work, close #${pullRequest} and its Ticket #${superseded.supersededTicket} as duplicates. ${stands}`,
               "",
               "**What the Implementer said:**",
               "",
-              withoutMentions(superseded.said).trim(),
+              withoutMentions(superseded.compared).trim(),
             ]),
         ...(runUrl === null ? [] : ["", `[The run](${runUrl})`]),
         superseded === null

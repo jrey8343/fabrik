@@ -92,7 +92,7 @@ describe("The hidden hand-back line", () => {
   });
 
   it("tells a conflict-only run that found its PR superseded from one that didn't land (#845)", () => {
-    const superseded = { by: 49, byTicket: 6, ticket: 7, said: "Compared the diffs." };
+    const superseded = { by: 49, byTicket: 6, supersededTicket: 7, compared: "Compared the diffs." };
     expect(handBackOf(commentsOf(conflictRunEnded(50, "d".repeat(40), "operator", "it found main holds it", RUN, true, null, superseded))[0])).toEqual({ kind: "conflict-run-superseded", role: "implement" });
     expect(handBackOf(commentsOf(conflictRunEnded(50, "d".repeat(40), "operator", "it changed nothing", RUN))[0])).toEqual({ kind: "conflict-run-unlanded", role: "implement" });
   });

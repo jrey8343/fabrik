@@ -654,7 +654,7 @@ function applyConflictRun(
     // Nothing of the PR's own is left, the run says, so whatever its branch holds isn't pushed (#845).
     const { by, byTicket } = superseding;
     const why = `it found that \`main\` already holds the whole of its change, merged in #${by}`;
-    return { kind: "act", actions: conflictRunEnded(pullRequest.number, main, operator, why, fixes.runUrl, true, null, { by, byTicket, ticket: event.issue, said: output.fix ?? "" }) };
+    return { kind: "act", actions: conflictRunEnded(pullRequest.number, main, operator, why, fixes.runUrl, true, null, { by, byTicket, supersededTicket: event.issue, compared: output.fix ?? "" }) };
   }
   const plan = landConflictRun(event, main, pullRequest, operator, output, config, held);
   return superseding.kind === "ignored" && plan.kind === "act" ? { ...plan, notes: [...(plan.notes ?? []), superseding.note] } : plan;

@@ -1125,10 +1125,12 @@ async function readPullRequests(github: ReadClient, repo: Repo, named: readonly 
   return pulls.flatMap((pull) => (pull === null ? [] : [namedPullRequestOf(pull)]));
 }
 
+/** A pull request as GitHub's REST API has it, or null when the number is no pull request. */
 function readPullRequest(github: ReadClient, repo: Repo, number: number): Promise<RestPullRequest | null> {
   return github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${number}`, undefined, { allowNotFound: true }) as Promise<RestPullRequest | null>;
 }
 
+/** What the Loop weighs of any pull request a run names. */
 function namedPullRequestOf(pull: RestPullRequest): NamedPullRequestSnapshot {
   return {
     number: pull.number,

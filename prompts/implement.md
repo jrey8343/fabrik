@@ -83,7 +83,7 @@ If the end of this prompt has "A conflict-only run", this run is a conflict-only
 - A conflict inside a file you must not change (see below) can't be resolved by you: the Kit refuses it and hands the PR to the Operator. Don't try to work around that; say so in your `fix`.
 - If, while you rebase, you find that a pull request already merged into `main` makes the whole of this PR's change, so that nothing of the PR's own is left to keep, run `git rebase --abort`, commit nothing and stop without pushing. Name that pull request's number in your output's `supersededBy`, and say in your `fix` what you compared: which of the PR's changes you found in which merged commits. Judge it from the two diffs, never from titles or the Ticket. If even part of the PR's own change is left, resolve the conflicts as above and leave `supersededBy` out. The Kit checks that the pull request you name merged into `main`, and hands the PR to the Operator as probably superseded by it.
 - Run the build and the tests again before you finish.
-- Your output's `fix` must list every conflicted file and say how you resolved each conflict. Your `summary` describes the PR as a whole as it now stands, starting from "The pull request's current description": the Kit replaces the PR body with it. The Kit keeps the PR's title.
+- Your output's `fix` must list every conflicted file and say how you resolved each conflict, or, when you name a pull request in `supersededBy`, what you compared. Your `summary` describes the PR as a whole as it now stands, starting from "The pull request's current description": the Kit replaces the PR body with it. The Kit keeps the PR's title.
 
 ## The Operator's comments
 
