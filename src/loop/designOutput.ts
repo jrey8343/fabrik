@@ -252,14 +252,31 @@ export type SpecTicket =
       readonly operator: true;
       /** Each one action the Operator takes; the Kit writes them as a task list. */
       readonly steps: readonly string[];
+      /**
+       * The issue the step asks the Operator to open (#825), which the Kit
+       * gives an Open as issue link, its body ending with a `Follows` line
+       * naming the Spec the step is filed under. Absent on any other step.
+       */
+      readonly newIssue?: NewIssue;
     });
+
+/** An issue an Operator step asks the Operator to open, as the Design session writes it. */
+export interface NewIssue {
+  readonly title: string;
+  readonly body: string;
+}
 
 interface TicketFields {
   /** Names the Ticket for other Tickets' `blockedBy`; unique within the outcome. */
   readonly key: string;
   readonly title: string;
   readonly body: string;
-  readonly blockedBy: readonly string[];
+  /**
+   * What it waits on: the keys of other Tickets in the outcome, and the
+   * numbers of open Tickets outside it, from "The open Tickets" the turn was
+   * given (#825).
+   */
+  readonly blockedBy: readonly (string | number)[];
 }
 
 export type DesignTurnOutputResult =
@@ -357,12 +374,14 @@ function readTickets(value: unknown, errors: string[], outcome: "spec" | "split"
       !isText(item.title) ||
       !isText(item.body) ||
       !Array.isArray(item.blockedBy) ||
-      !item.blockedBy.every(isText)
+      !item.blockedBy.every((blocker) => isText(blocker) || isIssueNumber(blocker))
     ) {
-      errors.push(`ticket ${i + 1} needs non-empty key, title and body text, and a blockedBy list of keys`);
+      errors.push(`ticket ${i + 1} needs non-empty key, title and body text, and a blockedBy list of keys and open Tickets' numbers`);
     } else if (item.operator === undefined) {
-      const fields = { key: item.key, title: item.title, body: item.body, blockedBy: item.blockedBy };
-      if (item.keptBranch !== undefined) {
+      const fields = { key: item.key, title: item.title, body: item.body, blockedBy: item.blockedBy as (string | number)[] };
+      if (item.newIssue !== undefined) {
+        errors.push(`ticket ${JSON.stringify(item.key)} has newIssue, but only an Operator step asks the Operator to open an issue: mark it "operator": true with its steps`);
+      } else if (item.keptBranch !== undefined) {
         // A new Ticket has no Kept branch of its own (#536): only a brief that rewrites a Ticket in place carries one on.
         errors.push(`ticket ${JSON.stringify(item.key)} has keptBranch, but only a brief that rewrites the Ticket in place carries on a Kept branch`);
       } else if (item.stepUp !== undefined && typeof item.stepUp !== "boolean") {
@@ -373,14 +392,17 @@ function readTickets(value: unknown, errors: string[], outcome: "spec" | "split"
       errors.push(
         `operator step ${JSON.stringify(item.key)} needs "operator": true and at least one step, with no empty step`,
       );
+    } else if (item.newIssue !== undefined && !(isObject(item.newIssue) && isText(item.newIssue.title) && isText(item.newIssue.body))) {
+      errors.push(`operator step ${JSON.stringify(item.key)} needs newIssue to have non-empty title and body text, if it has one`);
     } else {
       tickets.push({
         key: item.key,
         title: item.title,
         body: item.body,
-        blockedBy: item.blockedBy,
+        blockedBy: item.blockedBy as (string | number)[],
         operator: true,
         steps: item.steps,
+        ...(isObject(item.newIssue) ? { newIssue: { title: item.newIssue.title as string, body: item.newIssue.body as string } } : {}),
       });
     }
   });
@@ -481,14 +503,23 @@ export function isVariantCount(value: unknown): value is number {
   return Number.isInteger(value) && (value as number) >= PROTOTYPE_MIN_VARIANTS && (value as number) <= PROTOTYPE_VARIANT_CAP;
 }
 
-/** What the blocked-by edges within an outcome link: its Tickets, or its Decisions. */
+/**
+ * What the blocked-by edges within an outcome link: its Tickets, or its
+ * Decisions. A number names an issue outside the outcome, which is no part
+ * of its order.
+ */
 interface Blocked {
   readonly key: string;
-  readonly blockedBy: readonly string[];
+  readonly blockedBy: readonly (string | number)[];
 }
 
-/** Each item's blockers must be other items in the outcome, and no chain of them may loop. */
-function checkBlockers(items: readonly Blocked[], errors: string[], noun: "ticket" | "decision"): void {
+/**
+ * Each item's blockers must be other items in the outcome, and no chain of
+ * them may loop. A Ticket's blocker may instead be an open Ticket's number:
+ * one of `openTickets`, those the turn was given, when they are known, as in
+ * the agent job; any issue's on the push job's side, which wasn't given them.
+ */
+function checkBlockers(items: readonly Blocked[], errors: string[], noun: "ticket" | "decision", openTickets: readonly number[] | null = null): void {
   const keys = new Set<string>();
   for (const { key } of items) {
     if (keys.has(key)) errors.push(`${noun} key ${JSON.stringify(key)} is used more than once`);
@@ -496,7 +527,11 @@ function checkBlockers(items: readonly Blocked[], errors: string[], noun: "ticke
   }
   for (const { key, blockedBy } of items) {
     for (const blocker of blockedBy) {
-      if (blocker === key) errors.push(`${noun} ${JSON.stringify(key)} blocks itself`);
+      if (typeof blocker === "number") {
+        if (openTickets !== null && !openTickets.includes(blocker)) {
+          errors.push(`${noun} ${JSON.stringify(key)} is blocked by #${blocker}, which isn't one of "The open Tickets" this turn was given`);
+        }
+      } else if (blocker === key) errors.push(`${noun} ${JSON.stringify(key)} blocks itself`);
       else if (!keys.has(blocker)) {
         errors.push(`${noun} ${JSON.stringify(key)} is blocked by ${JSON.stringify(blocker)}, which isn't a ${noun} here`);
       }
@@ -514,7 +549,7 @@ export function dependencyOrder<T extends Blocked>(items: readonly T[]): T[] | n
   const placed = new Set<string>();
   while (ordered.length < items.length) {
     const next = items.find(
-      ({ key, blockedBy }) => !placed.has(key) && blockedBy.every((blocker) => placed.has(blocker)),
+      ({ key, blockedBy }) => !placed.has(key) && blockedBy.every((blocker) => typeof blocker === "number" || placed.has(blocker)),
     );
     if (next === undefined) return null;
     ordered.push(next);
@@ -523,9 +558,14 @@ export function dependencyOrder<T extends Blocked>(items: readonly T[]): T[] | n
   return ordered;
 }
 
-/** Checks an already-parsed value against the contract, naming every problem. */
-export function readDesignTurnOutput(value: unknown, issue: number): DesignTurnOutputResult {
-  return withConsidered(readTurn(value, issue), value);
+/**
+ * Checks an already-parsed value against the contract, naming every problem.
+ * `openTickets` are the numbers of "The open Tickets" the turn was given
+ * (#825), the only issues outside the outcome a Ticket may wait on, when the
+ * caller knows them: the push job doesn't, and takes any issue's number.
+ */
+export function readDesignTurnOutput(value: unknown, issue: number, openTickets: readonly number[] | null = null): DesignTurnOutputResult {
+  return withConsidered(readTurn(value, issue, openTickets), value);
 }
 
 /** A read output with the Operator comments it weighed, when it gave a list of ids. */
@@ -534,7 +574,7 @@ function withConsidered(result: DesignTurnOutputResult, value: unknown): DesignT
   return { ok: true, output: { ...result.output, operatorCommentsConsidered: value.operatorCommentsConsidered } };
 }
 
-function readTurn(value: unknown, issue: number | null): DesignTurnOutputResult {
+function readTurn(value: unknown, issue: number | null, openTickets: readonly number[] | null = null): DesignTurnOutputResult {
   if (!isObject(value)) return { ok: false, errors: ["Design-session output must be a JSON object"] };
   const errors: string[] = [];
   switch (value.kind) {
@@ -554,14 +594,14 @@ function readTurn(value: unknown, issue: number | null): DesignTurnOutputResult 
       if (!isText(value.comment)) errors.push("a spec needs non-empty comment text");
       const spec = readSpec(value.spec, errors);
       const tickets = readTickets(value.tickets, errors, "spec");
-      if (errors.length === 0) checkBlockers(tickets, errors, "ticket");
+      if (errors.length === 0) checkBlockers(tickets, errors, "ticket", openTickets);
       if (errors.length > 0 || spec === null) return { ok: false, errors };
       return { ok: true, output: { kind: "spec", comment: value.comment as string, spec, tickets } };
     }
     case "split": {
       if (!isText(value.comment)) errors.push("a split needs non-empty comment text");
       const tickets = readTickets(value.tickets, errors, "split");
-      if (errors.length === 0) checkBlockers(tickets, errors, "ticket");
+      if (errors.length === 0) checkBlockers(tickets, errors, "ticket", openTickets);
       if (errors.length > 0) return { ok: false, errors };
       return { ok: true, output: { kind: "split", comment: value.comment as string, tickets } };
     }

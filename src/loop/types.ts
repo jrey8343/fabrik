@@ -2015,6 +2015,29 @@ export interface CreatedIssue {
   readonly created: string;
 }
 
+/**
+ * An open Ticket in this repo, by its number, that a new Ticket waits on
+ * (#825): one of "The open Tickets" its Design session was given. The adapter
+ * reads its database id, which a blocked-by edge takes.
+ */
+export interface OpenTicketRef {
+  readonly ticket: number;
+}
+
+/**
+ * An Open as issue link to the repo's new-issue form (#825), prefilled with an
+ * Operator step's `newIssue` and a `Follows` line naming the Spec the step is
+ * filed under and that Spec's Tickets, each created earlier in the plan or,
+ * for the Spec, existing.
+ */
+export interface OpenAsIssueLink {
+  readonly repoUrl: string;
+  readonly title: string;
+  readonly body: string;
+  readonly follows: CreatedIssue | number;
+  readonly tickets: readonly CreatedIssue[];
+}
+
 /** An issue that already exists, in any repo, with its database id, which a blocked-by edge takes. */
 export interface ExistingIssue extends IssueRef {
   readonly databaseId: number;
@@ -2048,8 +2071,8 @@ export type Action =
       readonly labels: readonly Label[];
       /** The issue it becomes a sub-issue of: one created earlier in the plan, or an existing issue by its number. */
       readonly parent: CreatedIssue | number | null;
-      /** The issues blocking it: each one created earlier in the plan, or an existing issue in any repo. */
-      readonly blockedBy: readonly (CreatedIssue | ExistingIssue)[];
+      /** The issues blocking it: each one created earlier in the plan, an existing issue in any repo, or an open Ticket here by its number. */
+      readonly blockedBy: readonly (CreatedIssue | ExistingIssue | OpenTicketRef)[];
       /** Who it is assigned to when it is created; none when left out. */
       readonly assignees?: readonly string[];
     }
@@ -2080,6 +2103,17 @@ export type Action =
       readonly body: string;
       /** Names the comment for later `comment-linking` actions in the plan, which link to it. */
       readonly key?: string;
+    }
+  | {
+      /**
+       * Rewrites the body of an issue created earlier in the plan with an Open
+       * as issue link in it (#825), once every issue the link's `Follows` line
+       * names exists: an Operator step whose job is to open a new issue.
+       */
+      readonly kind: "link-new-issue";
+      readonly on: CreatedIssue;
+      /** The body's Markdown, with the link written where it stands. */
+      readonly body: readonly (string | OpenAsIssueLink)[];
     }
   | {
       /** Comments on an issue created earlier in the plan (#778). */

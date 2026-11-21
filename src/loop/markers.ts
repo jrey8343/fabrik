@@ -1056,6 +1056,24 @@ export function fromAuditIn(body: string): number | null {
 }
 
 /**
+ * The line an issue opened from an Operator step's Open as issue link ends
+ * with (#825), naming the Spec the step was filed under and, in brackets, that
+ * Spec's Tickets, matched against a whole line with its outer whitespace
+ * trimmed. A Design session on the issue is given that Spec's open Tickets.
+ */
+export const FOLLOWS_SPEC_LINE = /^Follows #([1-9][0-9]*)(?: \(.*\))?$/;
+
+/** The `Follows` line for an issue that builds on the Spec #`spec`, listing its Tickets, which followsSpecIn reads back. */
+export function followsSpecLine(spec: number, tickets: readonly number[]): string {
+  return tickets.length === 0 ? `Follows #${spec}` : `Follows #${spec} (its Tickets: ${tickets.map((ticket) => `#${ticket}`).join(", ")})`;
+}
+
+/** The Spec the first `Follows #n` line in `body` names, or null if it has none. A line quoted as code isn't one. */
+export function followsSpecIn(body: string): number | null {
+  return numberOnFirstLineIn(body, FOLLOWS_SPEC_LINE);
+}
+
+/**
  * The line a Follow-up's filed issue ends with, naming the PR whose pass
  * listed it (src/loop/followUps.ts), matched against a whole line with its
  * outer whitespace trimmed.
