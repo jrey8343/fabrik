@@ -1,6 +1,6 @@
 ---
 name: test-first
-version: 2
+version: 3
 threshold: 0.8
 labels: [test-first, test-after, no-test, fix-before-cause, not-applicable]
 ---
@@ -12,7 +12,7 @@ Whether the run worked test-first. Two practices count, the same in every Produc
 
 Judge the run's transcript only: what it wrote, in what order, and what each test and check run gave back. Never judge whether the code or its tests are good; the Reviewer's Verdict does that. Calling the Skill tool counts neither for nor against the run: a run that wrote its failing test first without calling it worked test-first, and one that called it and wrote its code first didn't. Running the build and the tests before finishing isn't scored either way.
 
-A test counts as run red when the transcript shows a test run failing on it before the code that passes it was written. A test written first but never run until the code was in place, then passing, was written first but never seen to fail: count it as written after. A behaviour change is anything the run changed that a test could pin down, a finding is one the run's prompt carried to fix, and a fix of a test that was itself wrong counts as a finding found by its failure.
+A test counts as run red when the transcript shows a test run failing on it before the code that passes it was written. A test written first but never run until the code was in place, then passing, was written first but never seen to fail: count it as written after. A test added or strengthened for behaviour already in the code, where the run was asked only for the test, counts as run red when the transcript shows it failing with that behaviour briefly broken (a mutation check) before the behaviour is restored. A behaviour change is anything the run changed that a test could pin down, a finding is one the run's prompt carried to fix, and a fix of a test that was itself wrong counts as a finding found by its failure.
 
 One failing test for a behaviour change or a finding is enough. Score the order of the work, not its coverage: how many cases its tests reach, such as a missing input beside a malformed one, is the Reviewer's to judge, not this rubric's, so a case left without a test costs the run nothing here.
 

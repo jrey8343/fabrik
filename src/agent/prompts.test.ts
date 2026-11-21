@@ -104,6 +104,13 @@ describe("The prompts of the runs on a PR the Operator requested changes on (ADR
     expect(section(text, "When you're fixing a PR")).toContain("Never revert a requested change");
   });
 
+  // #852: runs wrote a test and its code in one step, or were asked only for a test and never showed it failing.
+  it("implement's How to work section has the run see each new test fail before its code, and show a test of behaviour already in the code can fail", async () => {
+    expect(lineStarting(section(await prompt("implement"), "How to work"), "- Work test-first.")).toBe(
+      "- Work test-first. Call the Skill tool with `tdd` and follow it: one failing test, then the least code that passes it, then the next. Run each new test and see it fail before you write the code it covers; never write a test and its code in the same step. When the Ticket, a finding or a requested change asks only for a test of behaviour already in the code, whether a new test or a stronger one, show the test can fail: break that behaviour briefly, run the test red, then restore it.",
+    );
+  });
+
   it.each([
     ["When you're fixing a PR", "- Keep the earlier work that's sound.", "a retry", "each finding"],
     ["When the Operator requested changes", "- Keep the earlier work the Operator didn't ask you to change.", "a Request-changes run", "each requested change and each finding"],
