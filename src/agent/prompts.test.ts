@@ -1463,7 +1463,7 @@ describe("The Retro's prompt", () => {
             }),
           ],
         }),
-        followUpIssues: [aKitFollowUpIssue({ state: "closed", closedAs: "not_planned", closedBy: "operator" })],
+        kitFollowUpIssues: [aKitFollowUpIssue({ state: "closed", closedAs: "not_planned", closedBy: "operator" })],
       }),
     ).followUps;
     expect(fault).toMatchObject({ kind: "fault", openedAs: null, overCap: false, kitOpened: { issue: 101, state: "closed", closedAs: "not_planned", closedBy: "operator" } });

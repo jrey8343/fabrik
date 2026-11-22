@@ -233,7 +233,7 @@ export interface MetricFacts {
   readonly mergedPullRequestTitles: readonly MergedTitleFacts[];
   /** The issues the Operator opened in the last 97 days whose body has an escape marker. */
   readonly escapeMarkerIssues: readonly EscapeMarkerIssueFacts[];
-  /** The issues the Operator opened in the last 97 days whose body says `From PR #n`. */
+  /** The issues the Operator opened in the last 97 days whose body says `From PR #n`: never one the Kit opened for a fault, which the Retro's evidence reads apart as `kitFollowUpIssues`. */
   readonly followUpIssues: readonly FollowUpIssueFacts[];
 }
 
@@ -567,12 +567,12 @@ export function verdictsOn(comments: readonly CommentFacts[]): PostedVerdict[] {
        */
       readonly tickets: readonly TicketTextFacts[];
       /**
-       * The issues evidenceFollowUpIssuesOf names, each as GitHub has it now, as
+       * The issues evidenceKitFollowUpIssuesOf names, each as GitHub has it now, as
        * the evidence job read them (#885): the facts hold only the comment that
        * says which issue a fault became. One GitHub no longer has is left out,
        * and its fault names the issue with a state nobody could read.
        */
-      readonly followUpIssues: readonly KitFollowUpIssueFacts[];
+      readonly kitFollowUpIssues: readonly KitFollowUpIssueFacts[];
     }
     
     /** A Ticket's title and body, as GitHub has them now. */
@@ -898,7 +898,7 @@ export function verdictsOn(comments: readonly CommentFacts[]): PostedVerdict[] {
    * number alone, so the evidence job reads each one's title and body and
    * gives them to evidenceBundle as `tickets`.
    */
-  export function evidenceTicketsOf(input: Omit<RetroEvidenceInput, "tickets" | "followUpIssues">): number[] {
+  export function evidenceTicketsOf(input: Omit<RetroEvidenceInput, "tickets" | "kitFollowUpIssues">): number[] {
     const window = windowOf(input);
     const metrics = metricsOf(input);
     // Which PRs they are needs no transcript.
@@ -1193,7 +1193,7 @@ function pushesOf(commits: readonly CommitFacts[], operator: string): OperatorFe
  * Kit's comment on the merged pull request, a bot's alone: the issue the Kit
  * opened, with what became of it, or that it stayed a link over the cap.
  */
-function followUpsOf(window: Window, { facts, operator, followUpIssues }: RetroEvidenceInput): FollowUpEvidence[] {
+function followUpsOf(window: Window, { facts, operator, kitFollowUpIssues }: RetroEvidenceInput): FollowUpEvidence[] {
   return mergedIn(window, facts).flatMap(({ number, comments }) => {
     const atMerge = faultsSeenToOn(comments);
     return comments
@@ -1212,7 +1212,7 @@ function followUpsOf(window: Window, { facts, operator, followUpIssues }: RetroE
           title,
           body,
           openedAs: opened?.number ?? null,
-          kitOpened: issue === undefined ? null : kitOpenedOf(issue, followUpIssues, operator),
+          kitOpened: issue === undefined ? null : kitOpenedOf(issue, kitFollowUpIssues, operator),
           overCap: kind === "fault" && atMerge.left.some(sameTitle),
         };
       });
@@ -1245,9 +1245,10 @@ function kitOpenedOf(issue: number, read: readonly KitFollowUpIssueFacts[], oper
  * The issues the Kit opened for the faults of the agent PRs merged in the
  * Retro's window (#885), each once: the facts hold the comment that says
  * which issue each fault became, so the evidence job reads each one as it is
- * now and gives them to evidenceBundle as `followUpIssues`.
+ * now and gives them to evidenceBundle as `kitFollowUpIssues`. The issues
+ * the Operator opened from a link are the facts' own `followUpIssues`.
  */
-export function evidenceFollowUpIssuesOf(input: Omit<RetroEvidenceInput, "tickets" | "followUpIssues">): number[] {
+export function evidenceKitFollowUpIssuesOf(input: Omit<RetroEvidenceInput, "tickets" | "kitFollowUpIssues">): number[] {
   return [...new Set(mergedIn(windowOf(input), input.facts).flatMap(({ comments }) => faultsSeenToOn(comments).opened.map(({ issue }) => issue)))];
 }
 

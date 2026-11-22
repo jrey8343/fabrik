@@ -39,7 +39,7 @@ import {
   type EvidenceBundle,
   escapesIn,
   evidenceBundle,
-  evidenceFollowUpIssuesOf,
+  evidenceKitFollowUpIssuesOf,
   evidenceReachOf,
   evidenceTicketsOf,
   mergedAgentPullRequestsIn,
@@ -782,7 +782,7 @@ describe("the evidence bundle", () => {
             pullRequests: [merged([BADGE, MONEY, FOOTER], aFaultsComment([[101, BADGE.title]], [FOOTER.title], "2026-11-03T00:01:00Z"))],
             followUpIssues: [aFollowUpIssue(50, MONEY.title, { number: 90 })],
           }),
-          followUpIssues: [aKitFollowUpIssue({ number: 101 })],
+          kitFollowUpIssues: [aKitFollowUpIssue({ number: 101 })],
         });
 
         // In the order the Verdict comment lists them: its ideas, then its faults.
@@ -796,7 +796,7 @@ describe("the evidence bundle", () => {
       it("say what became of each issue the Kit opened: its state label while open, or how it closed and whether the Operator or Triage closed it", () => {
         const opened = aFaultsComment([[101, BADGE.title], [102, FOOTER.title], [103, README.title]], [], "2026-11-03T00:01:00Z");
         const facts = factsOf({ pullRequests: [merged([BADGE, FOOTER, README], opened)] });
-        const input = (...followUpIssues: ReturnType<typeof aKitFollowUpIssue>[]) => ({ facts, followUpIssues });
+        const input = (...kitFollowUpIssues: ReturnType<typeof aKitFollowUpIssue>[]) => ({ facts, kitFollowUpIssues });
         const closed = { state: "closed", labels: ["bug", "wontfix"] } as const;
         const sentToDesign = [{ label: "needs-design", action: "labeled", actor: "fabrik-app[bot]", at: "2026-11-03T00:05:00Z" }] as const;
 
@@ -833,14 +833,14 @@ describe("the evidence bundle", () => {
           }),
         });
 
-        expect(evidenceFollowUpIssuesOf(input)).toEqual([101, 102]);
+        expect(evidenceKitFollowUpIssuesOf(input)).toEqual([101, 102]);
       });
 
       it("can be cited by the pull request and by the issue the Kit opened", () => {
         const bundle = evidenceBundle(
           aRetroEvidenceInput({
             facts: factsOf({ pullRequests: [merged([BADGE], aFaultsComment([[101, BADGE.title]], [], "2026-11-03T00:01:00Z"))] }),
-            followUpIssues: [aKitFollowUpIssue()],
+            kitFollowUpIssues: [aKitFollowUpIssue()],
           }),
         );
 

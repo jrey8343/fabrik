@@ -392,7 +392,7 @@ interface RawKitFollowUpIssue {
  * Each of these issues as GitHub has it now, in the order given, each once:
  * its state, how it closed and who closed it last, its labels and its label
  * timeline. What a Retro's evidence says became of each issue the Kit opened
- * for a fault (evidenceFollowUpIssuesOf, src/kit/retroEvidence.ts, #885).
+ * for a fault (evidenceKitFollowUpIssuesOf, src/kit/retroEvidence.ts, #885).
  * One query however many they are, each issue under an alias of its own,
  * and none for no issue. One GitHub no longer has is left out.
  */
