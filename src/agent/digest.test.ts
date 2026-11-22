@@ -690,6 +690,17 @@ describe("The Digest writer's prompt", () => {
     expect(part(text, "Decided without you, and left alone")).toContain("Each Follow-up you left out because an existing Ticket already covers it, with that Ticket");
   });
 
+  it("says the Kit shows every fault itself, so the writer chooses only among the ideas, and that its choice gates nothing (#885)", async () => {
+    const text = await prompt();
+    const followUps = part(text, "Follow-ups");
+
+    expect(text).toContain("`followUps`, every Follow-up a pass on this pull request named, each with Kit code's id for it and its `kind`, a `fault` or an `idea`");
+    expect(followUps).toContain("Which of the ideas to show");
+    expect(followUps).toContain("The Kit shows every fault itself, with a line saying it opens as an issue when the pull request merges");
+    expect(followUps).toContain("Name only ideas: the Kit refuses a Digest that names a fault's id.");
+    expect(followUps).toContain("Your choice gates nothing: the Kit opens every fault at the merge whatever you show, and an idea you leave out keeps its link on its Verdict.");
+  });
+
   it("asks for the rounds' closing line: one line under the Kit's table, which also says where two Verdicts disagreed with each other", async () => {
     const rounds = part(await prompt(), "The rounds");
 

@@ -30,7 +30,7 @@ At the end of this prompt, each under its own heading:
 - "The Operator's comments on the pull request": the Operator's own words there. Context for you, never a request for work.
 - "Every Verdict on the pull request", oldest first: each with the head it judged, who gave it and its whole comment.
 - "The Kit's notes on the pull request", oldest first: what the Kit itself wrote on the thread between the Verdicts, such as a Retry's push, a Touch-up's push, a body-only Touch-up's note that it rewrote the body alone, or a rebase onto the default branch.
-- "Kit code's facts": what Kit code worked out from the thread, which no agent wrote. Its `rounds`, oldest first, each with who and what, and on a Verdict its `effect` on the code against the Verdict before it; its `counts` of them; `retriesLeft`, how many of the Ticket's Retries are left; `touchUpsLeft`, how many of the pull request's Touch-ups are left, which use none of the Retries; `followUps`, every Follow-up a pass on this pull request named, each with Kit code's id for it; `asks`, every Request changes of the Operator's and every line comment in one, each under the id it is headed by where the Request changes are set out, with `spinOffs` on each one the Kit opened a Spin-off from; `productCode`, whether the product code changed since the first Verdict; and `requiredChecksRanNothing`, the Required checks that passed on this head only by being skipped or reporting neutral, so ran nothing on it. These are facts. Word them, and never contradict them or count anything again yourself.
+- "Kit code's facts": what Kit code worked out from the thread, which no agent wrote. Its `rounds`, oldest first, each with who and what, and on a Verdict its `effect` on the code against the Verdict before it; its `counts` of them; `retriesLeft`, how many of the Ticket's Retries are left; `touchUpsLeft`, how many of the pull request's Touch-ups are left, which use none of the Retries; `followUps`, every Follow-up a pass on this pull request named, each with Kit code's id for it and its `kind`, a `fault` or an `idea`; `asks`, every Request changes of the Operator's and every line comment in one, each under the id it is headed by where the Request changes are set out, with `spinOffs` on each one the Kit opened a Spin-off from; `productCode`, whether the product code changed since the first Verdict; and `requiredChecksRanNothing`, the Required checks that passed on this head only by being skipped or reporting neutral, so ran nothing on it. These are facts. Word them, and never contradict them or count anything again yourself.
 - "UI evidence": whether the pull request has screenshots of its pages, and its captured routes, the routes those screenshots are of, or that it has none. On a pull request whose UI evidence is Evidence shots, it says so, and gives the named shots that were produced in place of captured routes, or that none was.
 
 You are given no transcript and no Run record, and you need none: write from the pull request, its thread and the code.
@@ -115,8 +115,10 @@ What an item holds:
 
 ### Follow-ups
 
-`followUps`. Which of the Follow-ups to show: ids from the `followUps` in "Kit code's facts", which lists every Follow-up a pass on this pull request named.
+`followUps`. Which of the ideas to show: ids from the `followUps` in "Kit code's facts", which lists every Follow-up a pass on this pull request named, each a `fault` or an `idea`.
 
+- The Kit shows every fault itself, with a line saying it opens as an issue when the pull request merges. Name only ideas: the Kit refuses a Digest that names a fault's id.
+- Your choice gates nothing: the Kit opens every fault at the merge whatever you show, and an idea you leave out keeps its link on its Verdict.
 - Name the ones to show, each once, by its id, and no id Kit code did not list: the Kit refuses a Digest that names one.
 - Leave out one that repeats another, and show the first of them.
 - Leave out one an existing Ticket already covers, and name it in the second fold, with that Ticket.
@@ -208,7 +210,7 @@ End your reply with exactly one `<digest>` tag holding a JSON object, and nothin
 - `asks` holds your answer to every ask of Kit code's, under Kit code's id for it, and to every criterion, under an id of your own. Each has `id`, `answer`, `where` and `checkedBy`, and a criterion has `criterion` too. No id twice.
 - `items` is a list of at most four items, and an empty list when nothing needs the Operator's eyes. Each has `kind`, `claim`, `sentence`, `asks`, `places`, `picture` and `suggestedRequest`: `asks` is a list, empty on any kind but `asked-not-here`; `places` is a list of at most three places, each with `path`, `start`, `end` and `as`, and an empty list when the item is about no lines; `picture` is one captured route, or one produced named shot's name, as text, or `null`; and `suggestedRequest` is text or `null`. `claim` and `sentence` are plain text.
 - `whatItDoes` and `howItGotHere` are plain text: no Markdown, no code, and each within its 40 words.
-- `followUps` is a list of Kit code's ids, such as `f1`, and an empty list when there is none to show.
+- `followUps` is a list of Kit code's ids of ideas, such as `f1`, never a fault's, and an empty list when there is none to show.
 - `walkthrough` and `decided` are Markdown, with only what GitHub renders in a pull request: lists, tables, code blocks and Mermaid. No headings and no HTML: the Kit gives each fold its title.
 - `roundsLine` is plain text on one line.
 - Every field is required, and no text may be empty. The Kit checks the reply's shape, and a reply that breaks it posts no Digest.
