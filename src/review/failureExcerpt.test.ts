@@ -7,6 +7,7 @@ import {
   type CheckRun,
   type CommitStatus,
   type ExcerptAnnotation,
+  type FailedJob,
   type FailedStep,
   type FailureExcerpt,
   type FailureReader,
@@ -31,6 +32,7 @@ function reader(
       if (log === undefined) throw new Error(`no log for step ${step}`);
       return log;
     },
+    runJobs: async () => [],
     annotations: async () => annotations,
     checkRun: async (id) => Promise.reject(new Error(`no check run ${id}`)),
     checkRuns: async () => [],
@@ -213,6 +215,180 @@ describe("A red check's failure that can't be read", () => {
     expect(await readFailureExcerpt(check, github)).toMatchObject({ kind: "unread", why: "GitHub refused the read: fetch failed" });
   });
 
+});
+
+// #890: a Required check whose job only gathers other jobs' results, failing
+// when one of them didn't pass. Its own log and annotations name nothing; the
+// failed job of the same workflow run attempt holds the test that failed.
+describe("The other failed jobs of a red check's workflow run attempt (#890)", () => {
+  const RUN = "https://github.com/acme/shop/actions/runs/7001";
+  const job = (id: number, name: string, step: string, overrides: Partial<ActionsJob> = {}): ActionsJob => ({
+    id,
+    name,
+    html_url: `${RUN}/job/${id}`,
+    run_id: 7001,
+    run_attempt: 1,
+    status: "completed",
+    conclusion: "failure",
+    steps: [{ name: step, number: 4, conclusion: "failure" }],
+    ...overrides,
+  });
+  const GATE = job(10, "gate", "Run .github/scripts/gate-verdict.sh");
+  const GATE_LOG = "TYPECHECK: success\nLINT: success\nTEST: failure\n##[error]test is failure, not success\n";
+  const exitCode = (message = "Process completed with exit code 1."): CheckAnnotation => ({ path: ".github", start_line: 12, annotation_level: "failure", message });
+  const GATE_ANNOTATIONS = [exitCode("test is failure, not success")];
+  const SHARD = job(11, "test (1)", "Run pnpm test --shard=1/3");
+  const SHARD_ANNOTATIONS: CheckAnnotation[] = [
+    { path: "src/cart/total.test.ts", start_line: 41, annotation_level: "failure", message: "cart total > adds the delivery fee\nAssertionError: expected 1250 to be 1300" },
+    exitCode(),
+  ];
+  const check = { name: "gate", link: `${RUN}/job/10`, sha: SHA };
+
+  /** A GitHub that holds one attempt of a workflow run: its jobs, each one's annotations, and each failed step's log, by the job's id. */
+  function workflowRun(
+    jobs: readonly ActionsJob[],
+    { annotations = {}, logs = {} }: { annotations?: Readonly<Record<number, readonly CheckAnnotation[]>>; logs?: Readonly<Record<number, string>> } = {},
+  ): FailureReader & { readonly read: string[] } {
+    const read: string[] = [];
+    return {
+      ...reader(),
+      read,
+      job: async (id) => jobs.find((each) => each.id === id) ?? Promise.reject(new GitHubError(`no job ${id}`, 404)),
+      runJobs: async (runId, attempt) => (read.push(`jobs of run ${runId}, attempt ${attempt}`), jobs),
+      stepLog: async (id) => (read.push(`log of job ${id}`), logs[id] ?? Promise.reject(new GitHubError(`no log for job ${id}`, 404))),
+      annotations: async (id) => annotations[id] ?? [],
+    };
+  }
+
+  it("gives each one's name, its job link, its failed step and its error annotations, beside the red job's own", async () => {
+    const github = workflowRun([SHARD, GATE], { annotations: { 10: GATE_ANNOTATIONS, 11: SHARD_ANNOTATIONS }, logs: { 10: GATE_LOG } });
+
+    expect(await readFailureExcerpt(check, github)).toEqual({
+      kind: "actions",
+      check: "gate",
+      link: `${RUN}/job/10`,
+      steps: [{ name: "Run .github/scripts/gate-verdict.sh", earlier: 0, lines: ["TYPECHECK: success", "LINT: success", "TEST: failure", "##[error]test is failure, not success"] }],
+      annotations: [{ path: ".github", line: 12, message: "test is failure, not success" }],
+      otherJobs: [
+        {
+          name: "test (1)",
+          link: `${RUN}/job/11`,
+          steps: [{ name: "Run pnpm test --shard=1/3", earlier: 0, lines: [] }],
+          annotations: [
+            { path: "src/cart/total.test.ts", line: 41, message: "cart total > adds the delivery fee\nAssertionError: expected 1250 to be 1300" },
+            { path: ".github", line: 12, message: "Process completed with exit code 1." },
+          ],
+        },
+      ],
+    });
+    expect(github.read).toEqual(["log of job 10", "jobs of run 7001, attempt 1"]);
+  });
+
+  it("gives one whose annotations name no file the end of its failed step's log too, as a test runner that writes no annotation leaves only the runner's own", async () => {
+    const pytest = job(11, "test (1)", "Run pytest");
+    const log = "FAILED tests/test_cart.py::test_total_adds_the_delivery_fee - assert 1250 == 1300\n##[error]Process completed with exit code 1.\n";
+    const github = workflowRun([pytest, GATE], { annotations: { 10: GATE_ANNOTATIONS, 11: [exitCode()] }, logs: { 10: GATE_LOG, 11: log } });
+
+    expect(await readFailureExcerpt(check, github)).toMatchObject({
+      otherJobs: [
+        {
+          name: "test (1)",
+          steps: [
+            {
+              name: "Run pytest",
+              earlier: 0,
+              lines: ["FAILED tests/test_cart.py::test_total_adds_the_delivery_fee - assert 1250 == 1300", "##[error]Process completed with exit code 1."],
+            },
+          ],
+          annotations: [{ path: ".github", line: 12, message: "Process completed with exit code 1." }],
+        },
+      ],
+    });
+  });
+
+  it("takes the jobs that failed or timed out in the red job's own attempt, in the order GitHub lists them, and no job that passed, was cancelled or skipped, or is still running", async () => {
+    const rerun = { run_attempt: 2 };
+    const jobs = [
+      job(20, "typecheck", "Typecheck", { ...rerun, conclusion: "success" }),
+      job(21, "test (1)", "Run pnpm test --shard=1/3", { ...rerun, conclusion: "cancelled" }),
+      job(22, "test (2)", "Run pnpm test --shard=2/3", rerun),
+      job(23, "e2e", "Run pnpm e2e", { ...rerun, conclusion: "timed_out" }),
+      job(24, "deploy preview", "Deploy", { ...rerun, conclusion: "skipped" }),
+      job(25, "lint", "Lint", { ...rerun, status: "in_progress", conclusion: null }),
+      job(26, "gate", "Run .github/scripts/gate-verdict.sh", rerun),
+    ];
+    const github = workflowRun(jobs, { logs: { 26: GATE_LOG, 22: "boom\n", 23: "still waiting\n" } });
+
+    const excerpt = await readFailureExcerpt({ ...check, link: `${RUN}/job/26` }, github);
+
+    expect(excerpt.kind === "actions" ? excerpt.otherJobs?.map(({ name, link }) => [name, link]) : null).toEqual([
+      ["test (2)", `${RUN}/job/22`],
+      ["e2e", `${RUN}/job/23`],
+    ]);
+    expect(github.read).toContain("jobs of run 7001, attempt 2");
+  });
+
+  it("keeps the red job's own excerpt when the run's jobs can't be read, saying why, and never throws", async () => {
+    const refused = new GitHubError("GitHub GET /repos/acme/shop/actions/runs/7001/attempts/1/jobs failed: 403", 403, {
+      body: '{"message":"Resource not accessible by integration"}',
+      request: "GET /repos/acme/shop/actions/runs/7001/attempts/1/jobs",
+    });
+    const github: FailureReader = { ...workflowRun([GATE], { annotations: { 10: GATE_ANNOTATIONS }, logs: { 10: GATE_LOG } }), runJobs: async () => Promise.reject(refused) };
+
+    const excerpt = await readFailureExcerpt(check, github);
+
+    expect(excerpt).toMatchObject({
+      kind: "actions",
+      steps: [{ name: "Run .github/scripts/gate-verdict.sh" }],
+      annotations: [{ message: "test is failure, not success" }],
+      otherJobsUnread: "GitHub refused the read: GET /repos/acme/shop/actions/runs/7001/attempts/1/jobs failed with 403: Resource not accessible by integration",
+    });
+    expect(excerpt).not.toHaveProperty("otherJobs");
+  });
+
+  it("keeps a failed job whose annotations couldn't be read, saying why, with the end of its failed step's log", async () => {
+    const github: FailureReader = {
+      ...workflowRun([SHARD, GATE], { logs: { 10: GATE_LOG, 11: "FAIL src/cart/total.test.ts\n" } }),
+      annotations: async (id) => (id === 11 ? Promise.reject(new TypeError("fetch failed")) : GATE_ANNOTATIONS),
+    };
+
+    expect(await readFailureExcerpt(check, github)).toMatchObject({
+      annotations: [{ message: "test is failure, not success" }],
+      otherJobs: [
+        {
+          name: "test (1)",
+          steps: [{ name: "Run pnpm test --shard=1/3", lines: ["FAIL src/cart/total.test.ts"] }],
+          annotations: [],
+          annotationsUnread: "GitHub refused the read: fetch failed",
+        },
+      ],
+    });
+  });
+
+  it("reads the first ten of a run with more failed jobs, as a wide matrix has, and counts the rest", async () => {
+    const shards = Array.from({ length: 13 }, (_, i) => job(100 + i, `test (${i + 1})`, "Run pnpm test"));
+    const annotated: number[] = [];
+    const github: FailureReader = { ...workflowRun([...shards, GATE], { logs: { 10: GATE_LOG } }), annotations: async (id) => (annotated.push(id), [exitCode()]), stepLog: async () => "boom\n" };
+
+    const excerpt = await readFailureExcerpt(check, github);
+
+    expect(excerpt.kind === "actions" ? excerpt.otherJobs?.map(({ name }) => name) : null).toEqual(shards.slice(0, 10).map(({ name }) => name));
+    expect(excerpt).toMatchObject({ otherJobsLeftOut: 3 });
+    // The red job's own, then each of the ten it reads: none of the three it leaves out.
+    expect(annotated).toEqual([10, ...shards.slice(0, 10).map(({ id }) => id)]);
+  });
+
+  it("says nothing of other jobs when none failed, or when the job names no workflow run", async () => {
+    const passed = job(11, "test (1)", "Run pnpm test", { conclusion: "success" });
+    const alone = await readFailureExcerpt(check, workflowRun([passed, GATE], { logs: { 10: GATE_LOG } }));
+    const { run_id: _, ...noRun } = GATE;
+    const unnamed = await readFailureExcerpt(check, workflowRun([SHARD, noRun], { logs: { 10: GATE_LOG } }));
+
+    for (const excerpt of [alone, unnamed]) {
+      expect(excerpt).toMatchObject({ kind: "actions" });
+      expect(Object.keys(excerpt).filter((key) => key.startsWith("otherJobs"))).toEqual([]);
+    }
+  });
 });
 
 describe("A red check from an outside service's Failure excerpt (#777)", () => {
@@ -458,6 +634,201 @@ describe("Rendering Failure excerpts", () => {
     const [block] = renderFailureExcerpts([actions("gate", [{ name: "Test", earlier: 0, lines: ["```", "@octocat broke ````it````"] }])]);
 
     expect(block).toContain("  `````text\n  ```\n  @octocat broke ````it````\n  `````");
+  });
+});
+
+describe("Rendering the other failed jobs of a red check's workflow run (#890)", () => {
+  const RUN = "https://github.com/acme/shop/actions/runs/7001";
+  const gate = (overrides: Partial<Extract<FailureExcerpt, { kind: "actions" }>> = {}): Extract<FailureExcerpt, { kind: "actions" }> => ({
+    kind: "actions",
+    check: "gate",
+    link: `${RUN}/job/10`,
+    steps: [{ name: "Run .github/scripts/gate-verdict.sh", earlier: 0, lines: ["TEST: failure", "##[error]test is failure, not success"] }],
+    annotations: [{ path: ".github", line: 12, message: "test is failure, not success" }],
+    ...overrides,
+  });
+  const shard = (n: number, overrides: Partial<FailedJob> = {}): FailedJob => ({
+    name: `test (${n})`,
+    link: `${RUN}/job/1${n}`,
+    steps: [{ name: `Run pnpm test --shard=${n}/3`, earlier: 0, lines: [] }],
+    annotations: [{ path: "src/cart/total.test.ts", line: 41, message: "cart total > adds the delivery fee\nAssertionError: expected 1250 to be 1300" }],
+    ...overrides,
+  });
+
+  it("puts each under the red check's own excerpt, by name with its job link: its failed step and its error annotations", () => {
+    const [block] = renderFailureExcerpts([gate({ otherJobs: [shard(1)] })]);
+
+    expect(block).toBe(
+      [
+        `- \`gate\` ([the job](${RUN}/job/10))`,
+        "",
+        "  The step `Run .github/scripts/gate-verdict.sh` failed. The end of its log:",
+        "",
+        "  ```text",
+        "  TEST: failure",
+        "  ##[error]test is failure, not success",
+        "  ```",
+        "",
+        "  Its error annotations:",
+        "",
+        "  - `.github`, line 12:",
+        "",
+        "    ```text",
+        "    test is failure, not success",
+        "    ```",
+        "",
+        "  Other jobs of its workflow run failed too:",
+        "",
+        `  - \`test (1)\` ([the job](${RUN}/job/11)): the step \`Run pnpm test --shard=1/3\` failed. Its error annotations:`,
+        "",
+        "    - `src/cart/total.test.ts`, line 41:",
+        "",
+        "      ```text",
+        "      cart total > adds the delivery fee",
+        "      AssertionError: expected 1250 to be 1300",
+        "      ```",
+      ].join("\n"),
+    );
+  });
+
+  const exitCode: ExcerptAnnotation = { path: ".github", line: 12, message: "Process completed with exit code 1." };
+
+  it("shows the end of a job's log where it kept one, as the red check's own is shown, linking that job for the whole log", () => {
+    const pytest = shard(1, {
+      steps: [{ name: "Run pytest", earlier: 212, lines: ["FAILED tests/test_cart.py::test_total_adds_the_delivery_fee - assert 1250 == 1300"] }],
+      annotations: [exitCode],
+    });
+
+    const [block] = renderFailureExcerpts([gate({ otherJobs: [pytest] })]);
+
+    expect(block!.split("  Other jobs of its workflow run failed too:\n\n")[1]).toBe(
+      [
+        `  - \`test (1)\` ([the job](${RUN}/job/11))`,
+        "",
+        "    The step `Run pytest` failed. The end of its log:",
+        "",
+        `    _212 earlier lines left out: [the whole log](${RUN}/job/11)._`,
+        "",
+        "    ```text",
+        "    FAILED tests/test_cart.py::test_total_adds_the_delivery_fee - assert 1250 == 1300",
+        "    ```",
+        "",
+        "    Its error annotations:",
+        "",
+        "    - `.github`, line 12:",
+        "",
+        "      ```text",
+        "      Process completed with exit code 1.",
+        "      ```",
+      ].join("\n"),
+    );
+  });
+
+  /** 150 log lines of 400 characters, each 401 with its newline, that start with `prefix`. */
+  const long = (prefix: string) => Array.from({ length: 150 }, (_, i) => `${prefix} ${String(i).padStart(3, "0")} `.padEnd(400, "x"));
+  const logged = (n: number, prefix: string) => shard(n, { steps: [{ name: "Run pytest", earlier: 0, lines: long(prefix) }], annotations: [exitCode] });
+  const keptOf = (block: string, prefix: string) => block.match(new RegExp(`^ +${prefix} \\d{3} x+$`, "gm")) ?? [];
+
+  it("shares a check's part of the 40,000 characters equally between its jobs that have log lines, each cut from the top", () => {
+    const [block] = renderFailureExcerpts([gate({ steps: [{ name: "Gate", earlier: 0, lines: long("own") }], otherJobs: [logged(1, "one"), shard(2), logged(3, "three")] })]);
+
+    // Three jobs have log lines, so 13,333 characters each: 33 lines of 401, the last 33.
+    for (const prefix of ["own", "one", "three"]) {
+      expect(keptOf(block!, prefix)).toHaveLength(33);
+      expect(keptOf(block!, prefix).at(-1)).toContain(`${prefix} 149 `);
+    }
+    expect(block).toContain(`_117 earlier lines left out: [the whole log](${RUN}/job/13)._`);
+  });
+
+  it("leaves another red check its equal part, however many jobs failed beside the first", () => {
+    const alone: FailureExcerpt = { kind: "actions", check: "docs", link: "https://github.com/acme/shop/actions/runs/7002/job/30", steps: [{ name: "Build", earlier: 0, lines: long("docs") }], annotations: [] };
+
+    const blocks = renderFailureExcerpts([gate({ otherJobs: [logged(1, "one"), logged(2, "two"), logged(3, "three")] }), alone]);
+
+    // 20,000 characters each check: 49 lines of 401 for the one job of the second.
+    expect(keptOf(blocks[1]!, "docs")).toHaveLength(49);
+    // The first check's 20,000 between its four jobs with log lines: 5,000 each, 12 lines of 401, though its own job fills little of its part.
+    for (const prefix of ["one", "two", "three"]) expect(keptOf(blocks[0]!, prefix)).toHaveLength(12);
+    expect(blocks[0]).toContain("  TEST: failure\n  ##[error]test is failure, not success");
+  });
+
+  it("gives a check whose own job left no log lines a part of the 40,000 for its other jobs' lines", () => {
+    const blocks = renderFailureExcerpts([gate({ steps: [], otherJobs: [logged(1, "one")] }), gate({ check: "docs", link: `${RUN}/job/40`, steps: [{ name: "Build", earlier: 0, lines: long("docs") }] })]);
+
+    expect(keptOf(blocks[0]!, "one")).toHaveLength(49);
+    expect(keptOf(blocks[1]!, "docs")).toHaveLength(49);
+  });
+
+  it("shows a failed job that is itself a red check rendered beside it once, under its own name, and takes none of the cap for it twice", () => {
+    const lint: Extract<FailureExcerpt, { kind: "actions" }> = {
+      kind: "actions",
+      check: "lint",
+      link: `${RUN}/job/21`,
+      steps: [{ name: "Lint", earlier: 0, lines: long("lint") }],
+      annotations: [],
+      otherJobs: [{ name: "unit", link: `${RUN}/job/22`, steps: [{ name: "Test", earlier: 0, lines: long("unit") }], annotations: [] }],
+    };
+    const unit: Extract<FailureExcerpt, { kind: "actions" }> = {
+      kind: "actions",
+      check: "unit",
+      link: `${RUN}/job/22`,
+      steps: [{ name: "Test", earlier: 0, lines: long("unit") }],
+      annotations: [],
+      otherJobs: [{ name: "lint", link: `${RUN}/job/21`, steps: [{ name: "Lint", earlier: 0, lines: long("lint") }], annotations: [] }, logged(3, "three")],
+    };
+
+    const blocks = renderFailureExcerpts([lint, unit]);
+
+    expect(blocks[0]).not.toContain("Other jobs of its workflow run failed too:");
+    expect(keptOf(blocks[0]!, "lint")).toHaveLength(49);
+    expect(keptOf(blocks[0]!, "unit")).toHaveLength(0);
+    expect(blocks[1]!.split("Other jobs of its workflow run failed too:")[1]).toMatch(/^\n\n {2}- `test \(3\)`/);
+    expect(keptOf(blocks[1]!, "lint")).toHaveLength(0);
+    // Alone, as in the check's own issue, each still shows the other.
+    expect(keptOf(renderFailureExcerpts([lint])[0]!, "unit")).toHaveLength(49);
+  });
+
+  it("says how many more failed jobs it didn't read, linking the workflow run, and why the run's jobs couldn't be read when they couldn't", () => {
+    const [many] = renderFailureExcerpts([gate({ otherJobs: [shard(1)], otherJobsLeftOut: 3 })]);
+    expect(many!.endsWith(`\n\n  _3 more failed jobs aren't shown: [the workflow run](${RUN})._`)).toBe(true);
+
+    const [unread] = renderFailureExcerpts([gate({ otherJobsUnread: "GitHub refused the read: 403 Resource not accessible by integration" })]);
+    expect(unread!.endsWith("\n\n  The other jobs of its workflow run couldn't be read: GitHub refused the read: 403 Resource not accessible by integration.")).toBe(true);
+  });
+
+  it("shows the other jobs that failed on a first attempt after it, by failed step and annotations, with none of their log lines (#776)", () => {
+    const again = shard(2, { link: `${RUN}/job/52`, annotations: [{ path: "src/checkout/pay.test.ts", line: 9, message: "Test timed out in 5000ms" }] });
+
+    const [block] = renderFailureExcerpts([{ ...gate({ link: `${RUN}/job/50`, otherJobs: [again] }), firstAttempt: gate({ otherJobs: [logged(1, "first")] }) }]);
+
+    expect(block!.split("  The same step, `Run .github/scripts/gate-verdict.sh`, failed both times.\n\n")[1]).toBe(
+      [
+        "  Other jobs failed on the first attempt too:",
+        "",
+        `  - \`test (1)\` ([the job](${RUN}/job/11)): the step \`Run pytest\` failed. Its error annotations:`,
+        "",
+        "    - `.github`, line 12:",
+        "",
+        "      ```text",
+        "      Process completed with exit code 1.",
+        "      ```",
+      ].join("\n"),
+    );
+    expect(block).not.toMatch(/first \d{3}/);
+    // The re-run's other failed job sits with the re-run's excerpt, above the first attempt.
+    expect(block!.indexOf("src/checkout/pay.test.ts")).toBeLessThan(block!.indexOf("Its first attempt, before the Kit re-ran it"));
+  });
+
+  it("shortens the other jobs' annotation messages as it does the check's own, when the comment has no room for them", () => {
+    const message = "m".repeat(20_000);
+
+    const blocks = renderFailureExcerpts([gate({ otherJobs: [shard(1, { annotations: [{ path: "src/a.test.ts", line: 1, message }] })] })], { room: 5_000 });
+
+    expect(blocks.join("\n\n").length).toBeLessThanOrEqual(5_000);
+    expect(blocks[0]).toContain("_Shortened to fit GitHub's size limit._");
+    // Shortened only as far as it must be: most of the room is the message's.
+    expect(blocks[0]).toContain("m".repeat(4_000));
+    expect(blocks[0]).toContain(`- \`test (1)\` ([the job](${RUN}/job/11))`);
   });
 });
 
@@ -830,6 +1201,59 @@ describe("The FailureReader on a job's GitHub clients", () => {
     expect(paths.at(-1)).toBe("/repos/jrey8343/fabrik/check-runs/128636834592/annotations?per_page=100&page=1");
   });
 
+  it("reads the jobs of the red job's run attempt on the Actions client, every page of them, and each other failed job's annotations on the Checks client, its log on the Actions client (#890)", async () => {
+    const RUN = "https://github.com/acme/shop/actions/runs/7001";
+    const job = (id: number, name: string, conclusion: string) => ({
+      id,
+      name,
+      html_url: `${RUN}/job/${id}`,
+      run_id: 7001,
+      run_attempt: 2,
+      status: "completed",
+      conclusion,
+      check_run_url: `https://api.github.com/repos/acme/shop/check-runs/${id}`,
+      steps: [{ name: "Run", number: 3, conclusion }],
+    });
+    // A first page of 100 jobs that passed, then the gate and the two that failed.
+    const pages = [Array.from({ length: 100 }, (_, i) => job(1000 + i, `build (${i})`, "success")), [job(10, "gate", "failure"), job(11, "unit", "failure"), job(12, "e2e", "failure")]];
+    const calls: string[] = [];
+    const actions = {
+      rest: async (_method: string, path: string) => {
+        calls.push(`actions ${path}`);
+        if (path.includes("/attempts/2/jobs")) return { total_count: 103, jobs: pages[Number(/[?&]page=(\d+)/.exec(path)![1]) - 1] ?? [] };
+        return job(10, "gate", "failure");
+      },
+      logText: async (path: string) => (calls.push(`log ${path}`), "boom\n"),
+    };
+    const checks = {
+      rest: async (_method: string, path: string) => {
+        calls.push(`checks ${path}`);
+        if (path.includes("/check-runs/11/")) return [{ path: "src/a.test.ts", start_line: 3, annotation_level: "failure", message: "expected 3 to be 4" }];
+        return [];
+      },
+    };
+
+    const excerpt = await readFailureExcerpt({ name: "gate", link: `${RUN}/job/10`, sha: SHA }, failureReaderOf("acme/shop", { actions, checks, statuses: null }));
+
+    expect(calls).toEqual([
+      "actions /repos/acme/shop/actions/jobs/10",
+      "log /repos/acme/shop/actions/jobs/10/steps/3/logs",
+      "checks /repos/acme/shop/check-runs/10/annotations?per_page=100&page=1",
+      "actions /repos/acme/shop/actions/runs/7001/attempts/2/jobs?per_page=100&page=1",
+      "actions /repos/acme/shop/actions/runs/7001/attempts/2/jobs?per_page=100&page=2",
+      "checks /repos/acme/shop/check-runs/11/annotations?per_page=100&page=1",
+      "checks /repos/acme/shop/check-runs/12/annotations?per_page=100&page=1",
+      "log /repos/acme/shop/actions/jobs/12/steps/3/logs",
+    ]);
+    expect(excerpt).toMatchObject({
+      kind: "actions",
+      otherJobs: [
+        { name: "unit", link: `${RUN}/job/11`, steps: [{ name: "Run", lines: [] }], annotations: [{ path: "src/a.test.ts", line: 3 }] },
+        { name: "e2e", link: `${RUN}/job/12`, steps: [{ name: "Run", lines: ["boom"] }], annotations: [] },
+      ],
+    });
+  });
+
   it("reads an outside check's red run by the id in its link on the Checks client, and its annotations there", async () => {
     const calls: string[] = [];
     const actions = { rest: async (_method: string, path: string) => (calls.push(`actions ${path}`), {}), logText: async () => "" };
@@ -909,6 +1333,36 @@ describe("The excerpts the Review's waits pass out to the push job", () => {
     ];
 
     expect(excerptsPassedOut(JSON.stringify([status, run, ...broken]), null)).toEqual([status, run]);
+  });
+
+  it("carry the other failed jobs of a check's workflow run, and drop an excerpt whose other jobs don't read (#890)", () => {
+    const gate: FailureExcerpt = {
+      kind: "actions",
+      check: "gate",
+      link: "https://github.com/acme/shop/actions/runs/7001/job/10",
+      steps: [{ name: "Gate", earlier: 0, lines: ["TEST: failure"] }],
+      annotations: [],
+      otherJobs: [
+        {
+          name: "test (1)",
+          link: "https://github.com/acme/shop/actions/runs/7001/job/11",
+          steps: [{ name: "Run pnpm test", earlier: 0, lines: [] }],
+          annotations: [{ path: "src/cart/total.test.ts", line: 41, message: "expected 1250 to be 1300" }],
+          annotationsUnread: "GitHub refused the read: 403",
+        },
+      ],
+      otherJobsLeftOut: 2,
+      otherJobsUnread: "GitHub refused the read: 403",
+    };
+    const broken = [
+      { ...gate, check: "no name", otherJobs: [{ link: "", steps: [], annotations: [] }] },
+      { ...gate, check: "no steps", otherJobs: [{ name: "test (1)", link: "", annotations: [] }] },
+      { ...gate, check: "not a list", otherJobs: "test (1)" },
+      { ...gate, check: "not a count", otherJobsLeftOut: "2" },
+      { ...gate, check: "not a reason", otherJobsUnread: 403 },
+    ];
+
+    expect(excerptsPassedOut(JSON.stringify([gate, ...broken]), null)).toEqual([gate]);
   });
 });
 

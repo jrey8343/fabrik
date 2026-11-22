@@ -318,6 +318,7 @@ describe("The Failure excerpts a red wait passes out (#775)", () => {
   const reader: FailureReader = {
     job: async (id) => (read.push(`job ${id}`), { status: "completed", conclusion: "failure", steps: [{ name: "Test", number: 3, conclusion: "failure" }] }),
     stepLog: async () => "##[error]boom\n",
+    runJobs: async () => [],
     annotations: async () => [],
     checkRun: async (id) => Promise.reject(new Error(`no check run ${id}`)),
     checkRuns: async () => [],

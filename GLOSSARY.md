@@ -259,7 +259,7 @@ The one issue open for a Required check, holding that check's Flaky checks and i
 _Avoid_: Flaky check issue, flake issue
 
 **Failure excerpt**:
-The part of a red Required check's log, with its annotations, that the Kit puts under the check's name, so whoever fixes it sees why it failed without opening GitHub.
+The part of a red Required check's log, with its annotations, that the Kit puts under the check's name, so whoever fixes it sees why it failed without opening GitHub. It holds what the other failed jobs of the check's workflow run left too, since a check that only gathers other jobs' results says nothing of what failed.
 _Avoid_: log, CI output, failure log
 
 **Retry**:
