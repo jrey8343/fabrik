@@ -807,6 +807,8 @@ describe("the evidence bundle", () => {
         // The Kit closes an issue after a Design session too, on the Operator's word: only one that never went to a session is Triage's.
         expect(became(BADGE.title, input(aKitFollowUpIssue({ ...closed, closedAs: "not_planned", closedBy: "fabrik-app[bot]", labelEvents: sentToDesign })))).toMatchObject({ closedBy: "other" });
         expect(became(BADGE.title, input(aKitFollowUpIssue({ ...closed, closedAs: "not_planned", closedBy: "someone" })))).toMatchObject({ closedBy: "other" });
+        // Triage sets an issue aside as not planned or as a duplicate, never as completed: the Kit closing a Ticket whose fix merged is not Triage.
+        expect(became(BADGE.title, input(aKitFollowUpIssue({ state: "closed", closedAs: "completed", closedBy: "fabrik-app[bot]" })))).toMatchObject({ closedAs: "completed", closedBy: "other" });
         // One the evidence job could not read is still named.
         expect(became(BADGE.title, input())).toEqual({ ref: "#101", issue: 101, state: "unknown" });
       });

@@ -735,8 +735,8 @@ export function verdictsOn(comments: readonly CommentFacts[]): PostedVerdict[] {
   /**
    * The issue the Kit opened for a fault, and what became of it: while open,
    * its state label, null with none; once closed, how, and who closed it, the
-   * Operator, Triage (the Kit, on an issue that never went to a Design
-   * session) or anyone else, the Kit after a Design session among them. Its
+   * Operator, Triage (the Kit, setting aside an issue that never went to a
+   * Design session) or anyone else, the Kit after a Design session among them. Its
    * state is `unknown` when the evidence job could not read the issue.
    */
   export type KitOpenedEvidence = {
@@ -1234,9 +1234,11 @@ function kitOpenedOf(issue: number, read: readonly KitFollowUpIssueFacts[], oper
   const facts = read.find(({ number }) => number === issue);
   if (facts === undefined) return { ...named, state: "unknown" };
   if (facts.state === "open") return { ...named, state: "open", stateLabel: STATE_LABELS.find((label) => facts.labels.includes(label)) ?? null };
+  // Triage sets an issue aside as not planned or as a duplicate, and only one that never went to a Design session is its to close.
   const wentToDesign = facts.labelEvents.some(({ label, action }) => label === NEEDS_DESIGN && action === "labeled");
-  const closedBy = facts.closedBy === operator ? "operator" : facts.closedBy?.endsWith("[bot]") === true && !wentToDesign ? "triage" : "other";
-  return { ...named, state: "closed", closedAs: facts.closedAs, closedBy };
+  const setAside = facts.closedAs === "not_planned" || facts.closedAs === "duplicate";
+  const byTriage = facts.closedBy?.endsWith("[bot]") === true && setAside && !wentToDesign;
+  return { ...named, state: "closed", closedAs: facts.closedAs, closedBy: facts.closedBy === operator ? "operator" : byTriage ? "triage" : "other" };
 }
 
 /**

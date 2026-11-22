@@ -587,6 +587,9 @@ export interface GatherOptions {
  * claim weighs, and nothing of the store. The tick reads the Failure excerpt
  * of each Flaky check's red run it will report (#778): the job and its step's
  * log through `actions`, the annotations on the Fabrik App's Checks: read.
+ * An agent pull request merging whose passes named a fault, and whose faults
+ * the Kit has not seen to yet, has the repo's open issues and the issues
+ * cross-referenced to it read (#885, see gatherFollowUpIssues).
  * The Kit job of a repo that opted in to Fable passes the Fable cap readings
  * it read in the store (`storeFableCaps`, ADR-0034), and a test passes its
  * own `wait` for GitHub's mergeable state.
