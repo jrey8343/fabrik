@@ -460,7 +460,7 @@ function landTurn(
  * which the comment says (stillBlockedNote). Its Spin-offs are opened first,
  * and the comment ends by naming them (#883).
  */
-function closeAsNotPlanned(issueNumber: number, comment: string, spinOffs: OpenedSpinOffs): Action[] {
+function closeAsNotPlanned(issueNumber: number, comment: string, spinOffs: PlannedSpinOffs): Action[] {
   return [
     ...spinOffs.actions,
     closingComment(issueNumber, comment, spinOffs),
@@ -758,7 +758,7 @@ function ticketIssue(key: string): CreatedIssue {
  * the closing comment. Both are empty for a finish with none, whose plan is
  * as it always was.
  */
-interface OpenedSpinOffs {
+interface PlannedSpinOffs {
   readonly actions: Action[];
   readonly listed: (string | CreatedIssue)[];
 }
@@ -780,7 +780,7 @@ interface OpenedSpinOffs {
  * title and `restsOn` line. Nothing here mentions anyone, so a Spin-off
  * notifies nobody.
  */
-function openSpinOffs(issueNumber: number, spinOffs: readonly SpinOff[] = [], follows: FollowedSpec | null = null): OpenedSpinOffs {
+function openSpinOffs(issueNumber: number, spinOffs: readonly SpinOff[] = [], follows: FollowedSpec | null = null): PlannedSpinOffs {
   if (spinOffs.length === 0) return { actions: [], listed: [] };
   const blockerOf = (blocker: string | number): CreatedIssue | OpenTicketRef => (typeof blocker === "number" ? { ticket: blocker } : ticketIssue(blocker));
   return {
@@ -798,7 +798,7 @@ function openSpinOffs(issueNumber: number, spinOffs: readonly SpinOff[] = [], fo
  * Spin-offs, `body` then the lines that name them, each linked by the number
  * its issue was given.
  */
-function closingComment(issueNumber: number, body: string, { listed }: OpenedSpinOffs): Action {
+function closingComment(issueNumber: number, body: string, { listed }: PlannedSpinOffs): Action {
   return listed.length === 0 ? { kind: "comment", issue: issueNumber, body } : { kind: "comment-linking", issue: issueNumber, body: [body, ...listed] };
 }
 

@@ -177,7 +177,7 @@ export type RowFollowUp = FollowUp & { readonly filedAs: number | null };
  */
 export function followUpsOf(facts: Facts, pullRequest: number): RowFollowUp[] {
   const open = facts.github.openPullRequests.find(({ number }) => number === pullRequest);
-  if (open === undefined) return mergedFollowUps(facts, pullRequest);
+  if (open === undefined) return mergedRowFollowUps(facts, pullRequest);
   const onHead = open.comments.filter((comment) => verdictsOn([comment]).some(({ record }) => record.headSha === open.headSha)).at(-1);
   if (onHead === undefined || verdictsOn([onHead]).at(-1)?.record.verdict !== "pass") return [];
   const related = relatedOf(facts, pullRequest);
@@ -189,8 +189,8 @@ export function followUpsOf(facts: Facts, pullRequest: number): RowFollowUp[] {
   }));
 }
 
-/** A merged pull request's Follow-ups, from what the gather read of its comments: none in facts kept from a release that read none. */
-function mergedFollowUps({ github, operator, issueBodies, mergedFollowUps: read }: Facts, pullRequest: number): RowFollowUp[] {
+/** The Follow-ups a merged pull request's row carries, from what the gather kept of its comments (mergedFollowUpsOf): none in facts kept from a release that read none. */
+function mergedRowFollowUps({ github, operator, issueBodies, mergedFollowUps: read }: Facts, pullRequest: number): RowFollowUp[] {
   const merged = (read as Facts["mergedFollowUps"] | undefined)?.find((each) => each.pullRequest === pullRequest);
   if (merged === undefined) return [];
   const byOperator = github.openIssues.filter(({ number, author }) => author === operator && fromPullRequestIn(issueBodies.find(({ issue }) => issue === number)?.body ?? "") === pullRequest);
