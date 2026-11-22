@@ -952,6 +952,108 @@ describe("A conflict-only run that rebases its PR onto main (#304)", () => {
   }, 20_000);
 });
 
+describe("A run on its PR's branch while main moves under it (#861)", () => {
+  const noEditor = { ...env, GIT_EDITOR: "true" };
+
+  /** Main changes these files and is pushed; the clone, like the agent job's checkout, sees it only when it fetches. */
+  async function mainMoves(files: Record<string, string>, message: string): Promise<string> {
+    const seed = join(root, "seed");
+    await git(seed, "checkout", "--quiet", "main");
+    const main = await commit(seed, files, message);
+    await git(seed, "push", "--quiet", "origin", "main");
+    return main;
+  }
+
+  /** The run rebases onto main as its checkout holds it, resolving the conflict in `path`; its tip. */
+  async function rebasesResolving(path: string, text: string): Promise<string> {
+    await run("git", ["rebase", "origin/main"], { cwd: clone, env: noEditor }).catch(() => undefined);
+    await writeFile(join(clone, path), text);
+    await git(clone, "add", "-A");
+    await run("git", ["rebase", "--continue"], { cwd: clone, env: noEditor });
+    return git(clone, "rev-parse", "HEAD");
+  }
+
+  it("a conflict-only run has brought main in when its branch holds main as it started: only its resolution is its own, and its push lands", async () => {
+    const started = await mainMoves({ "src/shared.ts": "shared from main\n" }, "Main changes shared");
+    await git(clone, "fetch", "--quiet", "origin");
+    const tip = await rebasesResolving("src/shared.ts", "shared from both\n");
+    // Main moves on before the push job reads it, changing a file it had changed before the run and adding one.
+    await mainMoves({ "src/cart.ts": "cart v3\n", "src/other.ts": "other\n" }, "Main moves on during the run");
+
+    const branch = await rebuild(prHead, null, started);
+    await branch.push(BRANCH);
+
+    expect(branch.changes.updatedFromMain).toBe(true);
+    expect(paths(branch.changes.net)).toEqual(["src/shared.ts"]);
+    expect(await git(remote, "rev-parse", `refs/heads/${BRANCH}`)).toBe(tip);
+  }, 20_000);
+
+  it("a run that merged main as it started in, with no change of its own, has brought the PR up to date", async () => {
+    const started = await git(clone, "rev-parse", "origin/main");
+    await git(clone, "merge", "--quiet", "--no-edit", "origin/main");
+    await mainMoves({ "src/cart.ts": "cart v3\n", "src/other.ts": "other\n" }, "Main moves on during the run");
+
+    const branch = await rebuild(prHead, null, started);
+
+    expect(branch.changes.updatedFromMain).toBe(true);
+    expect(branch.changes.net).toEqual([]);
+  });
+
+  it("a run whose branch holds main neither as it started nor as it is now hasn't brought main in", async () => {
+    // The run merges an older main than the one the Kit job read before it started.
+    await git(clone, "merge", "--quiet", "--no-edit", "origin/main");
+    await commit(clone, { "src/feature.ts": "feature v2\n" }, "Fix");
+    const started = await mainMoves({ "src/other.ts": "other\n" }, "Main moves before the run");
+    await mainMoves({ "src/cart.ts": "cart v3\n" }, "Main moves on during the run");
+
+    const branch = await rebuild(prHead, null, started);
+
+    expect(branch.changes.updatedFromMain).toBe(false);
+  });
+
+  it("with no main read before the run started, a run that brought in only an older main hasn't brought main in", async () => {
+    await git(clone, "merge", "--quiet", "--no-edit", "origin/main");
+    await mainMoves({ "src/other.ts": "other\n" }, "Main moves on during the run");
+
+    const branch = await rebuild(prHead);
+
+    expect(branch.changes.updatedFromMain).toBe(false);
+  });
+
+  it("a run that brought in main as it started hasn't brought main in once a force-push takes that head out of main's history", async () => {
+    const started = await git(clone, "rev-parse", "origin/main");
+    await git(clone, "merge", "--quiet", "--no-edit", "origin/main");
+    // Main is force-pushed back off the head the run brought in, and on to another. The remote still serves the old head.
+    const seed = join(root, "seed");
+    await git(seed, "checkout", "--quiet", "main");
+    await git(seed, "reset", "--quiet", "--hard", "HEAD~1");
+    await commit(seed, { "src/other.ts": "other\n" }, "Main, rewritten");
+    await git(seed, "push", "--quiet", "--force", "origin", "main");
+
+    const branch = await rebuild(prHead, null, started);
+
+    expect(branch.changes.updatedFromMain).toBe(false);
+  });
+
+  it("a conflict-only run's resolution inside a Trust-root file is still its own change, so the guard refuses it", async () => {
+    // The Operator's commit on the PR touched a workflow, which main as the run started had changed too.
+    const seed = join(root, "seed");
+    await git(seed, "checkout", "--quiet", BRANCH);
+    const base = await commit(seed, { ".github/workflows/ci.yml": "ci from the Operator\n" }, "Operator tweaks CI");
+    await git(seed, "push", "--quiet", "origin", BRANCH);
+    await git(clone, "fetch", "--quiet", "origin");
+    await git(clone, "checkout", "--quiet", "-B", BRANCH, `origin/${BRANCH}`);
+    const started = await git(clone, "rev-parse", "origin/main");
+    await rebasesResolving(".github/workflows/ci.yml", "ci resolved\n");
+    await mainMoves({ "src/other.ts": "other\n" }, "Main moves on during the run");
+
+    const branch = await rebuild(base, null, started);
+
+    expect(branch.changes.updatedFromMain).toBe(true);
+    expect(checkTrustRoot([...branch.changes.net, ...branch.changes.commits])).toMatchObject({ kind: "refuse", paths: [".github/workflows/ci.yml"] });
+  }, 20_000);
+});
+
 describe("The existing tests a run's own commits changed (#463)", () => {
   /** A first run cut from main at its current head, which holds `src/cart.test.ts` and `test/setup.ts`. */
   async function firstRun(build: () => Promise<void>) {

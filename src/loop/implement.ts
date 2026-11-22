@@ -707,7 +707,8 @@ function landConflictRun(
     );
   }
   if (changes.net.length === 0 && changes.updatedFromMain !== true) return handOff(`it committed no change to \`${branch}\``);
-  if (changes.updatedFromMain !== true) return handOff(`it didn't rebase onto \`main\`, so \`${branch}\` still doesn't hold it`);
+  // What the push job found, which isn't that the run never rebased: it may have, onto a head the Kit doesn't trust (#861).
+  if (changes.updatedFromMain !== true) return handOff(`\`${branch}\` holds \`main\` neither as the run started nor as it is now`);
   const pushed = changes.pushedHead;
   const evidence = evidenceFor(event, config, output, pullRequest, retryLeftAt(pullRequest, pushed));
   const section = evidence?.section ?? null;

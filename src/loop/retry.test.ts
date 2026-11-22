@@ -479,6 +479,14 @@ describe("A retry's branch", () => {
     expect(actions[1]).not.toHaveProperty("body", expect.stringContaining("@someone"));
   });
 
+  it("that only brought main in, with no change of its own, is pushed and is no empty diff: bringing the PR up to date is a change (#861)", () => {
+    const plan = planFor(retried({ changes: { net: [], commits: [], updatedFromMain: true } }), retrySnapshot(), kitConfig());
+
+    const actions = actionsOf(plan);
+    expect(actions.map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
+    expect(verdictsPostedIn(actions.flatMap((action) => (action.kind === "comment" ? [action.body] : [])))).toEqual([]);
+  });
+
   it("replaces the PR body with the refreshed summary, so the next Review reads the PR as it now stands", () => {
     const actions = actionsOf(planFor(retried(), retrySnapshot(), kitConfig()));
 
