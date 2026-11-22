@@ -441,12 +441,20 @@ function branchSaid({ number, headSha }: FiledFromPullRequest): string[] {
   ];
 }
 
-/** Where the pull request stands, and whether a Roll-in onto it may be settled. */
-function standingSaid({ state, draft, isAgent }: FiledFromPullRequest): string {
+/**
+ * Where the pull request stands, and whether a Roll-in onto it may be
+ * settled. None is on offer onto the pull request a Spin-off was set aside
+ * from (#884): the Operator asked for its work to be apart from that pull
+ * request, and no session offers it back.
+ */
+function standingSaid({ state, draft, isAgent, setAside }: FiledFromPullRequest): string {
   if (state === "merged") return "It has merged, so its work is on the default branch and a Roll-in is not on offer.";
   if (state === "closed") return "It was closed unmerged, so nothing will merge its branch and a Roll-in is not on offer.";
   if (!isAgent) {
     return "It is open, but it is not an agent pull request: it is a Plain pull request, on which a Request changes means nothing, so a Roll-in is not on offer.";
+  }
+  if (setAside === true) {
+    return "It is an open agent pull request, and this issue is a Spin-off: work the Operator asked, in a Request changes on that pull request, to be an issue of its own. So a Roll-in is not on offer.";
   }
   return draft
     ? "It is an open agent pull request still in draft, so it is still with the Implementer or the Reviewer. Even so a Roll-in may be settled: the Operator sends it once the pull request is at the Merge gate."

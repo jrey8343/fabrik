@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError } from "./client.ts";
-import { gatherEveryRepoFacts, gatherGitHubFacts, gatherHeadChecks, gatherOpenIssuesOn, gatherRetroFacts, gatherTickets, productReposOf } from "./facts.ts";
+import { gatherEveryRepoFacts, gatherGitHubFacts, gatherHeadChecks, gatherKitFollowUpIssues, gatherOpenIssuesOn, gatherRetroFacts, gatherTickets, productReposOf } from "./facts.ts";
 import { standingsOf } from "../kit/standing.ts";
 import { standingFactsOf } from "../read/builders.ts";
 
@@ -1350,5 +1350,51 @@ describe("Reading the Required checks on each open Plain pull request's head", (
     });
 
     expect(await gatherHeadChecks(github, repo, [head("1"), head("2")], ["test"])).toEqual({ [head("2")]: [{ name: "test", is: "passed" }] });
+  });
+});
+
+describe("Reading the issues the Kit opened for a Retro's faults (#885)", () => {
+  const APP = { login: "fabrik-app", __typename: "Bot" };
+  const labeled = (name: string, at: string) => ({ __typename: "LabeledEvent", createdAt: at, actor: APP, label: { name } });
+  /** A GraphQL API holding these issues by number, as one query asks for them under an alias each; GitHub has no other. */
+  function issuesWith(issues: Record<number, Record<string, unknown>>) {
+    const queries: string[] = [];
+    return {
+      queries,
+      github: {
+        async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+          expect(variables).toEqual({ owner: "jrey8343", name: "shop" });
+          queries.push(query);
+          const asked = [...query.matchAll(/issue(\d+): issue\(number: \1\)/g)].map((match) => Number(match[1]));
+          return { repository: Object.fromEntries(asked.map((number) => [`issue${number}`, issues[number] === undefined ? null : { number, ...issues[number] }])) } as T;
+        },
+      },
+    };
+  }
+
+  it("reads each one's state, how and by whom it closed, its labels and its label timeline, in one query, and leaves out one GitHub no longer has", async () => {
+    const { github, queries } = issuesWith({
+      101: { state: "OPEN", stateReason: null, labels: { nodes: [{ name: "bug" }, { name: "ready-for-agent" }] }, timelineItems: { nodes: [labeled("needs-triage", "2026-11-03T00:01:00Z")] }, closed: { nodes: [] } },
+      102: { state: "CLOSED", stateReason: "NOT_PLANNED", labels: { nodes: [{ name: "wontfix" }] }, timelineItems: { nodes: [] }, closed: { nodes: [{ actor: OPERATOR }] } },
+      103: { state: "CLOSED", stateReason: "DUPLICATE", labels: { nodes: [] }, timelineItems: { nodes: [] }, closed: { nodes: [{ actor: APP }] } },
+      104: { state: "CLOSED", stateReason: "COMPLETED", labels: { nodes: [] }, timelineItems: { nodes: [] }, closed: { nodes: [{}] } },
+    });
+
+    const read = await gatherKitFollowUpIssues(github, repo, [101, 102, 103, 102, 104, 199]);
+
+    expect(read).toEqual([
+      { number: 101, state: "open", closedAs: null, labels: ["bug", "ready-for-agent"], labelEvents: [{ label: "needs-triage", action: "labeled", actor: "fabrik-app[bot]", at: "2026-11-03T00:01:00Z" }], closedBy: null },
+      { number: 102, state: "closed", closedAs: "not_planned", labels: ["wontfix"], labelEvents: [], closedBy: OPERATOR.login },
+      { number: 103, state: "closed", closedAs: "duplicate", labels: [], labelEvents: [], closedBy: "fabrik-app[bot]" },
+      { number: 104, state: "closed", closedAs: "completed", labels: [], labelEvents: [], closedBy: null },
+    ]);
+    expect(queries).toHaveLength(1);
+  });
+
+  it("asks GitHub nothing when the Kit opened none", async () => {
+    const { github, queries } = issuesWith({});
+
+    expect(await gatherKitFollowUpIssues(github, repo, [])).toEqual([]);
+    expect(queries).toEqual([]);
   });
 });

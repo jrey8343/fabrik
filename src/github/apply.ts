@@ -13,11 +13,10 @@ import { isTriggerLabel, type TriggerLabel } from "../loop/labels.ts";
 import { prototypeBranchFor } from "../loop/designOutput.ts";
 import { endedHeldLine, waitingHeldLineRole } from "../loop/heldLine.ts";
 import { withFableCap } from "../loop/fableCap.ts";
-import { newIssueUrl } from "../loop/followUps.ts";
 import { followsSpecLine, isEmptyDiffComment, withGateRerunStarted, withPrototypeStarted } from "../loop/markers.ts";
 import { sameRepo } from "../loop/blockers.ts";
 import { closingCommentText } from "../loop/design.ts";
-import type { Action, CreatedIssue, ExistingIssue, LoopEvent, OpenAsIssueLink, OpenTicketRef, Plan, PostedComment } from "../loop/types.ts";
+import type { Action, CreatedIssue, ExistingIssue, FollowedSpec, LoopEvent, OpenTicketRef, Plan, PostedComment } from "../loop/types.ts";
 import type { MainRebase } from "./branch.ts";
 import { allPages, type GitHub, GitHubError, gitHubMessageOf, type Repo } from "./client.ts";
 import type { WrittenReview } from "./writtenOn.ts";
@@ -317,20 +316,15 @@ async function blockerId(github: GitHubApi, repo: Repo, blocker: CreatedIssue | 
 }
 
 /**
- * An Operator step's body with its Open as issue link written in (#825): the
- * link's prefilled body ends with a `Follows` line naming the Spec and its
- * Tickets by the numbers the plan gave them, or the Spec's own number when it
- * already existed.
+ * The body an issue is created with: its own, ended, for a Spin-off that
+ * builds on a Spec (#883), with a `Follows` line after a blank line, naming
+ * the Spec and its Tickets by the numbers the plan gave them, or the Spec's
+ * own number when it already existed.
  */
-function linkedBody(body: readonly (string | OpenAsIssueLink)[], created: ReadonlyMap<string, CreatedRecord>): string {
+function bodyFollowing(body: string, follows: FollowedSpec | undefined, created: ReadonlyMap<string, CreatedRecord>): string {
+  if (follows === undefined) return body;
   const numberOf = (issue: CreatedIssue | number) => (typeof issue === "number" ? issue : createdIn(created, issue).number);
-  return body
-    .map((part) => {
-      if (typeof part === "string") return part;
-      const follows = followsSpecLine(numberOf(part.follows), part.tickets.map(numberOf));
-      return `[Open as issue](${newIssueUrl(part.repoUrl, part.title, part.body, follows)})`;
-    })
-    .join("");
+  return `${body}\n\n${followsSpecLine(numberOf(follows.spec), follows.tickets.map(numberOf))}`;
 }
 
 /** Creates the issue, then links it under its parent and to each blocker, each made earlier in the plan or existing. */
@@ -343,7 +337,7 @@ async function createIssue(
   const issues = `/repos/${repo.owner}/${repo.name}/issues`;
   const issue = (await github.rest("POST", issues, {
     title: action.title,
-    body: action.body,
+    body: bodyFollowing(action.body, action.follows, created),
     labels: action.labels,
     // Assigned as it's created, so the assignment is its one notification.
     ...(action.assignees === undefined ? {} : { assignees: action.assignees }),
@@ -441,9 +435,6 @@ async function apply(
       return addBlockedBy(github, repo, action, made);
     case "comment-on-created":
       await github.rest("POST", `${issues}/${createdIn(made.created, action.on).number}/comments`, { body: action.body });
-      return;
-    case "link-new-issue":
-      await github.rest("PATCH", `${issues}/${createdIn(made.created, action.on).number}`, { body: linkedBody(action.body, made.created) });
       return;
     case "comment-on-opened":
       if (made.opened === null) throw new Error("The plan comments on a PR it hasn't opened");
@@ -701,7 +692,6 @@ async function applyToIssue(
         | "create-issue"
         | "add-blocked-by"
         | "comment-on-created"
-        | "link-new-issue"
         | "comment-on-opened"
         | "close-as-superseded"
         | "open-issue"

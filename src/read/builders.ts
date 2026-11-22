@@ -401,6 +401,7 @@ const NOTHING_FOR_YOUR_EYES: DigestData = {
   whatItDoes: "A shopper can now save their basket.",
   howItGotHere: "One Review passed it at the first head.",
   followUps: [],
+  faults: [],
 };
 
 /** The Fabrik App's no-Digest line for `headSha` at `at`: no Digest could be written for that head, and how the attempt ended. */
@@ -548,6 +549,7 @@ export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts
     crossReferences: [],
     closedIssueComments: [],
     ticketStates: [],
+    mergedFollowUps: [],
     evidenceMarkers: [],
     shotsMarkers: [],
     ...overrides,

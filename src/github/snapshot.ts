@@ -23,6 +23,7 @@ import { inBlockerOrder, type IssueRef } from "../loop/blockers.ts";
 import { parseAuditOutput } from "../loop/auditOutput.ts";
 import { parseDesignTurnOutput } from "../loop/designOutput.ts";
 import { parseImplementOutput } from "../loop/implementOutput.ts";
+import { requestChangesAsksIn } from "../loop/digestFacts.ts";
 import { digestMarkIn } from "../loop/digestContract.ts";
 import { heldRunsIn, isCarrier } from "../loop/heldRun.ts";
 import { makesUnusable } from "../loop/subscriptions.ts";
@@ -45,7 +46,21 @@ import {
   USAGE_CREDITS_LABEL,
   WEEKLY_LIMIT_LABEL,
 } from "../loop/labels.ts";
-import { checkFixMarksIn, escapeMarkerIn, flakyCheckIssueOf, flakyCheckMarksIn, gateRerunMarksIn, operatorMentionMarksIn } from "../loop/markers.ts";
+import { faultsNamedIn } from "../loop/followUps.ts";
+import {
+  checkFixMarksIn,
+  escapeMarkerIn,
+  flakyCheckIssueOf,
+  flakyCheckMarksIn,
+  followUpIssueOf,
+  followUpsOpenedIn,
+  fromPullRequestIn,
+  gateRerunMarksIn,
+  type OpenedSpinOff,
+  openedSpinOffsAmong,
+  operatorMentionMarksIn,
+  spinOffIn,
+} from "../loop/markers.ts";
 import { retroWindowStart } from "../loop/retro.ts";
 import { weekStart } from "../loop/weeklyGate.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
@@ -69,6 +84,7 @@ import type {
   LoopEvent,
   MergeableSnapshot,
   NamedPullRequestSnapshot,
+  RequestChangesAsks,
   ParentIssueSnapshot,
   PullRequestSnapshot,
   ReplayIssueSnapshot,
@@ -76,6 +92,7 @@ import type {
   ResearchDecisionSnapshot,
   RetroSnapshot,
   RolesUnderWay,
+  FollowUpIssuesSnapshot,
   RollInsSnapshot,
   Snapshot,
   SpecSnapshot,
@@ -126,7 +143,7 @@ import {
 } from "./threads.ts";
 import { BLOCKED_BY, blockedByFields, blockersOf, issueRefOf, type RawBlockedBy, type RawBlocker, type RawDependenciesSummary } from "./blockers.ts";
 import { leavingOutHeldLines } from "./heldLines.ts";
-import { operatorsRequestChangesIn, type WrittenReview } from "./writtenOn.ts";
+import { operatorsRequestChangesIn, readWrittenOn, threadRequestChangesIn, type WrittenReview } from "./writtenOn.ts";
 
 const ISSUE_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
@@ -583,6 +600,9 @@ export interface GatherOptions {
  * claim weighs, and nothing of the store. The tick reads the Failure excerpt
  * of each Flaky check's red run it will report (#778): the job and its step's
  * log through `actions`, the annotations on the Fabrik App's Checks: read.
+ * An agent pull request merging whose passes named a fault, and whose faults
+ * the Kit has not seen to yet, has the repo's open issues and the issues
+ * cross-referenced to it read (#885, see gatherFollowUpIssues).
  * The Kit job of a repo that opted in to Fable passes the Fable cap readings
  * it read in the store (`storeFableCaps`, ADR-0034), and a test passes its
  * own `wait` for GitHub's mergeable state.
@@ -663,6 +683,12 @@ export async function gatherSnapshot(
     event.kind === "pull-request-closed" && part?.pullRequest?.isAgent === true
       ? await gatherRollIns(github, repo, event.pullRequest, theOperator, appLogin)
       : null;
+  // An agent pull request that merges has each fault its passes named opened as an issue, once and under the cap (#885).
+  const merging = event.kind === "pull-request-closed" && event.merged ? (part?.pullRequest ?? null) : null;
+  const followUpIssues =
+    merging !== null && merging.isAgent && merging.faults.length > 0 && !merging.followUpsOpened
+      ? await gatherFollowUpIssues(github, repo, merging, theOperator, appLogin)
+      : null;
   const retro = event.kind === "scheduled-tick" ? await gatherRetroSlice(github, repo, event.now, theOperator, appLogin, store) : null;
   const replay =
     event.kind === "scheduled-tick" && replayStore !== null
@@ -680,9 +706,56 @@ export async function gatherSnapshot(
   // fails safe: it can only move a Fable run to another Subscription, or to Opus, never make one bill.
   const marked = [...fableCapsIn(part?.issue?.body ?? ""), ...(part?.fableCaps ?? [])];
   const fableCaps = { readings: [...marked, ...storeFableCaps], now: event.kind === "scheduled-tick" ? event.now : new Date().toISOString() };
+  // A Request-changes run's Spin-offs name the Operator's asks, which the push job reads itself, with the Spin-off
+  // issues already opened from the pull request (#884).
+  const setAside = await gatherRequestChangesSpinOffs(github, repo, event, theOperator, appLogin);
+  const requestChangesAsks = setAside?.asks ?? null;
+  const spinOffIssues = setAside?.issues ?? null;
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, requestChangesAsks, spinOffIssues, rollIns, followUpIssues, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, requestChangesAsks, spinOffIssues, rollIns, followUpIssues, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps };
+}
+
+/**
+ * For a Request-changes run finishing whose output returns Spin-offs (#884),
+ * what the plan holds them against, so that nothing rests on what the agent
+ * job passed out. Null for any other event, for a run that returned none,
+ * and for one whose output breaks its contract, which lands nothing: nothing
+ * is read of GitHub for those.
+ *
+ * - **`asks`.** The asks of the Operator's Request changes on its pull
+ *   request, review by review, read from GitHub as the Digest's asks are
+ *   (requestChangesAsksIn). The plan checks each Spin-off's `from` against
+ *   them, and weighs a run that committed nothing against them.
+ * - **`issues`.** The Spin-off issues the Fabrik App already opened from
+ *   the pull request (see byAppOf), each with the ask its marker names and
+ *   its title, open or closed, lowest number first. An earlier landing of
+ *   the same run that was applied only in part, or whose push was refused,
+ *   leaves them, and the plan opens none again. Read as a merge's Follow-up
+ *   issues are (issuesAround), never by a search, which lags an issue just
+ *   opened.
+ */
+async function gatherRequestChangesSpinOffs(
+  github: ReadClient,
+  repo: Repo,
+  event: LoopEvent,
+  operator: string,
+  appLogin: string | null,
+): Promise<{ asks: RequestChangesAsks[]; issues: OpenedSpinOff[] } | null> {
+  if (event.kind !== "implement-run-finished" || event.fixes?.review === undefined) return null;
+  const parsed = parseImplementOutput(event.output, "request-changes");
+  if (!parsed.ok || parsed.output.spinOffs === undefined) return null;
+  const { pullRequest } = event.fixes;
+  const [written, { open, referenced }] = await Promise.all([readWrittenOn(github, repo, pullRequest), issuesAround(github, repo, pullRequest)]);
+  const issues = new Map<number, OpenedSpinOff>();
+  for (const { number, title, body, author } of [...open, ...referenced]) {
+    const source = byAppOf(author, appLogin) ? spinOffIn(body) : null;
+    if (source?.from === "request-changes" && source.pullRequest === pullRequest) issues.set(number, { issue: number, from: source.ask, title });
+  }
+  return {
+    asks: requestChangesAsksIn(threadRequestChangesIn(written, operator)),
+    issues: [...issues.values()].sort((a, b) => a.issue - b.issue),
+  };
 }
 
 /** A check run in GitHub's REST listing, as the Flaky check sweep reads it. */
@@ -1303,8 +1376,114 @@ async function gatherRollIns(github: ReadClient, repo: Repo, pullRequest: number
   };
 }
 
+// Every open issue, with its body and who opened it: an issue the Kit opened for a Follow-up carries no label, only its marker.
+const OPEN_ISSUES_WITH_BODIES_QUERY = `
+  query ($owner: String!, $name: String!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      issues(states: OPEN, first: 50, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { number title body author { login __typename } }
+      }
+    }
+  }
+`;
+
+// What a pull request is cross-referenced from, each issue with its title, its body and who opened it, open or closed.
+const FOLLOW_UP_CROSS_REFERENCES_QUERY = `
+  query ($owner: String!, $name: String!, $number: Int!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        crossReferences: timelineItems(first: 100, after: $after, itemTypes: [CROSS_REFERENCED_EVENT]) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            __typename
+            ... on CrossReferencedEvent { source { __typename ... on Issue { number title body author { login __typename } repository { nameWithOwner } } } }
+          }
+        }
+      }
+    }
+  }
+`;
+
+/** An issue as the two queries above read it. */
+interface RawMarkedIssue {
+  number: number;
+  title: string;
+  body: string;
+  author: { login: string; __typename: string } | null;
+}
+
+/** A cross-reference as FOLLOW_UP_CROSS_REFERENCES_QUERY reads it: an issue's source, or a pull request's, of which only the kind is read. */
+interface RawFollowUpCrossReference {
+  __typename: string;
+  source?: { __typename: string; repository?: { nameWithOwner: string } } & Partial<RawMarkedIssue>;
+}
+
+/**
+ * The issues an issue the Kit opened from `pullRequest` can be found among
+ * (#884, #885), each with its title, its body and who opened it: every open
+ * issue of the repo, and the issues of the repo GitHub cross-references to
+ * the pull request, open or closed. An issue the Kit opens from a pull
+ * request ends with a `From PR` line, which is what GitHub cross-references,
+ * so a closed one is found there. The open ones are read as well because
+ * GitHub writes a cross-reference a moment after the issue, and a plan
+ * applied in part is looked at again at once. Nothing is found by a search.
+ */
+async function issuesAround(github: Pick<ReadClient, "graphql">, repo: Repo, pullRequest: number): Promise<{ open: RawMarkedIssue[]; referenced: RawMarkedIssue[] }> {
+  const here = `${repo.owner}/${repo.name}`;
+  const [open, references] = await Promise.all([
+    pagesOf<RawMarkedIssue>(github, OPEN_ISSUES_WITH_BODIES_QUERY, repo, {}, (data) => data.repository.issues),
+    pagesOf<RawFollowUpCrossReference>(github, FOLLOW_UP_CROSS_REFERENCES_QUERY, repo, { number: pullRequest }, (data) => data.repository.pullRequest?.crossReferences ?? null),
+  ]);
+  const referenced = references.flatMap(({ source }) =>
+    source?.__typename === "Issue" &&
+    source.number !== undefined &&
+    source.title !== undefined &&
+    source.body !== undefined &&
+    // GitHub tells repos apart whatever the case of their names.
+    source.repository?.nameWithOwner.toLowerCase() === here.toLowerCase()
+      ? [{ number: source.number, title: source.title, body: source.body, author: source.author ?? null }]
+      : [],
+  );
+  return { open, referenced };
+}
+
+/**
+ * For an agent pull request merging whose passes named a fault (#885): what
+ * tells which faults to open as issues (src/loop/followUpIssues.ts). Every
+ * open issue of the repo is read, with its body and who opened it: those the
+ * Fabrik App opened (see byAppOf) whose first line is the Follow-up marker
+ * are what `caps.follow_up_issues` counts, whichever pull request each
+ * names. The issues that already hold a Follow-up of this pull request are
+ * read among them, and among the issues GitHub cross-references to the pull
+ * request, which finds a closed one (issuesAround): both the Operator's
+ * issue from an Open as issue link and the Kit's own end with a `From PR`
+ * line.
+ */
+async function gatherFollowUpIssues(
+  github: Pick<ReadClient, "graphql">,
+  repo: Repo,
+  pullRequest: PullRequestSnapshot,
+  operator: string,
+  appLogin: string | null,
+): Promise<FollowUpIssuesSnapshot> {
+  const { open, referenced } = await issuesAround(github, repo, pullRequest.number);
+  const byKit = ({ author, body }: RawMarkedIssue) => (byAppOf(author, appLogin) ? followUpIssueOf(body) : null);
+  const holding = new Map<number, FollowUpIssuesSnapshot["ofPullRequest"][number]>();
+  for (const issue of [...open, ...referenced]) {
+    const openedBy = byKit(issue) === pullRequest.number ? "kit" : loginOf(issue.author) === operator && fromPullRequestIn(issue.body) === pullRequest.number ? "operator" : null;
+    if (openedBy !== null) holding.set(issue.number, { number: issue.number, title: issue.title, openedBy });
+  }
+  return {
+    // The pull request's own address, less `/pull/<number>`.
+    repoUrl: pullRequest.url.replace(/\/pull\/[0-9]+$/, ""),
+    open: open.filter((issue) => byKit(issue) !== null).length,
+    ofPullRequest: [...holding.values()].sort((a, b) => a.number - b.number),
+  };
+}
+
 /** How the Kit names each reason GitHub closes an issue with. */
-const CLOSED_AS = { COMPLETED: "completed", NOT_PLANNED: "not_planned", DUPLICATE: "duplicate" } as const;
+export const CLOSED_AS = { COMPLETED: "completed", NOT_PLANNED: "not_planned", DUPLICATE: "duplicate" } as const;
 
 /**
  * The open `wayfinder:map` issues, oldest first, whoever opened them. One
@@ -1509,6 +1688,9 @@ type EventPart = Omit<
   | "weeklyIssues"
   | "replay"
   | "namedPullRequests"
+  | "requestChangesAsks"
+  | "spinOffIssues"
+  | "followUpIssues"
   | "rollIns"
   | "held"
   | "closedKitIssue"
@@ -2266,6 +2448,11 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     digests: fromBots
       .filter((comment) => digestMarkIn(comment.body) !== null)
       .map(({ id, isMinimized, body, createdAt }) => ({ node: id, minimized: isMinimized, body, postedAt: createdAt })),
+    // Only a bot's pass names a fault, and only a bot's comment says its faults were seen to, as for a Verdict (#885).
+    faults: faultsNamedIn(botComments),
+    followUpsOpened: botComments.some((body) => followUpsOpenedIn(body) !== null),
+    // Only a bot's note records a Spin-off as opened, and only one that landed (#884).
+    openedSpinOffs: openedSpinOffsAmong(botComments),
   };
 }
 

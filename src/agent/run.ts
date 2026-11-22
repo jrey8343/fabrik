@@ -118,7 +118,7 @@ import { bundleAgentBranch, cutBranch, failedRunCommits, implementInput, setImpl
 import { BASE_SHA_ENV, replayImplementInput, replayReviewContext, writeReplayPatch } from "./replay.ts";
 import { AUDIT_ISSUE_HEADING, auditContext } from "./audit.ts";
 import { digestContext } from "./digest.ts";
-import { triageContext } from "./triage.ts";
+import { isSpinOffIssue, triageContext } from "./triage.ts";
 import { RETRO_ISSUE_HEADING, retroContext } from "./retro.ts";
 import { commitResearch, RESEARCH_ISSUE_HEADING, researchContext } from "./research.ts";
 import {
@@ -187,9 +187,11 @@ interface RoleSpec<T> {
    * other role. A Design-session turn's is made for the issue it is on, whose
    * number its contract reads a Roll-in against (src/loop/designOutput.ts),
    * and for the open Tickets it was given (#825), whose numbers are the only
-   * ones a Ticket's blockedBy may name; null for any other role.
+   * ones a Ticket's blockedBy may name; null for any other role. A Triage
+   * run's is made for whether its issue is a Spin-off (#883), which it may
+   * set aside only as a duplicate of a named issue.
    */
-  readonly output: OutputContract<T> | ((issue: number, openTickets: readonly number[] | null) => OutputContract<T>);
+  readonly output: OutputContract<T> | ((issue: number, openTickets: readonly number[] | null, spinOff: boolean) => OutputContract<T>);
   /** How the Product's own instructions for this role relate to the Kit's prompt. */
   readonly instructionsNote: string;
   /**
@@ -266,7 +268,8 @@ const ROLE_SPECS = {
   triage: {
     role: "triage",
     readies: "setup",
-    output: { read: readTriageOutput },
+    // The issue's number stays with the push job, which alone refuses a duplicateOf naming it. Here a Spin-off's wontfix gets its one chance to name an original (#883).
+    output: (_issue, _openTickets, spinOff) => ({ read: (value) => readTriageOutput(value, undefined, spinOff) }),
     comparesIssues: true,
     instructionsNote:
       "The Operator wrote these for this repo. They refine the rules above but never loosen the six Fast-path tests.",
@@ -465,6 +468,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   let given: GivenOperatorComment[] | null = null;
   // The main head a Request-changes run was told to merge in (#341), recorded before the agent runs.
   let mergeMain: string | null = null;
+  // The ids a Request-changes run's Spin-offs may name in `from` (#884), which its contract checks them against.
+  let asks: string[] | null = null;
   const extra: string[] = [];
   // The numbers of the open Tickets a Design-session turn was given (#825), which its contract checks numbered blockers against.
   let openTickets: number[] | null = null;
@@ -498,6 +503,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     kind = input.kind;
     given = input.operatorComments;
     mergeMain = "mergeMain" in input ? input.mergeMain : null;
+    asks = "asks" in input ? input.asks : null;
     // Kept beside the transcript, before the agent runs, so the judge reads what this run was asked even if it times out (#450).
     if (input.brief !== null) await writeFile(join(outDir, RUN_BRIEF_FILE), `${input.brief}\n`);
   }
@@ -599,8 +605,11 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     extra.push(...(await replayReviewContext(productDir, required("FABRIK_SPEC_FILE"), required(BASE_SHA_ENV))));
   }
   // A run on an existing PR owes a fix as well, and a Request-changes run its two answers, which its push job checks too.
-  const ownContract = typeof spec.output === "function" ? spec.output(issueNumber, openTickets) : spec.output;
-  const contract: OutputContract<T> = kind === "first" ? ownContract : ({ read: IMPLEMENT_OUTPUT_READERS[kind] } as unknown as OutputContract<T>);
+  // A Request-changes run's Spin-offs are held to the ids its prompt headed (#884), which the push job checks against its own read.
+  const ownContract = typeof spec.output === "function" ? spec.output(issueNumber, openTickets, isSpinOffIssue(JSON.parse(issueText))) : spec.output;
+  const mayName = asks ?? undefined;
+  const contract: OutputContract<T> =
+    kind === "first" ? ownContract : ({ read: (value: unknown) => IMPLEMENT_OUTPUT_READERS[kind](value, mayName) } as unknown as OutputContract<T>);
   const output =
     "read" in contract
       ? Output.object({ tag: prompt, schema: replySchemaOf(contract.read), maxRetries: 1 })

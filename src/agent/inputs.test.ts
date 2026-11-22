@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { GitHubError } from "../github/client.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
-import { designRoundMarker, flakyCheckIssueMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
+import { designRoundMarker, flakyCheckIssueMarker, followUpMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, spinOffMarker } from "../loop/markers.ts";
 import { roundLineIn, roundLineOf, withoutRoundLines } from "../loop/roundLine.ts";
 import { planFor } from "../loop/rules.ts";
 import { AGENT_FAILURE_FILE } from "./failure.ts";
@@ -119,6 +119,53 @@ describe("An agent job's inputs", () => {
 
     expect(read.check).toBe(check);
     expect((read.issue as { author: unknown }).author).toEqual({ login: author.login });
+  });
+
+  it("marks a Spin-off the Fabrik App opened, naming the issue whose Design session it came from (#883)", async () => {
+    const page = issuePage([], null);
+    const body = `${spinOffMarker({ from: "design", issue: 41 })}\nText each waitlisted patient a day before.`;
+    const spinOff = { repository: { issue: { ...page.repository.issue, parent: null, author: { login: "fabrik-app", __typename: "Bot" }, body } } };
+
+    const read = await readIssue(graphqlReturning(spinOff), repo, 7, "operator");
+
+    expect(read.issue).toMatchObject({ number: 7, body, spinOff: { from: "design", issue: 41 } });
+  });
+
+  it.each([
+    ["a person's issue quoting a Spin-off's marker", { login: "someone", __typename: "User" }, `${spinOffMarker({ from: "design", issue: 41 })}\nMine.`],
+    ["the Fabrik App's issue that is no Spin-off", { login: "fabrik-app", __typename: "Bot" }, "The Monitor saw an error."],
+    ["the Fabrik App's issue that quotes the marker below its first line", { login: "fabrik-app", __typename: "Bot" }, `An error.\n${spinOffMarker({ from: "design", issue: 41 })}`],
+  ])("marks no Spin-off on %s", async (_, author, body) => {
+    const page = issuePage([], null);
+    const other = { repository: { issue: { ...page.repository.issue, parent: null, author, body } } };
+
+    const read = await readIssue(graphqlReturning(other), repo, 7, "operator");
+
+    expect(read.issue).not.toHaveProperty("spinOff");
+  });
+
+  it("marks a Follow-up the Kit opened, naming the pull request whose pass named the fault (#885)", async () => {
+    const page = issuePage([], null);
+    const body = `${followUpMarker(42)}\n\`badge.ts:14\` reads a stale count.\n\nFrom PR #42`;
+    const followUp = { repository: { issue: { ...page.repository.issue, parent: null, author: { login: "fabrik-app", __typename: "Bot" }, body } } };
+
+    const read = await readIssue(graphqlReturning(followUp), repo, 7, "operator");
+
+    expect(read.issue).toMatchObject({ number: 7, body, followUp: { pullRequest: 42 } });
+    expect(read.issue).not.toHaveProperty("spinOff");
+  });
+
+  it.each([
+    ["a person's issue quoting the Follow-up marker", { login: "someone", __typename: "User" }, `${followUpMarker(42)}\nMine.\n\nFrom PR #42`],
+    ["the Operator's issue opened from an Open as issue link", { login: "operator", __typename: "User" }, "An idea.\n\nFrom PR #42"],
+    ["the Fabrik App's issue that quotes the marker below its first line", { login: "fabrik-app", __typename: "Bot" }, `An error.\n${followUpMarker(42)}`],
+  ])("marks no Follow-up the Kit opened on %s", async (_, author, body) => {
+    const page = issuePage([], null);
+    const other = { repository: { issue: { ...page.repository.issue, parent: null, author, body } } };
+
+    const read = await readIssue(graphqlReturning(other), repo, 7, "operator");
+
+    expect(read.issue).not.toHaveProperty("followUp");
   });
 
   it("reads no other Tickets for an issue with no parent", async () => {
@@ -735,6 +782,64 @@ describe("The Operator's comments on a PR", () => {
       const none = restGitHub(routes({ reviews: [review(3, OP, "COMMENTED", "Looks close.")] }), graph);
 
       expect(await readPullRequest(none, repo, 50, { withComments: false, operator: "operator" })).not.toHaveProperty("requestedChanges");
+    });
+
+    describe("whose points the Kit opened as Spin-offs (#884)", () => {
+      const APP = { login: "fabrik-app[bot]", type: "Bot" };
+      /** A Request-changes run's note as the Kit posted it, recording the Spin-offs it opened. */
+      const runNote = (...opened: [issue: number, from: string, title: string][]) =>
+        [
+          "<!-- fabrik:request-changes-run -->",
+          '<!-- fabrik:request-changes-answers {"review":4,"reviewMiss":false,"amendsTicket":false} -->',
+          ...opened.map(([issue, from, title]) => `<!-- fabrik:spin-off-opened #${issue} ${JSON.stringify({ from, title })} -->`),
+          "The Implementer pushed the Operator's requested changes.",
+        ].join("\n");
+      const withNotes = (notes: unknown[], reviews?: unknown[]) =>
+        restGitHub(
+          routes({
+            conversation: notes,
+            inline: [inReview(4, 5, OP, "And drop this row, as its own issue.", "2026-11-04T00:00:00Z")],
+            reviews: reviews ?? [review(3, OP, "CHANGES_REQUESTED", "Open the CSV export separately.", "2026-11-03T00:00:00Z"), review(4, OP, "CHANGES_REQUESTED", "", "2026-11-04T00:00:00Z")],
+          }),
+          graph,
+        );
+      const spinOffsOf = async (github: Reader) => ((await readPullRequest(github, repo, 50, { withComments: false, operator: "operator" })) as { spinOffs?: unknown }).spinOffs;
+
+      it("reach every later run's PR input, each with its issue, its title and the Operator's words it came from", async () => {
+        const github = withNotes([conversation(20, APP, runNote([57, "review-3", "Export the waitlist as CSV"])), conversation(21, APP, runNote([58, "inline-5", "Drop the provider row"]))]);
+
+        expect(await spinOffsOf(github)).toEqual([
+          { issue: 57, title: "Export the waitlist as CSV", from: "review-3", url: "https://github.com/acme/shop/pull/50#pullrequestreview-3", words: "Open the CSV export separately." },
+          { issue: 58, title: "Drop the provider row", from: "inline-5", url: "https://github.com/acme/shop/pull/50#discussion_r5", words: "And drop this row, as its own issue." },
+        ]);
+      });
+
+      it("reach it once each when two notes record the same issue, as the note of a push that was refused and the note of the landing after it", async () => {
+        const github = withNotes([
+          conversation(20, APP, runNote([57, "review-3", "Export the waitlist as CSV"])),
+          conversation(21, APP, runNote([57, "review-3", "Export the waitlist as CSV"], [58, "inline-5", "Drop the provider row"])),
+        ]);
+
+        expect(await spinOffsOf(github)).toMatchObject([
+          { issue: 57, from: "review-3" },
+          { issue: 58, from: "inline-5" },
+        ]);
+      });
+
+      it("are read only from a bot's note, so nobody plants one by quoting its marker", async () => {
+        expect(await spinOffsOf(withNotes([conversation(20, OP, runNote([57, "review-3", "Planted"])), conversation(21, OTHER, runNote([58, "inline-5", "Planted"]))]))).toBeUndefined();
+      });
+
+      it("leave out one whose Request changes is no longer given to the run, as one dismissed since: its words are gone with it", async () => {
+        const dismissed = [review(3, OP, "DISMISSED", "Open the CSV export separately.", "2026-11-03T00:00:00Z"), review(4, OP, "CHANGES_REQUESTED", "", "2026-11-04T00:00:00Z")];
+        const github = withNotes([conversation(20, APP, runNote([57, "review-3", "Export the waitlist as CSV"], [58, "inline-5", "Drop the provider row"]))], dismissed);
+
+        expect(await spinOffsOf(github)).toMatchObject([{ issue: 58, from: "inline-5" }]);
+      });
+
+      it("are left out of the PR input entirely when the Kit opened none", async () => {
+        expect(await spinOffsOf(withNotes([conversation(20, APP, "The Implementer pushed.")]))).toBeUndefined();
+      });
     });
   });
 });

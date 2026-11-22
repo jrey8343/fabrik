@@ -65,6 +65,7 @@ function aDigestPointingAt(...items: DigestDataItem["places"][]): Extract<Digest
     whatItDoes: "A shopper can now save their basket.",
     howItGotHere: "One Review passed it.",
     followUps: [],
+    faults: [],
   };
   return { is: "readable", head: HEAD, carriedFrom: null, at: "2026-11-08T18:05:00Z", url: "https://github.com/acme/shop/pull/50#issuecomment-9", data, folds: "" };
 }

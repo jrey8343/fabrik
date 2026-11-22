@@ -31,7 +31,7 @@ import { isHeldLine } from "../loop/heldLine.ts";
 import { DESIGN_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
 import { roundLineIn } from "../loop/roundLine.ts";
 import type { Facts } from "./gather.ts";
-import { followUpsOf, mentionsOf, type Related, relatedOf, relatedToOf } from "./related.ts";
+import { followUpsOf, mentionsOf, type Related, relatedOf, relatedToOf, type RowFollowUp } from "./related.ts";
 import { type RequiredChecksRead, requiredChecksFactOf } from "./requiredChecks.ts";
 import { type DigestRead, digestReadOf } from "./digestRead.ts";
 import { roundWaitsIn } from "./roundRead.ts";
@@ -58,8 +58,17 @@ export interface Row {
   readonly mentions: readonly { readonly issue: number; readonly title: string }[];
   /** On an issue's row: the pull request it could be rolled in to, or null. */
   readonly relatedTo: number | null;
-  /** On a pull request's row: each Follow-up its pass named, and the issue it was filed as, or null. */
-  readonly followUps: readonly { readonly title: string; readonly body: string; readonly filedAs: number | null }[];
+  /**
+   * On a pull request's row: each Follow-up its pass named, with its kind, a
+   * fault or an idea (#885), and the issue it was filed as, or null. On an
+   * open agent pull request's row they are its head's pass's, and `filedAs`
+   * is the related issue with its title. On the row of one merged in the
+   * last 24 hours they are its last pass's, then each fault only an earlier
+   * pass named that the Kit's comment at the merge records, opened or left
+   * over the cap, and `filedAs` is the issue the Kit opened for a fault at
+   * the merge, or the open issue the Operator opened from its link.
+   */
+  readonly followUps: readonly RowFollowUp[];
   /**
    * On an open agent pull request's row, at the Merge gate and in draft
    * alike: whether its Ticket is closed, "unknown" when it names no Ticket or

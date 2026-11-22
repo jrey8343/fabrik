@@ -151,11 +151,11 @@ The Kit's scheduled check of a Product repo's production errors and default-bran
 _Avoid_: alerting, watcher, monitor agent
 
 **Intake**:
-The rule that gives a new issue `needs-triage`, unless a skill made it or it already has a state, so Triage sees it. A sub-issue with no state gets one quiet line instead, saying which label to add.
+The rule that gives a new issue `needs-triage`, unless a skill made it or it already has a state, so Triage sees it. A sub-issue with no state gets one quiet line instead, saying which label to add. An issue the Kit opens itself for Triage, a Check's issue, a Spin-off or a Follow-up that is a fault, is opened with `needs-triage` already on, so Intake leaves it alone and Triage sees it all the same.
 _Avoid_: inbox, new-issue hook
 
 **Triage**:
-The AFK step that sorts each incoming issue (not ones the Loop's own skills create) into its next state: straight to an Implementer, into design with the Operator, or set aside. An issue it sets aside as a duplicate of one of the Recent issues closes as GitHub's *duplicate*, naming that issue, the original; any other it sets aside closes as *not planned*.
+The AFK step that sorts each incoming issue (not ones the Loop's own skills create) into its next state: straight to an Implementer, into design with the Operator, or set aside. An issue it sets aside as a duplicate of one of the Recent issues closes as GitHub's *duplicate*, naming that issue, the original; any other it sets aside closes as *not planned*. A Spin-off it sets aside only as a duplicate of a named issue, since the Operator asked for it. A Follow-up the Kit opened it sorts as any issue, and may set aside, since nobody asked for it.
 _Avoid_: sorting
 
 **Recent issues**:
@@ -163,7 +163,7 @@ What Triage compares a new issue against for a duplicate: the 50 most recently c
 _Avoid_: comparison set, candidate list
 
 **Design session**:
-A HITL grilling between the Operator and an agent that turns an issue needing design (first time or after a failed review) into one or more ready tickets, charts it as a Map when its destination is too foggy for one session, or ends as not planned when the Operator decides it won't be built: the issue gets `wontfix` and closes as not planned.
+A HITL grilling between the Operator and an agent that turns an issue needing design (first time or after a failed review) into one or more ready tickets, charts it as a Map when its destination is too foggy for one session, or ends as not planned when the Operator decides it won't be built: the issue gets `wontfix` and closes as not planned. Any finish but a Map can open Spin-offs, for work the Operator's answers put outside the session's outcome.
 _Avoid_: redesign, planning meeting
 
 **Round**:
@@ -191,7 +191,7 @@ One child question of a Map, resolved by research, a prototype, a grilling or a 
 _Avoid_: ticket, task
 
 **Operator step**:
-A piece of a Spec only the Operator can do, such as a trust-root edit, a secret, a repo setting or facts fetched from another system, which Tickets can wait on or which can wait on them.
+A piece of a Spec only the Operator can do, such as a trust-root edit, a secret, a repo setting or facts fetched from another system, which Tickets can wait on or which can wait on them. It never asks the Operator to open an issue: work that needs an issue of its own is a Spin-off, which the Kit opens.
 _Avoid_: manual ticket, human task, ready-for-human Ticket, "For the Operator" section
 
 **Operator brief**:
@@ -263,7 +263,7 @@ The part of a red Required check's log, with its annotations, that the Kit puts 
 _Avoid_: log, CI output, failure log
 
 **Retry**:
-An Implementer run that fixes an Execution flaw on its Ticket's open pull request, building on whatever the branch holds when it lands, the Operator's pushes included. A Ticket gets two before the next Execution flaw counts as a Design flaw, whoever pushed the flawed head, in one pool: an empty diff or a Broken run before its pull request opened uses one, an Evidence miss sent back uses one, and the Verdicts on the pull request count on from there. A Request-changes run or a conflict-only run isn't a Retry, but an Execution flaw on its push calls for one and counts. An Execution flaw that gives way to the Operator's Request changes no run has built calls for no Retry and never counts toward the two. Nor does one on a Ticket no longer `ready-for-agent`. Nor does one from a Flaky check. Nor does an Unrelated failure. A Request changes the Operator submits on the draft while a Retry is in flight is deferred until the Verdict on its push: neither that Review nor a Retry is given it, and a pass or an Execution flaw on that push gives way to it, so it never costs a Retry. The Retry after an empty diff or a Broken run has no pull request to build on: it starts where the first run did, from `main`, or on the Kept branch for a Kept-branch start. An Execution flaw whose findings are all Small findings or marked missed earlier calls for a Touch-up instead, and counts toward the two only once the Ticket's two Touch-ups are used.
+An Implementer run that fixes an Execution flaw on its Ticket's open pull request, building on whatever the branch holds when it lands, the Operator's pushes included. A Ticket gets two before the next Execution flaw counts as a Design flaw, whoever pushed the flawed head, in one pool: an empty diff or a Broken run before its pull request opened uses one, an Evidence miss sent back uses one, and the Verdicts on the pull request count on from there. A Request-changes run or a conflict-only run isn't a Retry, but an Execution flaw on its push calls for one and counts. A Request-changes run whose review asked only for Spin-offs commits nothing, gets no Verdict and uses no Retry: the pull request returns to the Merge gate on the pass it had. An Execution flaw that gives way to the Operator's Request changes no run has built calls for no Retry and never counts toward the two. Nor does one on a Ticket no longer `ready-for-agent`. Nor does one from a Flaky check. Nor does an Unrelated failure. A Request changes the Operator submits on the draft while a Retry is in flight is deferred until the Verdict on its push: neither that Review nor a Retry is given it, and a pass or an Execution flaw on that push gives way to it, so it never costs a Retry. The Retry after an empty diff or a Broken run has no pull request to build on: it starts where the first run did, from `main`, or on the Kept branch for a Kept-branch start. An Execution flaw whose findings are all Small findings or marked missed earlier calls for a Touch-up instead, and counts toward the two only once the Ticket's two Touch-ups are used.
 _Avoid_: rerun, attempt
 
 **Touch-up**:
@@ -279,7 +279,7 @@ Sending a Ticket that can't be built as designed to a new Design session: after 
 _Avoid_: rejection, bounce
 
 **Follow-up**:
-Work the Reviewer names on a pass that deserves its own issue but lies outside the Ticket's scope, left for the Operator to open as an issue or ignore.
+Work the Reviewer names on a pass that deserves its own issue but lies outside the Ticket's scope. It is one of two kinds. A fault is something already wrong that its body shows, saying where it is, by file and line, and what shows it: the Kit opens it as an issue when the pull request merges, up to `caps.follow_up_issues`, and that issue, a Follow-up issue, enters at Triage. An idea is anything else, and stays a link the Operator opens as an issue or ignores, as a fault over the cap does.
 _Avoid_: nit, suggestion
 
 **Infrastructure failure**:
@@ -375,12 +375,16 @@ Dependabot's pull request in a Product repo that moves the Kit's pinned release 
 _Avoid_: Kit upgrade, Dependabot PR, version bump
 
 **Request changes**:
-The Operator's review asking for changes on an agent pull request at the Merge gate, which amends the Ticket for that pull request: the Implementer builds it, also bringing `main` in by merging it when the pull request conflicts with it, and the Reviewer judges against the Ticket as amended, a later one winning over an earlier one and over the Ticket. However large the change, it's built: sending a Ticket to a Design session instead is Send it back. One GitHub never delivered, as on a pull request that conflicts with `main`, the Kit finds and builds all the same.
+The Operator's review asking for changes on an agent pull request at the Merge gate, which amends the Ticket for that pull request: the Implementer builds it, also bringing `main` in by merging it when the pull request conflicts with it, and the Reviewer judges against the Ticket as amended, a later one winning over an earlier one and over the Ticket. However large the change, it's built, but for a point the Operator asks, in words, to be its own issue, which the Kit opens as a Spin-off: sending a Ticket to a Design session instead is Send it back. One GitHub never delivered, as on a pull request that conflicts with `main`, the Kit finds and builds all the same.
 _Avoid_: change request, revision, feedback
 
 **Roll-in**:
 The Operator's Request changes that carries another issue's work onto an agent pull request at the Merge gate, so that it is built there and never becomes a Ticket of its own. A Design session can finish by settling one; only the Operator sends it.
 _Avoid_: fold in, absorb, merge into
+
+**Spin-off**:
+Work the Operator's words put outside the piece at hand, which the Kit opens as an issue of its own. A Design session opens one when it finishes, from an answer of the Operator's that states or implies the work is wanted but is not part of the session's outcome, such as "not now"; it opens none for work the Operator did not speak to. A Request changes opens one for a point the Operator says, in words, is to be its own issue: the Request-changes run leaves that point unbuilt, and the issue waits on the pull request's Ticket. No agent sets a point aside on its own judgement, and an Operator comment asks for none. The issue enters at Triage, which sets it aside only as a duplicate of a named issue, and becomes a Ticket only if Triage or a Design session makes it one. It is the opposite of a Roll-in, which carries an issue's work onto a pull request so that it never becomes a Ticket of its own.
+_Avoid_: split-off, deferred issue, side issue, new-issue step
 
 **Conflict-only run**:
 An Implementer run, on the Step-up model, that brings an agent pull request up to date with main once a plain rebase by the Kit conflicted too: one at the Merge gate that main moved under and left conflicting, a draft one whose push GitHub never reviewed because it conflicts with main, or a draft one whose Review passed while it conflicts with main, which stays in draft until the pass on its up-to-date head opens the Merge gate. It rebases onto main, resolves the conflicts and changes nothing else. It's neither a Retry nor a Request changes, so it uses no retry and adds no requirement. Each pull request gets one attempt per main head, and none while a Hand-back stands on it. An Execution flaw on its push calls for a Retry and counts like any other.
@@ -411,7 +415,7 @@ A UI pull request whose Implementer showed nothing of its change: it named no Ev
 _Avoid_: capture failure, missing screenshot
 
 **Digest**:
-The Kit's plain-English account of an agent pull request as it stands at one head, written each time it arrives at the Merge gate and kept on the pull request for the Operator: what was decided and why, what was left out of scope, what needs follow-up, and which parts deserve the Operator's own eyes.
+The Kit's plain-English account of an agent pull request as it stands at one head, written each time it arrives at the Merge gate and kept on the pull request for the Operator: what was decided and why, what was left out of scope, its Follow-ups, the faults the Kit opens as issues at the merge and the ideas worth opening, and which parts deserve the Operator's own eyes.
 _Avoid_: PR summary, brief, report, changelog
 
 **Capture identity**:
@@ -469,7 +473,7 @@ An Audit candidate the Operator files as an issue that traces back to merged age
 _Avoid_: architecture regression, design debt
 
 **Review miss**:
-A point in a Request changes asking for what a pass should already have caught: something the Ticket as it then stood, its Spec or the Product repo's standards required. A point that amends the Ticket, or only asks for a rebase, is none, and unlike an Architectural escape it's caught at the Merge gate, before merge.
+A point in a Request changes asking for what a pass should already have caught: something the Ticket as it then stood, its Spec or the Product repo's standards required. A point that amends the Ticket, one set aside as a Spin-off, or one that only asks for a rebase, is none, and unlike an Architectural escape it's caught at the Merge gate, before merge.
 _Avoid_: missed flaw, false pass, escape
 
 **Yield**:

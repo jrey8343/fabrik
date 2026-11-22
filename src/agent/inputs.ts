@@ -54,12 +54,12 @@ import type { SentBack } from "../loop/backToDesign.ts";
 import { withoutChangeLines } from "../loop/changeFingerprint.ts";
 import { type DigestFacts, digestFactsOf } from "../loop/digestFacts.ts";
 import { mapOfferOf, type MapOfferOf } from "../loop/mapCap.ts";
-import { flakyCheckIssueOf, followsSpecIn, fromAuditIn, fromPullRequestIn } from "../loop/markers.ts";
+import { flakyCheckIssueOf, followsSpecIn, followUpIssueOf, fromAuditIn, fromPullRequestIn, openedSpinOffsAmong, spinOffIn, type SpinOffSource } from "../loop/markers.ts";
 import { withoutRoundLines } from "../loop/roundLine.ts";
 import type { AuditIssueSnapshot, AuditWindow, KitConfig } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
 import { AGENT_FAILURE_FILE, inputsFailureReportFor } from "./failure.ts";
-import { operatorCommentId, type OperatorComment, type RequestedChange } from "./operatorComments.ts";
+import { operatorCommentId, type OperatorComment, type RequestedChange, type SetAsidePoint, setAsidePoints } from "./operatorComments.ts";
 
 /** What these reads need of a GitHub client. */
 export type Reader = Pick<GitHub, "graphql" | "rest">;
@@ -176,6 +176,11 @@ function pullRequestOf(pullRequests: readonly { number: number; state: "OPEN" | 
  * for the step's own reads of its lines (readFiledFrom), and `check` the
  * Required check it is the Check's issue for (#839), read only on an issue a
  * bot opened, as this job takes any bot for the App (byAppOf), else null.
+ * Read the same way, a Spin-off (#883) carries `spinOff`, where it came
+ * from, which Triage's prompt and its output contract go by; any other issue
+ * has no such field. An issue the Kit opened for a Follow-up that is a fault
+ * (#885) carries `followUp`, the pull request whose pass named the fault,
+ * which Triage's prompt goes by.
  */
 export async function readIssue(
   github: Reader,
@@ -208,6 +213,10 @@ export async function readIssue(
   // Only the App's note counts, as in the core's snapshot, so quoting one can't fake a return. This job doesn't know the
   // App's login, so it takes any bot's note for the App's (byAppOf).
   const { sentBack } = designSessionOf(comments.map(({ author, body }) => ({ body, byApp: byAppOf(author, null) })));
+  // Anyone can quote a Spin-off's marker in an issue they open, so it is read only on a bot's (ADR-0037).
+  const spinOff = byAppOf(issue.author, null) ? spinOffIn(issue.body) : null;
+  // Likewise the marker of a Follow-up the Kit opened (#885).
+  const followUp = byAppOf(issue.author, null) ? followUpIssueOf(issue.body) : null;
   return {
     issue: {
       number: issue.number,
@@ -217,6 +226,8 @@ export async function readIssue(
       labels: issue.labels.nodes,
       operator,
       comments: authoredComments,
+      ...(spinOff === null ? {} : { spinOff }),
+      ...(followUp === null ? {} : { followUp: { pullRequest: followUp } }),
       ...(sentBack === null ? {} : { sentBack: await readSentBack(github, repo, sentBack, operator) }),
     },
     body: issue.body,
@@ -349,7 +360,11 @@ export async function readOperatorComments(
  * reviews are the Operator's Request changes, and which line comments are in
  * each, is the one rule a Digest's asks are read by too
  * (operatorsRequestChangesIn). `written` is everything written on the PR,
- * when the caller has read it already.
+ * when the caller has read it already. And the points of those Request
+ * changes the Kit opened as Spin-offs (#884), read from the marker lines of
+ * the Kit's notes on the PR, each with the Operator's words it came from.
+ * Only a bot's note counts, as this job takes any bot for the App (byAppOf),
+ * so nobody plants one by quoting a marker.
  */
 async function readOperatorFeedback(
   github: Reader,
@@ -358,7 +373,7 @@ async function readOperatorFeedback(
   operator: string,
   deferred: readonly number[] = [],
   written?: WrittenOn,
-): Promise<{ operatorComments: OperatorComment[]; requestedChanges: RequestedChange[] }> {
+): Promise<{ operatorComments: OperatorComment[]; requestedChanges: RequestedChange[]; spinOffs: SetAsidePoint[] }> {
   const all = written ?? (await readWrittenOn(github, repo, pullRequest));
   const { conversation, lineComments: inline, reviews } = all;
   const theirs = writtenBy(operator);
@@ -406,7 +421,8 @@ async function readOperatorFeedback(
         body: c.body ?? "",
       })),
     }));
-  return { operatorComments: comments.sort(byTime((c) => c.createdAt)), requestedChanges };
+  const opened = openedSpinOffsAmong(conversation.filter(({ user }) => user?.type === "Bot").map(({ body }) => body ?? ""));
+  return { operatorComments: comments.sort(byTime((c) => c.createdAt)), requestedChanges, spinOffs: setAsidePoints(opened, requestedChanges) };
 }
 
 const PULL_REQUEST_QUERY = `
@@ -463,15 +479,16 @@ export async function readPullRequest(
     written,
   }: { readonly withComments: boolean; readonly operator: string; readonly deferred?: readonly number[]; readonly written?: WrittenOn },
 ): Promise<unknown> {
-  const [data, { operatorComments, requestedChanges }] = await Promise.all([
+  const [data, { operatorComments, requestedChanges, spinOffs }] = await Promise.all([
     github.graphql<PullRequestQueryResult>(PULL_REQUEST_QUERY, { owner: repo.owner, name: repo.name, number }),
     readOperatorFeedback(github, repo, number, operator, deferred, written),
   ]);
   const pullRequest = data.repository.pullRequest;
   if (pullRequest === null) throw new Error(`Pull request #${number} not found`);
   const { title, body, baseRefName, headRefName, headRefOid, comments } = pullRequest;
-  // Only a PR the Operator requested changes on carries them, so every other PR's input is as it always was.
-  const amended = requestedChanges.length === 0 ? {} : { requestedChanges };
+  // Only a PR the Operator requested changes on carries them, so every other PR's input is as it always was. Likewise
+  // the points of them the Kit opened as Spin-offs (#884), which every later run and Review is given.
+  const amended = { ...(requestedChanges.length === 0 ? {} : { requestedChanges }), ...(spinOffs.length === 0 ? {} : { spinOffs }) };
   // A Verdict among the comments keeps its marker and loses its change line (#643), which says nothing to an agent.
   const kept = comments.nodes.map((comment) => ({ ...comment, body: withoutChangeLines(comment.body) }));
   return withComments
@@ -498,6 +515,8 @@ export interface DigestPullRequest {
   readonly operatorComments: readonly OperatorComment[];
   /** The Operator's Request changes with their line comments, as the Reviewer is given them; absent when there are none. */
   readonly requestedChanges?: readonly RequestedChange[];
+  /** The points of those Request changes the Kit opened as Spin-offs (#884), as the Reviewer is given them; absent when there are none. */
+  readonly spinOffs?: readonly SetAsidePoint[];
   /** Every Verdict the Fabrik App gave it, oldest first. */
   readonly verdicts: readonly GivenVerdict[];
   /** The Kit's own notes on its thread, oldest first: every comment of the Kit's that is no Verdict, held lines left out. */
@@ -566,7 +585,7 @@ export async function readDigestPullRequest(
   const byApp = openedBy?.type === "Bot";
   const shots = byApp ? shotsMarkerIn((read as { body: string }).body) : null;
   const routes = byApp ? evidenceMarkerIn((read as { body: string }).body) : null;
-  const { comments, ...pullRequest } = read as Pick<DigestPullRequest, "number" | "title" | "body" | "operatorComments" | "requestedChanges"> & {
+  const { comments, ...pullRequest } = read as Pick<DigestPullRequest, "number" | "title" | "body" | "operatorComments" | "requestedChanges" | "spinOffs"> & {
     comments: { body: string; author: { __typename: string } | null }[];
   };
   return {
@@ -749,12 +768,12 @@ export async function writeDesignInputs(
   repo: Repo,
   outDir: string,
   role: string | undefined,
-  issue: { readonly number: number; readonly body: string; readonly spec: { readonly number: number } | null },
+  issue: { readonly number: number; readonly body: string; readonly spec: { readonly number: number } | null; readonly spinOff?: SpinOffSource | null },
 ): Promise<void> {
   if (role !== "design") return;
   const openTickets = await readOpenTickets(github, repo, { issue: issue.number, spec: issue.spec?.number ?? null, follows: followsSpecIn(issue.body) });
   await writeFile(join(outDir, OPEN_TICKETS_FILE), JSON.stringify(openTickets));
-  await writeFile(join(outDir, FILED_FROM_FILE), JSON.stringify(await readFiledFrom(github, repo, issue.body)));
+  await writeFile(join(outDir, FILED_FROM_FILE), JSON.stringify(await readFiledFrom(github, repo, issue.body, issue.spinOff ?? null)));
 }
 
 // --- The pull request a Design-session turn's issue was filed from (#659) -----
@@ -782,6 +801,12 @@ export type FiledFrom =
       readonly baseRef: string;
       /** Whether it is an agent pull request, by the Kit's own test (isAgentPullRequest). */
       readonly isAgent: boolean;
+      /**
+       * On a Spin-off the Operator asked, in a Request changes on this pull
+       * request, to be an issue of its own (#884): true, so no Roll-in back
+       * onto it is on offer. Absent on every other issue.
+       */
+      readonly setAside?: true;
     };
 
 /**
@@ -805,7 +830,7 @@ export function filedFromOf(value: unknown): FiledFrom {
     typeof baseRef === "string" &&
     typeof isAgent === "boolean"
   ) {
-    return { kind: "pull-request", number, title, body, state, draft, headSha, headRef, baseRef, isAgent };
+    return { kind: "pull-request", number, title, body, state, draft, headSha, headRef, baseRef, isAgent, ...(read["setAside"] === true ? { setAside: true } : {}) };
   }
   throw new Error(`${FILED_FROM_FILE} doesn't say which pull request this issue was filed from`);
 }
@@ -829,9 +854,12 @@ interface RestFiledFrom {
  * line reads nothing. GitHub answers 404 for a number that is an issue's or
  * that doesn't exist, which is no failure: the turn runs as it would with no
  * line. Any other failed read throws, and fails the turn before its agent
- * starts.
+ * starts. `spinOff` is where the issue came from when it is a Spin-off
+ * (readIssue): one set aside from a Request changes on the very pull request
+ * the line names is marked so (#884), since the Operator asked for its work
+ * to be apart from that pull request.
  */
-export async function readFiledFrom(github: Pick<Reader, "rest">, repo: Repo, issueBody: string): Promise<FiledFrom> {
+export async function readFiledFrom(github: Pick<Reader, "rest">, repo: Repo, issueBody: string, spinOff: SpinOffSource | null = null): Promise<FiledFrom> {
   const number = fromPullRequestIn(issueBody);
   if (number === null) return { kind: "none" };
   const pull = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${number}`, undefined, { allowNotFound: true })) as RestFiledFrom | null;
@@ -848,6 +876,7 @@ export async function readFiledFrom(github: Pick<Reader, "rest">, repo: Repo, is
     baseRef: pull.base.ref,
     // This job doesn't know the App's login, so any bot's pull request from an agent branch is an agent pull request.
     isAgent: isAgentPullRequest({ headRef: pull.head.ref, authorIsBot: pull.user?.type === "Bot" }),
+    ...(spinOff?.from === "request-changes" && spinOff.pullRequest === pull.number ? { setAside: true as const } : {}),
   };
 }
 
@@ -1206,7 +1235,9 @@ async function main(outDir: string): Promise<void> {
   await writeFile(join(outDir, "issue.json"), JSON.stringify(issue));
   await writeFile(join(outDir, "spec.json"), JSON.stringify(spec));
   if (process.env["FABRIK_ROLE"] === "design") await writeFile(join(outDir, SPEC_TICKETS_FILE), JSON.stringify(otherTickets));
-  await writeDesignInputs(github, repo, outDir, process.env["FABRIK_ROLE"], { number: issueNumber, body, spec });
+  // A Spin-off says where it came from (readIssue), which the pull request it was set aside from is read by (#884).
+  const spinOff = (issue as { spinOff?: SpinOffSource }).spinOff ?? null;
+  await writeDesignInputs(github, repo, outDir, process.env["FABRIK_ROLE"], { number: issueNumber, body, spec, spinOff });
   // A turn on an invalid Kit config fails before its agent starts (src/agent/run.ts), so it's told nothing of Maps.
   if (process.env["FABRIK_ROLE"] === "design" && resolved.ok) {
     await writeFile(join(outDir, MAP_INPUTS_FILE), JSON.stringify(await readMapOffer(github, repo, resolved.config, spec, check)));

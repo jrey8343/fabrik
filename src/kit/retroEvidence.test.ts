@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  aFaultsComment,
+  aKitFollowUpIssue,
   aPastRetro,
   aRecordWithTranscript,
   aRetroEvidenceInput,
@@ -27,6 +29,7 @@ import {
   factsOf,
 } from "../read/builders.ts";
 import { aScoreEntry, aScoreFile, aSkippedScoreFile } from "../__fixtures__/weeklySummary.ts";
+import type { NamedFollowUp } from "../loop/followUps.ts";
 import { fromRetroLine } from "../loop/markers.ts";
 import type { Verdict } from "../loop/types.ts";
 import {
@@ -36,6 +39,7 @@ import {
   type EvidenceBundle,
   escapesIn,
   evidenceBundle,
+  evidenceKitFollowUpIssuesOf,
   evidenceReachOf,
   evidenceTicketsOf,
   mergedAgentPullRequestsIn,
@@ -756,9 +760,92 @@ describe("the evidence bundle", () => {
         }),
       );
       expect(followUps).toEqual([
-        { ref: "#50", pullRequest: 50, title: "Extract the money type", body: "The cart and the till both round prices.", openedAs: 90 },
-        { ref: "#50", pullRequest: 50, title: "Cache the tax table", body: "", openedAs: null },
+        { ref: "#50", pullRequest: 50, kind: "idea", title: "Extract the money type", body: "The cart and the till both round prices.", openedAs: 90, kitOpened: null, overCap: false },
+        { ref: "#50", pullRequest: 50, kind: "idea", title: "Cache the tax table", body: "", openedAs: null, kitOpened: null, overCap: false },
       ]);
+    });
+
+    describe("that are faults (#885)", () => {
+      const BADGE = { kind: "fault", title: "The badge miscounts", body: "`badge.ts:14` reads a stale count." } as const;
+      const FOOTER = { kind: "fault", title: "The footer test is skipped", body: "`footer.test.ts:3` is `it.skip`." } as const;
+      const README = { kind: "fault", title: "The README names a removed flag", body: "`README.md:40` says `--fast`." } as const;
+      const MONEY = { kind: "idea", title: "Extract the money type", body: "The cart and the till both round prices." } as const;
+      /** #50, merged in the window, whose pass named these Follow-ups, with the Kit's comment on its faults when it has one. */
+      const merged = (followUps: readonly NamedFollowUp[], ...comments: CommentFacts[]) =>
+        aMergedPullRequest("2026-11-03T00:00:00Z", { number: 50, comments: [aVerdictWithFollowUps("pass", followUps, "2026-11-02T00:00:00Z", 50), ...comments] });
+      const followUpsOf = (input: Parameters<typeof aRetroEvidenceInput>[0]) => evidenceBundle(aRetroEvidenceInput(input)).followUps;
+      const became = (title: string, input: Parameters<typeof aRetroEvidenceInput>[0]) => followUpsOf(input).find((followUp) => followUp.title === title)?.kitOpened;
+
+      it("give each Follow-up its kind, a fault with the issue the Kit opened at the merge, and one left over the cap as a link", () => {
+        const followUps = followUpsOf({
+          facts: factsOf({
+            pullRequests: [merged([BADGE, MONEY, FOOTER], aFaultsComment([[101, BADGE.title]], [FOOTER.title], "2026-11-03T00:01:00Z"))],
+            followUpIssues: [aFollowUpIssue(50, MONEY.title, { number: 90 })],
+          }),
+          kitFollowUpIssues: [aKitFollowUpIssue({ number: 101 })],
+        });
+
+        // In the order the Verdict comment lists them: its ideas, then its faults.
+        expect(followUps).toEqual([
+          { ref: "#50", pullRequest: 50, kind: "idea", title: MONEY.title, body: MONEY.body, openedAs: 90, kitOpened: null, overCap: false },
+          { ref: "#50", pullRequest: 50, kind: "fault", title: BADGE.title, body: BADGE.body, openedAs: null, kitOpened: { ref: "#101", issue: 101, state: "open", stateLabel: "ready-for-agent" }, overCap: false },
+          { ref: "#50", pullRequest: 50, kind: "fault", title: FOOTER.title, body: FOOTER.body, openedAs: null, kitOpened: null, overCap: true },
+        ]);
+      });
+
+      it("say what became of each issue the Kit opened: its state label while open, or how it closed and whether the Operator or Triage closed it", () => {
+        const opened = aFaultsComment([[101, BADGE.title], [102, FOOTER.title], [103, README.title]], [], "2026-11-03T00:01:00Z");
+        const facts = factsOf({ pullRequests: [merged([BADGE, FOOTER, README], opened)] });
+        const input = (...kitFollowUpIssues: ReturnType<typeof aKitFollowUpIssue>[]) => ({ facts, kitFollowUpIssues });
+        const closed = { state: "closed", labels: ["bug", "wontfix"] } as const;
+        const sentToDesign = [{ label: "needs-design", action: "labeled", actor: "fabrik-app[bot]", at: "2026-11-03T00:05:00Z" }] as const;
+
+        expect(became(BADGE.title, input(aKitFollowUpIssue({ labels: ["needs-triage"] })))).toEqual({ ref: "#101", issue: 101, state: "open", stateLabel: "needs-triage" });
+        expect(became(BADGE.title, input(aKitFollowUpIssue({ labels: [] })))).toEqual({ ref: "#101", issue: 101, state: "open", stateLabel: null });
+        expect(became(BADGE.title, input(aKitFollowUpIssue({ ...closed, closedAs: "not_planned", closedBy: "operator" })))).toEqual({ ref: "#101", issue: 101, state: "closed", closedAs: "not_planned", closedBy: "operator" });
+        expect(became(FOOTER.title, input(aKitFollowUpIssue({ number: 102, ...closed, closedAs: "duplicate", closedBy: "fabrik-app[bot]" })))).toEqual({ ref: "#102", issue: 102, state: "closed", closedAs: "duplicate", closedBy: "triage" });
+        expect(became(README.title, input(aKitFollowUpIssue({ number: 103, state: "closed", closedAs: "completed", closedBy: "operator" })))).toEqual({ ref: "#103", issue: 103, state: "closed", closedAs: "completed", closedBy: "operator" });
+        // The Kit closes an issue after a Design session too, on the Operator's word: only one that never went to a session is Triage's.
+        expect(became(BADGE.title, input(aKitFollowUpIssue({ ...closed, closedAs: "not_planned", closedBy: "fabrik-app[bot]", labelEvents: sentToDesign })))).toMatchObject({ closedBy: "other" });
+        expect(became(BADGE.title, input(aKitFollowUpIssue({ ...closed, closedAs: "not_planned", closedBy: "someone" })))).toMatchObject({ closedBy: "other" });
+        // Triage sets an issue aside as not planned or as a duplicate, never as completed: the Kit closing a Ticket whose fix merged is not Triage.
+        expect(became(BADGE.title, input(aKitFollowUpIssue({ state: "closed", closedAs: "completed", closedBy: "fabrik-app[bot]" })))).toMatchObject({ closedAs: "completed", closedBy: "other" });
+        // One the evidence job could not read is still named.
+        expect(became(BADGE.title, input())).toEqual({ ref: "#101", issue: 101, state: "unknown" });
+      });
+
+      it("read which issue a fault became from the Fabrik App's comment alone, never a person's quote of one, and by the fault's title", () => {
+        const quoted = aFaultsComment([[666, BADGE.title]], [FOOTER.title], "2026-11-03T00:01:00Z", { author: "someone", byBot: false });
+
+        expect(followUpsOf({ facts: factsOf({ pullRequests: [merged([BADGE, FOOTER], quoted)] }) }).map(({ kitOpened, overCap }) => ({ kitOpened, overCap }))).toEqual([
+          { kitOpened: null, overCap: false },
+          { kitOpened: null, overCap: false },
+        ]);
+      });
+
+      it("name the issues to read: each the Kit opened for a fault of a pull request merged in the window, once", () => {
+        const input = aRetroEvidenceInput({
+          facts: factsOf({
+            pullRequests: [
+              merged([BADGE, FOOTER], aFaultsComment([[101, BADGE.title], [102, FOOTER.title]], [], "2026-11-03T00:01:00Z")),
+              aMergedPullRequest("2026-10-30T00:00:00Z", { number: 51, comments: [aVerdictWithFollowUps("pass", [README], "2026-10-29T00:00:00Z", 51), aFaultsComment([[99, README.title]], [], "2026-10-30T00:01:00Z")] }), // the last Retro's
+            ],
+          }),
+        });
+
+        expect(evidenceKitFollowUpIssuesOf(input)).toEqual([101, 102]);
+      });
+
+      it("can be cited by the pull request and by the issue the Kit opened", () => {
+        const bundle = evidenceBundle(
+          aRetroEvidenceInput({
+            facts: factsOf({ pullRequests: [merged([BADGE], aFaultsComment([[101, BADGE.title]], [], "2026-11-03T00:01:00Z"))] }),
+            kitFollowUpIssues: [aKitFollowUpIssue()],
+          }),
+        );
+
+        expect(refsOf(bundle)).toEqual(expect.arrayContaining([{ ref: "#50", kind: "pull-request" }, { ref: "#101", kind: "issue" }]));
+      });
     });
 
     it("reads them from the Fabrik App's pass Verdicts alone, never a flaw's or a person's quote of one", () => {

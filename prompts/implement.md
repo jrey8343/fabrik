@@ -54,7 +54,7 @@ If the end of this prompt has "This run is a Touch-up", the Execution flaw you'r
 
 ## When the Operator requested changes
 
-If the end of this prompt has "The pull request the Operator requested changes on", this run is a Request-changes run: the Operator asked for changes on the PR, at the Merge gate or while it was under review. The branch checked out is that PR's branch. "The Operator's requested changes" and "The Operator's comments on the code" are the Operator's own words, and they amend the Ticket for this PR: make those changes, on top of the earlier commits, however large they are. Wherever they conflict with an acceptance criterion, the requested changes win; meet every criterion they leave as it was.
+If the end of this prompt has "The pull request the Operator requested changes on", this run is a Request-changes run: the Operator asked for changes on the PR, at the Merge gate or while it was under review. The branch checked out is that PR's branch. "The Operator's requested changes" and "The Operator's comments on the code" are the Operator's own words, and they amend the Ticket for this PR: make those changes, on top of the earlier commits, however large they are. The one exception is a point the Operator asks, in words, to be an issue of its own: "A point the Operator asked to be its own issue" below says what to do with it. Wherever they conflict with an acceptance criterion, the requested changes win; meet every criterion they leave as it was.
 
 - Keep the earlier work the Operator didn't ask you to change. Add new commits; don't otherwise rewrite history.
 - How to work applies to a Request-changes run as it does to a first run: call the Skill tool with `tdd` before your first change, and write the failing test for each requested change and each finding before its fix.
@@ -72,7 +72,20 @@ If the end of this prompt has "The pull request the Operator requested changes o
 - Your output also answers two questions about the Operator's review, each yes or no, independent of the other. The Kit records both on the PR, and the Weekly summary and the Retro count them. Answer only for the review this run was started for, under "The Operator's requested changes" and "The Operator's comments on the code", never for an earlier Request changes you read as part of the Ticket.
   - `reviewMiss`: does at least one point in the review ask for what the PR should already have done when Review passed it, a Review miss? That's something the Ticket as it then stood, counting earlier Request changes, its Spec, or this Product repo's standards (its `AGENTS.md`, glossary and ADRs) already required. Judge it against what Review judges against, not against what the Operator now wants. Name each such point in `reviewMissPoints`.
   - `amendsTicket`: is at least one point an amendment, one that adds to, changes or removes what the Ticket asked for? It's yes exactly when your `fix` names an acceptance criterion the review amended, or a requirement it added.
-  - One review can be both, and a point can be neither. A review that asks only for a rebase, a squash or a retitle answers no to both.
+  - One review can be both, and a point can be neither. A point set aside as a Spin-off is neither. A review that asks only for a rebase, a squash or a retitle answers no to both.
+
+### A point the Operator asked to be its own issue
+
+The Operator can ask, in a Request changes, for a point to be an issue of its own. The Kit opens it as a Spin-off: an issue that waits on this pull request's Ticket, and is no part of this pull request.
+
+- **What asks for one.** A point, in the review's own words or in one of its comments on the code, where the Operator says in words that the work is to be its own issue. The words vary: "open this separately", "as its own issue", "in a different ticket".
+- **What to do.** Leave that point unbuilt, return it in `spinOffs`, and build every other point as this section says.
+- **Never on your own judgement.** A point without such words is built, however large it is and however unrelated it looks. You recognise the Operator's instruction and never judge for them what belongs apart. When you can't tell whether the words ask for it, build the point, and say in your `fix` that you did.
+- **Only a Request changes.** A comment under "The Operator's comments on the pull request" asks for no Spin-off, as it asks for no work.
+- **What each one holds.** A `title` of one line, a `body` that stands alone and quotes the Operator's words exactly, and `from`, the id that heads the review's own words or the comment on the code the point is in, such as `review-5` or `inline-9`, exactly as its heading gives it. Whoever reads the issue has not read this pull request, so the body says what is wanted and why, and names the pull request. The Kit refuses an id it didn't give you.
+- **A review of only Spin-offs.** When every point you were asked to build asks for one, so that no point at all was to be built, commit nothing, return them all, set `onlySpinOffs` to `true`, and say so in your `fix`. The Kit opens them and, when it finds a Spin-off for every ask it read, returns the pull request to the Merge gate as it was, with no Review. Your `summary` is then the pull request's current description as it stands. A review whose one ask holds a point to build and a point to set aside is not such a review: build that point, and leave `onlySpinOffs` out. A run that commits nothing without stating it is handed back to the Operator, its Spin-offs opened all the same.
+- **Earlier Spin-offs.** "The points set aside as Spin-offs", when the end of this prompt has it, lists the points the Kit already opened as issues from the Operator's earlier Request changes on this PR. Build none of them, and return none of them again.
+- **Your two answers.** A point set aside neither amends the Ticket nor is a Review miss: answer `reviewMiss` and `amendsTicket` for the other points alone. A review of only Spin-offs answers no to both.
 
 ## When main moved under the PR
 
@@ -106,7 +119,7 @@ The Kit refuses, and hands to the Operator, any branch that changes a file that 
 
 An acceptance criterion that needs one of these changed is one no run can meet: "When a criterion is one no run can meet" says what to do.
 
-You hold no GitHub credential. Don't call `gh` or the GitHub API: the Kit pushes your branch and opens the draft PR after you finish, from your commits and the output below. A run that commits nothing counts as a failed attempt, so commit what you built.
+You hold no GitHub credential. Don't call `gh` or the GitHub API: the Kit pushes your branch and opens the draft PR after you finish, from your commits and the output below. A run that commits nothing counts as a failed attempt, so commit what you built, unless this prompt tells the run to commit nothing: a body-only Touch-up, and a Request-changes run whose review asked only for Spin-offs.
 
 ## When a criterion is one no run can meet
 
@@ -141,6 +154,13 @@ When you have committed your work, end your reply with exactly one `<implement>`
   "reviewMiss": true,
   "reviewMissPoints": ["The Ticket asked for a confirmation email on booking, and the PR sent none."],
   "amendsTicket": false,
+  "spinOffs": [
+    {
+      "title": "Export the waitlist as CSV",
+      "body": "On the pull request that adds the waitlist (#412), the Operator wrote on `src/waitlist.ts`: \"Open the CSV export as its own issue.\"\n\n## What is wanted\n\nA way to download the waitlist as a CSV file, one row for each patient waiting.",
+      "from": "inline-9"
+    }
+  ],
   "operatorCommentsConsidered": ["conversation-3"],
   "routes": ["/book"]
 }
@@ -155,5 +175,7 @@ When you have committed your work, end your reply with exactly one `<implement>`
 - `reviewMiss` is `true` or `false`, only on a Request-changes run: whether the review it was started for holds a Review miss, as "When the Operator requested changes" says. Leave it out on every other run.
 - `reviewMissPoints` names each point that is a Review miss, one short line each, saying what was already required and where: required when `reviewMiss` is `true`, left out otherwise. Don't @-mention anyone.
 - `amendsTicket` is `true` or `false`, only on a Request-changes run: whether the review amends the Ticket. Leave it out on every other run.
+- `spinOffs` lists, only on a Request-changes run, each point the Operator asked to be an issue of its own, as "A point the Operator asked to be its own issue" says: each with a `title` of one line, a `body` and a `from`. Leave it out when no point asks for one, and on every other run, where the Kit never reads it. Don't @-mention anyone.
+- `onlySpinOffs` is `true`, only on a Request-changes run that committed nothing because no point at all was to be built: every point you were asked to build is in `spinOffs`, as "A point the Operator asked to be its own issue" says. Leave it out on a run that had any point to build, and on every other run, where the Kit never reads it. Without it, the Kit hands a Request-changes run that committed nothing back to the Operator.
 - `operatorCommentsConsidered` lists, on a retry or a Request-changes run, the id of each comment under "The Operator's comments on the pull request" or "The Operator's comments on the code", and of each review or inline comment under "The Operator's Request changes, which amend the Ticket", that you weighed, exactly as its heading gives it (such as `conversation-3`, `review-5` or `inline-9`). Leave it out, or leave it empty, if you weighed none, and always on a first run. The Kit ends your `fix` comment with a link to each one; it ignores an id it didn't give you.
 - `routes` lists, when your change touched the UI, the routes it shows on, so any UI evidence is captured where the change can be seen: each a path starting with `/`, such as `/book`, never a full URL. Leave it out when you touched no UI. On a retry or a Request-changes run, name the routes the PR as a whole shows on.

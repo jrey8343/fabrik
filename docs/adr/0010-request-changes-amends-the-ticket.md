@@ -15,3 +15,4 @@ We chose this because of jrey8343/penrith-physiotherapy-sports-centre#59. The Op
 - A Retry's fix of an Execution flaw can never undo a requested change, because it judges the same amended Ticket the Reviewer does.
 - The Scorers judge a run on the pull request against the same amended Ticket (#450): the judge model is told the run's kind and given what its prompt carried, so a Request-changes run that builds the Operator's review is never scored as scope creep.
 - A Ticket's text no longer tells the whole contract for a pull request that had a Request changes. Readers of a merged PR need its reviews too.
+- ADR-0039 refines "However large the change, it's built": a point the Operator asks, in words, to be its own issue is set aside as a Spin-off and not built on the pull request. Only the Operator's words set a point aside, so still no agent judges a requested change too large or unrelated.

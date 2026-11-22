@@ -14,6 +14,7 @@ import {
   type DesignTurnOutput,
   type OperatorBrief,
   type SpecTicket,
+  type SpinOff,
 } from "./designOutput.ts";
 import {
   DESIGN_LABEL,
@@ -34,6 +35,8 @@ import {
   DECISIONS_SO_FAR_HEADING,
   DESIGN_TURN_FAILED_MARKER,
   flakyCheckIssueMarker,
+  followUpIssueOf,
+  followUpMarker,
   flakyCheckIssueOf,
   handBackMarker,
   withoutFlakyCheckIssueMarker,
@@ -57,9 +60,11 @@ import { withoutMentions } from "./mentions.ts";
 import { GITHUB_COMMENT_LIMIT, ROUND_LINE_VERSION, roundLineOf, withoutRoundLines } from "./roundLine.ts";
 import type { AgentBrief } from "./triageOutput.ts";
 import { startAgentRun } from "./runs.ts";
+import { openSpinOff, spinOffIssue, spinOffItem } from "./spinOffs.ts";
 import type {
   Action,
   CreatedIssue,
+  FollowedSpec,
   GivenOperatorComment,
   IssueContext,
   IssueSnapshot,
@@ -67,7 +72,6 @@ import type {
   LoopEvent,
   MovedBlocking,
   NamedPullRequestSnapshot,
-  OpenAsIssueLink,
   OpenTicketRef,
   Plan,
   StartingComment,
@@ -394,7 +398,8 @@ function landTurn(
   // Every outcome but a round ends the session and frees its slot, so the next waiting issue can start.
   if (output.kind === "not-planned") {
     // Nothing new is ready, so there is nothing for Dispatch to check.
-    return { kind: "act", actions: [...closeAsNotPlanned(issueNumber, notPlannedComment(output.comment, snapshot.issue)), CHECK_DESIGN_QUEUE] };
+    const spinOffs = openSpinOffs(issueNumber, output.spinOffs);
+    return { kind: "act", actions: [...closeAsNotPlanned(issueNumber, notPlannedComment(output.comment, snapshot.issue), spinOffs), CHECK_DESIGN_QUEUE] };
   }
   if (output.kind === "roll-in") {
     if (named === null) return { kind: "fail", failure: "infrastructure", reason: "The snapshot is missing the pull request the Roll-in names" };
@@ -402,7 +407,7 @@ function landTurn(
     if (cannot !== null) return wrongOutcome(issueNumber, cannot);
     // The same finish with another comment: the issue's work is to be built on a pull request, which the Kit leaves alone.
     const comment = rollInComment(issueNumber, output.pullRequest, output, snapshot.issue);
-    return { kind: "act", actions: [...closeAsNotPlanned(issueNumber, comment), CHECK_DESIGN_QUEUE] };
+    return { kind: "act", actions: [...closeAsNotPlanned(issueNumber, comment, openSpinOffs(issueNumber, output.spinOffs)), CHECK_DESIGN_QUEUE] };
   }
   // The Spec stays the single parent of its work: a Ticket under one splits into
   // siblings, and only an issue with no Spec above it gets a Spec, or a Map, of its own.
@@ -433,9 +438,12 @@ function landTurn(
     return "operator" in output.brief
       ? {
           kind: "act",
-          actions: [...rewriteAsOperatorBrief(issueNumber, output.comment, output.brief, snapshot.issue, snapshot.operator), CHECK_DESIGN_QUEUE],
+          actions: [...rewriteAsOperatorBrief(issueNumber, output.comment, output.brief, snapshot.issue, snapshot.operator, output.spinOffs), CHECK_DESIGN_QUEUE],
         }
-      : { kind: "act", actions: [...rewriteAsBrief(issueNumber, output.comment, output.brief, snapshot.issue), checkDispatch, CHECK_DESIGN_QUEUE] };
+      : {
+          kind: "act",
+          actions: [...rewriteAsBrief(issueNumber, output.comment, output.brief, snapshot.issue, output.spinOffs), checkDispatch, CHECK_DESIGN_QUEUE],
+        };
   }
   const landed =
     output.kind === "spec"
@@ -449,11 +457,13 @@ function landTurn(
  * won't be built, or because the Operator settled a Roll-in, so its work is
  * to be built on a pull request. Either way nothing lands from the issue
  * itself, so the issues it blocks stay blocked by it (src/loop/dispatch.ts),
- * which the comment says (stillBlockedNote).
+ * which the comment says (stillBlockedNote). Its Spin-offs are opened first,
+ * and the comment ends by naming them (#883).
  */
-function closeAsNotPlanned(issueNumber: number, comment: string): Action[] {
+function closeAsNotPlanned(issueNumber: number, comment: string, spinOffs: PlannedSpinOffs): Action[] {
   return [
-    { kind: "comment", issue: issueNumber, body: comment },
+    ...spinOffs.actions,
+    closingComment(issueNumber, comment, spinOffs),
     { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
     { kind: "add-labels", issue: issueNumber, labels: [WONTFIX] },
     { kind: "close", issue: issueNumber, reason: "not_planned" },
@@ -616,9 +626,11 @@ function splitIntoSiblings(
   operator: string,
 ): Action[] {
   const { actions, created, moved } = ticketActions(output.tickets, issue, spec, operator);
+  const spinOffs = openSpinOffs(issueNumber, output.spinOffs, followedSpec(spec, output.tickets));
   const allTickets = output.tickets.every((ticket) => !ticket.operator);
   return [
     ...actions,
+    ...spinOffs.actions,
     { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
     {
       kind: "close-as-superseded",
@@ -630,6 +642,7 @@ function splitIntoSiblings(
           ? `, sibling Tickets under the Spec #${spec}.\n\n${closingNote(output.comment)}`
           : `: ${itemCount(output.tickets)}, siblings under the Spec #${spec}.\n\n${closingNote(output.comment)}`,
         ...moved,
+        ...spinOffs.listed,
       ],
     },
   ];
@@ -695,7 +708,6 @@ function ticketActions(
   parent: CreatedIssue | number,
   operator: string,
 ): { actions: Action[]; created: CreatedIssue[]; moved: (string | CreatedIssue | MovedBlocking)[] } {
-  const ticketIssue = (key: string): CreatedIssue => ({ created: `ticket:${key}` });
   // The contract has already refused blockers that loop, so there is always an order.
   const tickets = dependencyOrder(outcome) ?? [];
   // A number names an open Ticket outside the outcome (#825), which neither comes first nor last among its Tickets.
@@ -703,9 +715,6 @@ function ticketActions(
   const waitedOn = new Set(tickets.flatMap(siblingsOf));
   const last = tickets.filter((ticket) => !waitedOn.has(ticket.key)).map((ticket) => ticketIssue(ticket.key));
   const first = tickets.filter((ticket) => siblingsOf(ticket).length === 0).map((ticket) => ticketIssue(ticket.key));
-  // The Tickets an Operator step's Follows line names: the ones an Implementer builds, never the Operator steps.
-  const followedTickets = tickets.filter((ticket) => !ticket.operator).map((ticket) => ticketIssue(ticket.key));
-  const repoUrl = `https://github.com/${superseded.repo}`;
   return {
     actions: [
       ...tickets.map(
@@ -716,7 +725,7 @@ function ticketActions(
           // An Operator step is the Operator's, so it waits for them, assigned, never for an Implementer.
           ...(ticket.operator
             ? {
-                body: operatorStepBody(ticket, null).join(""),
+                body: operatorStepBody(ticket),
                 labels: readyLabels(superseded, READY_FOR_HUMAN),
                 assignees: [operator],
               }
@@ -729,24 +738,6 @@ function ticketActions(
           blockedBy: [...(siblingsOf(ticket).length === 0 ? superseded.blockers : siblingsOf(ticket).map(ticketIssue)), ...openTicketsBlocking(ticket, superseded)],
         }),
       ),
-      // Once every Ticket under the Spec exists, so the link's Follows line names them all.
-      ...tickets.flatMap((ticket): Action[] =>
-        ticket.operator && ticket.newIssue !== undefined
-          ? [
-              {
-                kind: "link-new-issue",
-                on: ticketIssue(ticket.key),
-                body: operatorStepBody(ticket, {
-                  repoUrl,
-                  title: withoutMentions(ticket.newIssue.title),
-                  body: withoutMentions(ticket.newIssue.body),
-                  follows: parent,
-                  tickets: followedTickets,
-                }),
-              },
-            ]
-          : [],
-      ),
       ...superseded.openBlocking.flatMap((issue) =>
         last.map((blocker): Action => ({ kind: "add-blocked-by", issue, blocker })),
       ),
@@ -754,6 +745,71 @@ function ticketActions(
     created: tickets.map((ticket) => ticketIssue(ticket.key)),
     moved: movedEdges(first, superseded, last),
   };
+}
+
+/** The issue a plan creates for the Ticket, or the Operator step, a Design session wrote under `key`. */
+function ticketIssue(key: string): CreatedIssue {
+  return { created: `ticket:${key}` };
+}
+
+/**
+ * What a finish's Spin-offs add to its plan (#883): the issue each is opened
+ * as, in the order the session wrote them, and the lines that name each in
+ * the closing comment. Both are empty for a finish with none, whose plan is
+ * as it always was.
+ */
+interface PlannedSpinOffs {
+  readonly actions: Action[];
+  readonly listed: (string | CreatedIssue)[];
+}
+
+/**
+ * Opens each of a finish's Spin-offs as an issue of its own, as the Fabrik
+ * App, in the plan that finishes the session `issueNumber` holds, each as
+ * every Spin-off is opened (openSpinOff, src/loop/spinOffs.ts): at Triage,
+ * with `needs-triage` and no other label. Its body opens with the Spin-off
+ * marker, which names the session's issue, and, when the finish writes a
+ * Spec or a split, ends with the `Follows` line for `follows`, that Spec and
+ * its Tickets, so a Design session on the Spin-off is given them. It waits,
+ * by native blocked-by edges, on what its `blockedBy` names: a Ticket of the
+ * finish by its key, and any other issue, an open Ticket or the one an agent
+ * brief rewrites, by its number. It takes none of the superseded issue's own
+ * edges, and is no sub-issue: it is not the Spec's work until a Design
+ * session says so. The actions go after the finish's own issues, which the
+ * edges point at, and the closing comment gives each Spin-off's number,
+ * title and `restsOn` line. Nothing here mentions anyone, so a Spin-off
+ * notifies nobody.
+ */
+function openSpinOffs(issueNumber: number, spinOffs: readonly SpinOff[] = [], follows: FollowedSpec | null = null): PlannedSpinOffs {
+  if (spinOffs.length === 0) return { actions: [], listed: [] };
+  const blockerOf = (blocker: string | number): CreatedIssue | OpenTicketRef => (typeof blocker === "number" ? { ticket: blocker } : ticketIssue(blocker));
+  return {
+    actions: spinOffs.map((spinOff, i) => openSpinOff(spinOffIssue(i), { from: "design", issue: issueNumber }, spinOff, [...new Set(spinOff.blockedBy)].map(blockerOf), follows)),
+    listed: [
+      `\n\nThe Kit opened ${count(spinOffs.length, "Spin-off", "Spin-offs")}, work the Operator's answers put outside this outcome, which Triage sorts next:\n`,
+      ...spinOffs.flatMap((spinOff, i) => spinOffItem(spinOffIssue(i), spinOff.title, `Rests on: ${withoutMentions(spinOff.restsOn)}`)),
+    ],
+  };
+}
+
+/**
+ * A session's closing comment on the issue it rewrites or closes as not
+ * planned: `body` alone, as it always was, or, when the finish opened
+ * Spin-offs, `body` then the lines that name them, each linked by the number
+ * its issue was given.
+ */
+function closingComment(issueNumber: number, body: string, { listed }: PlannedSpinOffs): Action {
+  return listed.length === 0 ? { kind: "comment", issue: issueNumber, body } : { kind: "comment-linking", issue: issueNumber, body: [body, ...listed] };
+}
+
+/**
+ * The Spec a Spec's or a split's Spin-offs follow (#883): `spec`, and the
+ * Tickets the finish writes under it, blockers first, without its Operator
+ * steps, which no Implementer builds.
+ */
+function followedSpec(spec: CreatedIssue | number, outcome: readonly SpecTicket[]): FollowedSpec {
+  const tickets = dependencyOrder(outcome) ?? [];
+  return { spec, tickets: tickets.filter((ticket) => !ticket.operator).map((ticket) => ticketIssue(ticket.key)) };
 }
 
 /**
@@ -769,17 +825,12 @@ function openTicketsBlocking(ticket: SpecTicket, superseded: IssueSnapshot): Ope
 }
 
 /**
- * An Operator step's body: its own, then, when it asks the Operator to open a
- * new issue (#825), the Open as issue link `link` gives, then its steps as a
- * task list. With no link, it is the body the step is created with.
+ * An Operator step's body: its own, then its steps as a task list. It never
+ * carries an Open as issue link (#883): work that needs an issue of its own
+ * is a Spin-off, which the Kit opens.
  */
-function operatorStepBody(ticket: Extract<SpecTicket, { operator: true }>, link: OpenAsIssueLink | null): (string | OpenAsIssueLink)[] {
-  return [
-    withoutMentions(ticket.body),
-    ...(link === null ? [] : ["\n\n", link]),
-    "\n\n## Steps\n\n",
-    taskList(ticket.steps).join("\n"),
-  ];
+function operatorStepBody(ticket: Extract<SpecTicket, { operator: true }>): string {
+  return [withoutMentions(ticket.body), "\n\n## Steps\n\n", taskList(ticket.steps).join("\n")].join("");
 }
 
 /**
@@ -844,19 +895,25 @@ function commaList(issues: readonly CreatedIssue[]): (string | CreatedIssue)[] {
   return issues.flatMap((issue, i) => (i === 0 ? [issue] : [", ", issue]));
 }
 
-/** The small outcome: the issue becomes its own agent brief, ready for an Implementer. */
-function rewriteAsBrief(issueNumber: number, comment: string, brief: DesignAgentBrief, issue: IssueSnapshot): Action[] {
+/**
+ * The small outcome: the issue becomes its own agent brief, ready for an
+ * Implementer. A Spin-off of this finish may wait on the issue itself, which
+ * stays open as a Ticket.
+ */
+function rewriteAsBrief(issueNumber: number, comment: string, brief: DesignAgentBrief, issue: IssueSnapshot, written: readonly SpinOff[] = []): Action[] {
+  const spinOffs = openSpinOffs(issueNumber, written);
   return [
     { kind: "edit-issue-body", issue: issueNumber, body: rewrittenBody(briefBody(brief), issue) },
-    {
-      kind: "comment",
-      issue: issueNumber,
-      body: [
+    ...spinOffs.actions,
+    closingComment(
+      issueNumber,
+      [
         `${SESSION_FINISHED} This issue is now its agent brief, ready for an Implementer.`,
         "",
         closingNote(comment),
       ].join("\n"),
-    },
+      spinOffs,
+    ),
     { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
     // The session sets or clears the Stepped-up start as it rewrites the Ticket (ADR-0014); left out, the mark stays as it is.
     ...(brief.stepUp === false && issue.labels.includes(STEP_UP_LABEL)
@@ -949,6 +1006,7 @@ function supersedeBySpec(
   operator: string,
 ): Action[] {
   const tickets = ticketActions(output.tickets, issue, SPEC, operator);
+  const spinOffs = openSpinOffs(issueNumber, output.spinOffs, followedSpec(SPEC, output.tickets));
   const marker = keptMarker(issue);
   // The Monitor finds its issues by their label, so a Spec that keeps a Sentry group's marker is the
   // group's open issue to it. One that keeps red main's or a Main check's goes without, so the Monitor never closes it once the check is green.
@@ -973,6 +1031,7 @@ function supersedeBySpec(
       blockedBy: [],
     },
     ...tickets.actions,
+    ...spinOffs.actions,
     { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
     ...givenUpToSpec(issue),
     {
@@ -983,6 +1042,7 @@ function supersedeBySpec(
         SPEC,
         ` and its ${itemCount(output.tickets)}.\n\n${closingNote(output.comment)}`,
         ...tickets.moved,
+        ...spinOffs.listed,
       ],
     },
   ];
@@ -1052,7 +1112,9 @@ function rewriteAsOperatorBrief(
   brief: OperatorBrief,
   issue: IssueSnapshot,
   operator: string,
+  written: readonly SpinOff[] = [],
 ): Action[] {
+  const spinOffs = openSpinOffs(issueNumber, written);
   return [
     {
       kind: "edit-issue-body",
@@ -1072,15 +1134,16 @@ function rewriteAsOperatorBrief(
         issue,
       ),
     },
-    {
-      kind: "comment",
-      issue: issueNumber,
-      body: [
+    ...spinOffs.actions,
+    closingComment(
+      issueNumber,
+      [
         `${SESSION_FINISHED} This issue is now an Operator brief, ready for a Pairing session.`,
         "",
         closingNote(comment),
       ].join("\n"),
-    },
+      spinOffs,
+    ),
     { kind: "remove-label", issue: issueNumber, label: NEEDS_DESIGN },
     { kind: "add-labels", issue: issueNumber, labels: [READY_FOR_HUMAN] },
     { kind: "assign", issue: issueNumber, assignee: operator },
@@ -1125,16 +1188,34 @@ function keptCheck(issue: Pick<IssueSnapshot, "byApp" | "body">): string | null 
 }
 
 /**
+ * The pull request a Follow-up issue the Kit opened names in its marker
+ * (#885), which a session's rewrite keeps: the issue counts toward
+ * `caps.follow_up_issues` for as long as it is open, whatever its body
+ * becomes. Read as the Kit's other first-line markers are, on an issue the
+ * Fabrik App opened only. Null for any other issue.
+ */
+function keptFollowUp(issue: Pick<IssueSnapshot, "byApp" | "body">): number | null {
+  return issue.byApp ? followUpIssueOf(issue.body) : null;
+}
+
+/**
  * The body a session's rewrite leaves: `rewritten`, opened by the kept
- * check's marker line (#839), which is read only as a body's first line, then
- * the kept Monitor marker's line (#148), and ended with the From audit and
- * escape lines of the issue's old body (src/loop/carriedLines.ts, #150), so
- * whatever reads those lines still finds them. A line the old body quotes as
- * code, as a Monitor issue quotes its Sentry error, is never carried.
+ * check's marker line (#839) or the kept Follow-up marker line (#885), each
+ * of which is read only as a body's first line and which no issue has both
+ * of, then the kept Monitor marker's line (#148), and ended with the From
+ * audit and escape lines of the issue's old body (src/loop/carriedLines.ts,
+ * #150), so whatever reads those lines still finds them. A line the old body
+ * quotes as code, as a Monitor issue quotes its Sentry error, is never
+ * carried.
  */
 function rewrittenBody(rewritten: string, issue: IssueSnapshot, marker: MonitorMarker | null = keptMarker(issue)): string {
   const check = keptCheck(issue);
-  const opening = [...(check === null ? [] : [flakyCheckIssueMarker(check)]), ...(marker === null ? [] : [monitorMarkerLine(marker)])];
+  const followUp = keptFollowUp(issue);
+  const opening = [
+    ...(check === null ? [] : [flakyCheckIssueMarker(check)]),
+    ...(followUp === null ? [] : [followUpMarker(followUp)]),
+    ...(marker === null ? [] : [monitorMarkerLine(marker)]),
+  ];
   return withCarriedLines([...opening, rewritten].join("\n"), issue.body);
 }
 

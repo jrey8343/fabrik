@@ -8,9 +8,10 @@ import { keptBranchOff } from "./backToDesign.ts";
 import { consideredSection } from "./considered.ts";
 import { declineTrigger } from "./declineTrigger.ts";
 import { keptBranchGone, keptBranchStartOn, stopForGoneKeptBranch } from "./keptBranch.ts";
-import { type ImplementerAnswers, type ImplementOutput, parseImplementOutput } from "./implementOutput.ts";
+import { type ImplementerAnswers, type ImplementOutput, parseImplementOutput, type RequestedSpinOff } from "./implementOutput.ts";
 import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_AGENT, READY_FOR_HUMAN, REVIEW_LABEL } from "./labels.ts";
 import { whyNotReviewable } from "./agentPullRequest.ts";
+import { joinLinked, type Linked, linkedComment } from "./linked.ts";
 import { withoutMentions } from "./mentions.ts";
 import { mergedReason } from "./mergedTickets.ts";
 import { conflictRunEnded, owedConflictRun, requestChangesRunEnded } from "./conflicts.ts";
@@ -18,8 +19,11 @@ import { handBackStandsLine } from "./handBacks.ts";
 import {
   CONFLICT_RUN_MARKER,
   EMPTY_DIFF_MARKER,
+  fromPullRequestLine,
   handBackMarker,
   KEPT_BRANCH_START_AGAIN_MARKER,
+  type OpenedSpinOff,
+  openedSpinOffLine,
   pushedHeadMarker,
   requestChangesAnswersMarker,
   REQUEST_CHANGES_RUN_EMPTY_MARKER,
@@ -32,6 +36,7 @@ import {
   UNMARKED_RETRY_PUSH,
 } from "./markers.ts";
 import { type HeldOn, heldOn, heldUntilReset, heldUntilThen, onceReset, startsWhen } from "./hold.ts";
+import { backAtGateOnStandingPass } from "./digest.ts";
 import { handBack, owedRequestChangesRun } from "./mergeGate.ts";
 import {
   bodyOnly,
@@ -49,6 +54,7 @@ import {
 import { operatorChangesRequests, reviewLinks } from "./undelivered.ts";
 import { type AnswerLines, verdictActions } from "./review.ts";
 import { retryLeftForMiss } from "./shotsReview.ts";
+import { openSpinOff, spinOffIssue, spinOffItem } from "./spinOffs.ts";
 import type {
   Action,
   BranchChanges,
@@ -58,6 +64,7 @@ import type {
   LoopEvent,
   Plan,
   PullRequestSnapshot,
+  RequestChangesAsks,
   Snapshot,
 } from "./types.ts";
 
@@ -280,6 +287,9 @@ function opening(ticket: number, issue: IssueSnapshot, headSha: string): PullReq
     shotsMarker: null,
     changedTests: [],
     digests: [],
+    faults: [],
+    followUpsOpened: false,
+    openedSpinOffs: [],
   };
 }
 
@@ -339,7 +349,16 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   if (fixes === undefined) throw new Error("A first Implement run lands through applyImplementation");
   // A run this landing starts is held while every Subscription is used up, and its note says so (#341).
   const held = heldOn(snapshot.kitIssues, config);
-  const parsed = parseImplementOutput(event.output, fixes.review === undefined ? "pull-request" : "request-changes");
+  // A Request-changes run's Spin-offs are held to the asks the push job read from GitHub itself (#884), never to what
+  // the agent job passed out, and against the Spin-off issues it found already opened from the pull request. Both are
+  // read only for an output that returns Spin-offs.
+  const asks = fixes.review === undefined ? null : snapshot.requestChangesAsks;
+  const spinOffIssues = fixes.review === undefined ? null : snapshot.spinOffIssues;
+  const parsed = parseImplementOutput(
+    event.output,
+    fixes.review === undefined ? "pull-request" : "request-changes",
+    asks?.flatMap((review) => review.asks.map(({ id }) => id)),
+  );
   // A conflict-only run that can't land still ends, or it would stay in flight for good, its PR withheld from every Verdict (#304).
   const conflictEnds = (why: string): Plan | null =>
     fixes.conflict !== undefined && pullRequest !== null && pullRequest.open && pullRequest.number === fixes.pullRequest && pullRequest.conflictRunInFlight === fixes.conflict
@@ -433,10 +452,22 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   // The run's answers about the review it was started for, recorded with its outcome either way (#369).
   const { answers } = parsed.output;
   const recorded = fixes.review !== undefined && answers !== undefined ? answerLines(fixes.review, answers) : null;
+  // The points the run set aside as Spin-offs, opened with its outcome either way (#884). No other run's are read.
+  const spinOffs = requestChanges ? (parsed.output.spinOffs ?? []) : [];
+  if (spinOffs.length > 0 && asks === null) {
+    return { kind: "fail", failure: "infrastructure", reason: `The snapshot is missing the asks of the Request changes on #${pullRequest.number}, which the run's Spin-offs name` };
+  }
+  if (spinOffs.length > 0 && spinOffIssues === null) {
+    return { kind: "fail", failure: "infrastructure", reason: `The snapshot is missing the Spin-offs already opened from #${pullRequest.number}, which the run's Spin-offs are held against` };
+  }
+  const setAside = setAsideAsSpinOffs(spinOffs, pullRequest, issueNumber, asks ?? [], spinOffIssues ?? []);
+  if ("unread" in setAside) {
+    return { kind: "fail", failure: "infrastructure", reason: `The asks read of the Request changes on #${pullRequest.number} hold no \`${setAside.unread}\`, which a Spin-off of the run names in from` };
+  }
   // Merging main in or rebasing onto it, to fix a conflict, is a change even with none of the run's own.
   if (changes.net.length === 0 && changes.updatedFromMain !== true && mainMerge === undefined) {
     // A Request-changes run's empty diff is no Verdict, so it never costs a Retry (#388).
-    if (requestChanges) return { kind: "act", actions: requestChangesRunEmpty(pullRequest, fixes, branch, operator, recorded, parsed.output.summary) };
+    if (requestChanges) return { kind: "act", actions: requestChangesRunEmpty(pullRequest, fixes, branch, snapshot, config, recorded, parsed.output, setAside) };
     // A Touch-up whose findings were all about the body is told to commit nothing (#751): that's no empty diff.
     if (inFlight?.kind === "touch-up" && bodyOnly(pullRequest.verdicts.at(-1)?.tags)) {
       // It pushes no head, so an Evidence miss on it is shown and never sent back.
@@ -480,28 +511,28 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
         issue: pullRequest.number,
         body: pullRequestBody(parsed.output.summary, issueNumber, section, changedTestsOf(pullRequest, changes)),
       },
-      {
-        kind: "comment",
-        issue: pullRequest.number,
-        body: [
-          // Marks the push as the run's outcome, so Reviews give Verdicts again, and the next one is marked as from a Request-changes run if it was one.
-          // A Touch-up's says which it is (#750).
-          requestChanges ? REQUEST_CHANGES_RUN_MARKER : fixes.touchUp !== undefined ? touchUpPushMarker(fixes.touchUp) : RETRY_PUSH_MARKER,
-          ...(recorded === null ? [] : [recorded.marker]),
-          ...stepUpReasonLine(fixes),
-          ...pushedHead(changes),
-          requestChanges
-            ? `The Implementer pushed the Operator's requested changes to \`${branch}\`${mainMerge === undefined ? "" : `, which no longer conflicts with \`main\` at ${mainMerge.main.slice(0, 7)}`}; Review runs again on it.`
-            : fixes.touchUp !== undefined
-              ? `The Implementer pushed ${fixRunName("touch-up", fixes.touchUp)} to \`${branch}\`, fixing the Execution flaw's findings without using a Retry; Review runs again on it.`
-              : `${UNMARKED_RETRY_PUSH}\`${branch}\`; Review runs again on it.`,
-          "",
-          ...(recorded === null ? [] : [...recorded.lines, ""]),
-          // Present: the on-a-PR contract above requires it.
-          withoutMentions(parsed.output.fix ?? ""),
-          ...consideredSection(parsed.output.operatorCommentsConsidered ?? [], fixes.operatorComments),
-        ].join("\n"),
-      },
+      // Each Spin-off's issue, before the note that names it by its number (#884).
+      ...setAside.actions,
+      noteOf(pullRequest.number, [
+        // Marks the push as the run's outcome, so Reviews give Verdicts again, and the next one is marked as from a Request-changes run if it was one.
+        // A Touch-up's says which it is (#750).
+        requestChanges ? REQUEST_CHANGES_RUN_MARKER : fixes.touchUp !== undefined ? touchUpPushMarker(fixes.touchUp) : RETRY_PUSH_MARKER,
+        ...(recorded === null ? [] : [recorded.marker]),
+        ...setAside.markers,
+        ...stepUpReasonLine(fixes),
+        ...pushedHead(changes),
+        requestChanges
+          ? `The Implementer pushed the Operator's requested changes to \`${branch}\`${mainMerge === undefined ? "" : `, which no longer conflicts with \`main\` at ${mainMerge.main.slice(0, 7)}`}; Review runs again on it.`
+          : fixes.touchUp !== undefined
+            ? `The Implementer pushed ${fixRunName("touch-up", fixes.touchUp)} to \`${branch}\`, fixing the Execution flaw's findings without using a Retry; Review runs again on it.`
+            : `${UNMARKED_RETRY_PUSH}\`${branch}\`; Review runs again on it.`,
+        "",
+        ...(recorded === null ? [] : [...recorded.lines, ""]),
+        // Present: the on-a-PR contract above requires it.
+        withoutMentions(parsed.output.fix ?? ""),
+        ...setAside.listed,
+        ...consideredSection(parsed.output.operatorCommentsConsidered ?? [], fixes.operatorComments),
+      ]),
       { kind: "push-branch", branch },
       ...previewToLink(section, config, branch, pullRequest.number),
       // After the push note, so the flaw judges the head it names, and the Retry it calls for is in flight from it.
@@ -578,37 +609,192 @@ function bodyOnlyTouchUpLanded(
  * a Request-changes run that couldn't bring main in does, but its note counts
  * as no conflict attempt, and the Kit leaves its branch alone while it carries
  * ready-for-human (#841). The PR is never closed.
+ *
+ * Whatever the run set aside as Spin-offs is opened first, in all three
+ * cases, and named in the note (#884). And one case is no Hand-back: on a
+ * head that didn't move, whose latest Verdict is a pass on it, a run that
+ * returned a Spin-off for every ask it read (SetAside.everyAsk) and stated
+ * that no point at all was to be built (`onlySpinOffs`) had nothing to
+ * build. The pull request goes back to the Merge gate on that pass
+ * (backAtGateOnStandingPass), with no Review, and its note, still the run's
+ * outcome, says so. It takes both: the Kit can't tell a point to build from
+ * a point to set aside inside one ask, so only the run can say that an ask
+ * a Spin-off names held nothing else, and the run's word is held to the
+ * asks the Kit read itself. Anything short of that is handed back as
+ * before: a wrong call here would skip a Review.
  */
 function requestChangesRunEmpty(
   pullRequest: PullRequestSnapshot,
   fixes: NonNullable<ImplementRunFinished["fixes"]>,
   branch: string,
-  operator: string,
+  snapshot: Pick<Snapshot, "operator" | "kitIssues">,
+  config: KitConfig,
   recorded: AnswerLines | null,
-  summary: string,
+  output: Pick<ImplementOutput, "summary" | "fix" | "onlySpinOffs">,
+  setAside: SetAside,
 ): Action[] {
   const { number, headSha } = pullRequest;
+  const { operator } = snapshot;
   const started = fixes.headSha.slice(0, 7);
   const head = headSha.slice(0, 7);
   const moved = headSha !== fixes.headSha;
-  const body = [
+  const committedNothing = `The Request-changes run on #${number} committed nothing to \`${branch}\` on top of ${started}`;
+  const backAtGate = !moved && setAside.everyAsk && output.onlySpinOffs === true ? backAtGateOnStandingPass(pullRequest, snapshot, config) : null;
+  if (backAtGate !== null) {
+    const opens = backAtGate.some((action) => action.kind === "mark-ready-for-review");
+    return [
+      ...setAside.actions,
+      noteOf(number, [
+        REQUEST_CHANGES_RUN_EMPTY_MARKER,
+        ...(recorded === null ? [] : [recorded.marker]),
+        ...setAside.markers,
+        // What Kit code checked, then what the run stated: the note claims no more than both.
+        `${committedNothing}: it returned a Spin-off for every ask of the Operator's Request changes, the review's own words and each comment on the code in it, and stated that every point was asked for as an issue of its own, so nothing was to be built. ${
+          opens
+            ? `#${number} is back at the Merge gate at ${head}, where its pass stands. No Review runs, and no retry was used.`
+            : `Its pass on ${head} stands, so no Review runs and no retry was used. The Merge gate opens once its Digest is written.`
+        }`,
+        "",
+        ...(recorded === null ? [] : [...recorded.lines, ""]),
+        // Its `fix` says what it set aside and why, as its prompt asks of a review of only Spin-offs.
+        ...implementerSaidAndRun(output.fix ?? output.summary, fixes.runUrl).slice(1),
+        ...setAside.listed,
+      ]),
+      ...backAtGate,
+    ];
+  }
+  const comment = noteOf(number, [
     REQUEST_CHANGES_RUN_EMPTY_MARKER,
     ...(recorded === null ? [] : [recorded.marker]),
+    ...setAside.markers,
     moved
-      ? `The Request-changes run on #${number} committed nothing to \`${branch}\` on top of ${started}, the head it started on, which moved to ${head} while it worked. Review runs on ${head}, and its Verdict decides what's next. No retry was used.`
-      : `@${operator} The Request-changes run on #${number} committed nothing to \`${branch}\` on top of ${started}, so your requested changes aren't built, and it's yours from here. ${handBackStandsLine(number)} No retry was used.`,
+      ? `${committedNothing}, the head it started on, which moved to ${head} while it worked. Review runs on ${head}, and its Verdict decides what's next. No retry was used.`
+      : `@${operator} ${committedNothing}, so your requested changes aren't built, and it's yours from here. ${handBackStandsLine(number)} No retry was used.`,
     "",
     ...(recorded === null ? [] : [...recorded.lines, ""]),
     // Why it built nothing, if it said, so an Operator handed the PR back knows (#429).
-    ...implementerSaidAndRun(summary, fixes.runUrl).slice(1),
+    ...implementerSaidAndRun(output.summary, fixes.runUrl).slice(1),
+    ...setAside.listed,
     // Handed back only when the head didn't move: its last line, hidden, says so.
     ...(moved ? [] : [handBackMarker({ kind: "request-changes-empty", role: "implement" })]),
-  ].join("\n");
-  const comment: Action = { kind: "comment", issue: number, body };
+  ]);
   return moved
     ? // It notifies nobody, and takes itself off as the Review starts.
-      [comment, { kind: "add-labels", issue: number, labels: [REVIEW_LABEL] }]
-    : [comment, { kind: "add-labels", issue: number, labels: [READY_FOR_HUMAN] }, { kind: "mark-ready-for-review", pullRequest: number }];
+      [...setAside.actions, comment, { kind: "add-labels", issue: number, labels: [REVIEW_LABEL] }]
+    : [...setAside.actions, comment, { kind: "add-labels", issue: number, labels: [READY_FOR_HUMAN] }, { kind: "mark-ready-for-review", pullRequest: number }];
+}
+
+/**
+ * What a Request-changes run's Spin-offs add to the plan that lands it
+ * (#884): the issue each is opened as, the marker line that records each on
+ * the run's outcome note, and the lines of that note that name each. All
+ * empty for a run that returned none, whose plan is as it always was.
+ */
+interface SetAside {
+  readonly actions: Action[];
+  readonly markers: Linked[];
+  readonly listed: Linked[];
+  /**
+   * Whether a Spin-off names every ask the run read: it returned at least
+   * one Spin-off, and each review it was in flight for is among those the
+   * push job read, has at least one ask, and has every ask named by some
+   * Spin-off's `from`. An ask is a review's own words, or one comment on the
+   * code in it, as the Digest's facts list them. Kit code checks this and
+   * nothing finer, so a review it cannot read, as one dismissed since, never
+   * counts. It does not say the asks held nothing to build: one ask can
+   * hold a point to build beside the point set aside, which only the run's
+   * own statement (`onlySpinOffs`) rules out.
+   */
+  readonly everyAsk: boolean;
+}
+
+/**
+ * Opens each point a Request-changes run set aside as a Spin-off, in the
+ * plan that lands the run on `pullRequest`, as every Spin-off is opened
+ * (openSpinOff, src/loop/spinOffs.ts). Its marker names the pull request and
+ * the Request changes that asked for it, its body ends with the `From PR`
+ * line, and it waits, by a blocked-by edge, on `ticket`, the pull request's
+ * Ticket, so Dispatch holds it until that Ticket closes as completed and it
+ * is never built on a `main` that lacks the pull request's work. The note
+ * names each by its number and title, with a link to the Operator's words,
+ * which is the place `asks`, the push job's own read, gives for the ask the
+ * Spin-off names: the run's own text never supplies a link.
+ *
+ * Each is opened once, whatever lands twice. A Spin-off is taken for one
+ * already opened when the ask it names in `from` and its title, trimmed and
+ * with no mentions as the issue was opened, are both the same:
+ *
+ * - **One an earlier note that landed records** (`pullRequest.openedSpinOffs`)
+ *   is dropped, as one a later run returns again for an earlier review. That
+ *   note already gives it to every later run, so this one neither opens it
+ *   nor names it, and it counts toward nothing.
+ * - **One whose issue is there already** (`opened`, the push job's own read
+ *   of the Fabrik App's Spin-off issues from this pull request) is not
+ *   opened again: an earlier landing of this run opened it and then failed,
+ *   or its push was refused, which takes its note back out of the thread.
+ *   The note still names it, by the number it has, so later runs are given
+ *   it.
+ *
+ * The contract has already refused a `from` that names none of `asks`
+ * (readRequestChangesRunOutput). Should one get here all the same, nothing
+ * is added to the plan and `unread` names it, so the landing fails as any
+ * other whose snapshot lacks what it needs, and no issue is opened under a
+ * review nobody read.
+ */
+export function setAsideAsSpinOffs(
+  returned: readonly RequestedSpinOff[],
+  pullRequest: PullRequestSnapshot,
+  ticket: number,
+  asks: readonly RequestChangesAsks[],
+  opened: readonly OpenedSpinOff[],
+): SetAside | { readonly unread: string } {
+  const same = (spinOff: RequestedSpinOff) => (one: OpenedSpinOff) => one.from === spinOff.from && one.title.trim() === withoutMentions(spinOff.title).trim();
+  const spinOffs = returned.filter((spinOff) => !pullRequest.openedSpinOffs.some(same(spinOff)));
+  if (spinOffs.length === 0) return { actions: [], markers: [], listed: [], everyAsk: false };
+  const askNamed = (from: string) => asks.flatMap(({ review, asks: theirs }) => theirs.filter(({ id }) => id === from).map(({ url }) => ({ review, url })))[0];
+  const unread = spinOffs.find(({ from }) => askNamed(from) === undefined);
+  if (unread !== undefined) return { unread: unread.from };
+  // Each with the ask it names, and its issue: the number of the one that is there already, or the one this plan creates, keyed by its place among those returned.
+  const each = spinOffs.flatMap((spinOff, i) => {
+    const ask = askNamed(spinOff.from);
+    return ask === undefined ? [] : [{ spinOff, ask, issue: opened.find(same(spinOff))?.issue ?? spinOffIssue(i) }];
+  });
+  const one = each.length === 1;
+  const named = new Set(each.map(({ spinOff }) => spinOff.from));
+  const read = pullRequest.requestChangesRunReviews.map((review) => asks.find((one) => one.review === review)?.asks ?? []);
+  return {
+    everyAsk: read.length > 0 && read.every((theirs) => theirs.length > 0 && theirs.every(({ id }) => named.has(id))),
+    actions: each.flatMap(({ spinOff, ask, issue }) =>
+      typeof issue === "number"
+        ? []
+        : [
+            openSpinOff(
+              issue,
+              { from: "request-changes", pullRequest: pullRequest.number, review: ask.review, ask: spinOff.from },
+              { ...spinOff, lines: [fromPullRequestLine(pullRequest.number)] },
+              [{ ticket }],
+            ),
+          ],
+    ),
+    markers: each.map(({ spinOff, issue }) => openedSpinOffLine(issue, { from: spinOff.from, title: withoutMentions(spinOff.title) })),
+    listed: [
+      [
+        `\nThe Kit opened ${one ? "1 Spin-off" : `${each.length} Spin-offs`}, work the Operator's Request changes asked to be ${one ? "an issue of its own" : "issues of their own"}, which Triage sorts next. ${one ? "It waits" : "Each waits"} on #${ticket}, this pull request's Ticket.\n`,
+        ...each.flatMap(({ spinOff, ask, issue }) =>
+          spinOffItem(issue, spinOff.title, `Asked for in [the Operator's ${spinOff.from.startsWith("inline-") ? "comment on the code" : "Request changes"}](${ask.url})`),
+        ),
+      ],
+    ],
+  };
+}
+
+/**
+ * A run's note on `issue`, its lines joined: a plain comment, as it always
+ * was, unless a line names an issue the plan opens, whose number the
+ * adapter writes in as it posts the note.
+ */
+function noteOf(issue: number, lines: readonly (string | Linked)[]): Action {
+  return linkedComment(issue, joinLinked(lines.map((line) => (typeof line === "string" ? [line] : line)), "\n"));
 }
 
 /**

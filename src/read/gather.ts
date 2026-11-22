@@ -27,7 +27,7 @@
 import { gatherWeeklyRunIssues, isAgent, labelEventsOf, openIssueOf, openKitIssueOf, openPullRequestOf, plainPullRequestOf } from "../github/facts.ts";
 import { pagesOf, type ReadClient, type Repo, whyUnread } from "../github/client.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
-import { byAppOf, gatherClosedCheckIssues, gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, loginOf, readKitConfigSources } from "../github/snapshot.ts";
+import { byAppOf, CLOSED_AS, gatherClosedCheckIssues, gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, loginOf, readKitConfigSources } from "../github/snapshot.ts";
 import { type EvidenceMarker, evidenceMarkerIn } from "../evidence/uiEvidence.ts";
 import { type ShotsMarker, shotsMarkerIn } from "../evidence/shotsEvidence.ts";
 import { checkCallerWorkflow, fabrikRefsIn } from "../kit/caller.ts";
@@ -39,7 +39,8 @@ import type { TrialFacts, TrialProblemFacts } from "../kit/trialResult.ts";
 import type { CommentFacts, GitHubFacts, RepoKitFacts } from "../kit/weeklySummary.ts";
 import { sameRepo } from "../loop/blockers.ts";
 import { AUDIT_LABEL, MAP_LABEL, REPLAY_LABEL, RETRO_LABEL, TRIAL_LABELS } from "../loop/labels.ts";
-import { trialProblemIn } from "../loop/markers.ts";
+import { type FollowUpsOpened, trialProblemIn } from "../loop/markers.ts";
+import type { FollowUp } from "../loop/verdict.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import {
   type ClosedIssueCommentsQueryResult,
@@ -47,6 +48,8 @@ import {
   deploymentsQuery,
   MERGED_PULL_REQUESTS_QUERY,
   MERGED_SINCE_COUNT_QUERY,
+  type MergedCommentsQueryResult,
+  mergedCommentsQuery,
   type MergedPullRequestsQueryResult,
   OPEN_ISSUES_QUERY,
   type RawHomeComment,
@@ -63,6 +66,7 @@ import {
   type RepoQueryResult,
   UNPROMOTED_PULL_REQUESTS_QUERY,
 } from "./homeQueries.ts";
+import { mergedFollowUpsOf } from "./related.ts";
 import { gatherStore, type StoreFacts } from "./store.ts";
 
 /** How far back the merged agent pull requests reach: as long as a merged one stands. */
@@ -290,6 +294,20 @@ export interface StagingFacts {
 }
 
 /**
+ * What a merged agent pull request's comments say of its Follow-ups (#885,
+ * mergedFollowUpsOf in ./related.ts): in `named`, those its last Verdict
+ * named, a pass, each with its kind, then each fault only an earlier pass
+ * named that the Kit's comment at the merge records; and in `opened`, each
+ * fault the Kit opened as an issue when it merged, with the issue, as that
+ * comment records.
+ */
+export interface MergedFollowUpsFacts {
+  readonly pullRequest: number;
+  readonly named: readonly FollowUp[];
+  readonly opened: FollowUpsOpened["opened"];
+}
+
+/**
  * What a gather reads of one Product repo: the facts the Standing rule reads,
  * and what a reader shows beside a Standing. Plain data: written as JSON and
  * read back they are equal.
@@ -318,6 +336,13 @@ export interface Facts {
   readonly closedIssueComments: readonly ClosedIssueCommentsFacts[];
   /** Whether each open agent pull request's Ticket is closed; a Ticket GitHub gave no state of is not here. */
   readonly ticketStates: readonly TicketStateFacts[];
+  /**
+   * What the comments of each agent pull request merged in the last 24 hours
+   * say of its Follow-ups (#885), for each that says of one: empty
+   * in a repo with none, which no query is made for. No such key in facts
+   * kept from an earlier release.
+   */
+  readonly mergedFollowUps: readonly MergedFollowUpsFacts[];
   /**
    * The evidence marker of each agent pull request the Fabrik App opened,
    * open or merged in the last 24 hours, that has one: a UI pull request's.
@@ -457,6 +482,7 @@ async function gatherFacts(
     mergedLastDay: mergedLastDay.map(mergedFactsOf),
     crossReferences,
     closedIssueComments: await gatherClosedIssueComments(github, repo, crossReferences),
+    mergedFollowUps: await gatherMergedFollowUps(github, repo, mergedLastDay.map(({ number }) => number)),
     ticketStates: agent.flatMap(({ closingIssuesReferences }) => {
       // The Ticket is the first issue an agent pull request closes, as the Weekly summary's mapping takes it.
       const ticket = closingIssuesReferences.nodes[0];
@@ -761,9 +787,6 @@ function trialProblemOf({ number, title, state, stateReason, body }: RawTrialIss
   return [{ issue: number, pullRequest: named, title: title ?? "", open: state === "OPEN", closedAs }];
 }
 
-/** How the Kit names each reason GitHub closes an issue with. */
-const CLOSED_AS = { COMPLETED: "completed", NOT_PLANNED: "not_planned", DUPLICATE: "duplicate" } as const;
-
 /** GitHub's cross-reference to open agent pull request `pullRequest` as a fact, when it is an issue's; none for a pull request's. */
 function crossReferenceOf(pullRequest: number, { source }: RawCrossReference): CrossReferenceFacts[] {
   if (source?.__typename !== "Issue" || source.number === undefined) return [];
@@ -790,6 +813,25 @@ async function gatherClosedIssueComments(github: ReadClient, repo: Repo, crossRe
     if (issue === null || issue === undefined) return [];
     const comments = issue.comments.nodes.map(({ url, author, body, createdAt }) => ({ url, author: loginOf(author), byBot: author?.__typename === "Bot", body, at: createdAt }));
     return [{ issue: number, comments }];
+  });
+}
+
+/**
+ * What the comments of each of these merged agent pull requests say of its
+ * Follow-ups (#885), lowest number first, for each that says of
+ * one: one query for them all, by number, each one's latest comments, and
+ * none at all with no such pull request, so a repo where nothing merged in
+ * the last day pays nothing. One GitHub no longer has is left out.
+ */
+async function gatherMergedFollowUps(github: ReadClient, repo: Repo, pullRequests: readonly number[]): Promise<MergedFollowUpsFacts[]> {
+  const numbers = [...new Set(pullRequests)].sort((a, b) => a - b);
+  if (numbers.length === 0) return [];
+  const { repository } = await github.graphql<MergedCommentsQueryResult>(mergedCommentsQuery(numbers), { owner: repo.owner, name: repo.name });
+  return numbers.flatMap((number) => {
+    const pullRequest = repository[`pullRequest${number}`];
+    if (pullRequest === null || pullRequest === undefined) return [];
+    const read = mergedFollowUpsOf(number, pullRequest.comments.nodes.map(({ body, author }) => ({ body, byBot: author?.__typename === "Bot" })));
+    return read === null ? [] : [read];
   });
 }
 

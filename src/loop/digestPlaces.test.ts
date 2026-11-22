@@ -302,7 +302,7 @@ describe("The Digest's data line", () => {
     const [first, second, third] = bodyOf(aDigestReply()).split("\n");
 
     expect(first).toBe(`<!-- fabrik:digest {"head":"${HEAD}","asks":[],"carriedFrom":null} -->`);
-    expect(second).toBe(`<!-- fabrik:digest-data {"v":1,"items":[],"whatItDoes":"${WHAT}","howItGotHere":"${HOW}","followUps":[]} -->`);
+    expect(second).toBe(`<!-- fabrik:digest-data {"v":1,"items":[],"whatItDoes":"${WHAT}","howItGotHere":"${HOW}","followUps":[],"faults":[]} -->`);
     expect(third).toBe(`**Digest** of #50, written as of [\`aaaaaaa\`](https://github.com/acme/shop/pull/50/commits/${HEAD}).`);
     expect(digestMarkIn(bodyOf(aDigestReply()))).toEqual({ head: HEAD, asks: [], carriedFrom: null });
   });
@@ -324,9 +324,9 @@ describe("The Digest's data line", () => {
     followUps: ["f2", "f1"],
   });
   const FOLLOW_UPS = [
-    { id: "f1", title: "Share a saved basket by link", url: "https://github.com/acme/shop/issues/new?title=Share" },
-    { id: "f2", title: "Expire saved baskets", url: "https://github.com/acme/shop/issues/new?title=Expire" },
-    { id: "f3", title: "Rename the cart module", url: "https://github.com/acme/shop/issues/new?title=Rename" },
+    { id: "f1", kind: "idea" as const, title: "Share a saved basket by link", url: "https://github.com/acme/shop/issues/new?title=Share" },
+    { id: "f2", kind: "idea" as const, title: "Expire saved baskets", url: "https://github.com/acme/shop/issues/new?title=Expire" },
+    { id: "f3", kind: "idea" as const, title: "Rename the cart module", url: "https://github.com/acme/shop/issues/new?title=Rename" },
   ];
   const GIVEN = aDigestGiven({
     repoUrl: "https://github.com/acme/shop",
@@ -362,6 +362,7 @@ describe("The Digest's data line", () => {
       { title: "Share a saved basket by link", url: "https://github.com/acme/shop/issues/new?title=Share" },
       { title: "Expire saved baskets", url: "https://github.com/acme/shop/issues/new?title=Expire" },
     ],
+    faults: [],
   };
 
   it("holds the Digest as it landed: the items in kind order, a place that did not resolve and a suggested request that may not stand dropped, and the Follow-ups shown", () => {
@@ -396,7 +397,7 @@ describe("The Digest's data line", () => {
 
     expect(line).not.toContain("review-8");
     expect(line).not.toContain("store the lines");
-    expect(Object.keys(dataOf(bodyOf(REPLY, GIVEN))).toSorted()).toEqual(["followUps", "howItGotHere", "items", "v", "whatItDoes"]);
+    expect(Object.keys(dataOf(bodyOf(REPLY, GIVEN))).toSorted()).toEqual(["faults", "followUps", "howItGotHere", "items", "v", "whatItDoes"]);
   });
 
   it("can neither close its hidden line early nor mention anyone, whatever a claim holds, and reads back as the Digest shows it", () => {

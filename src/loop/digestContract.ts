@@ -6,6 +6,7 @@
 // and nothing that runs an agent or a job. Pure.
 import type { DigestAsk, DigestFacts, Round } from "./digestFacts.ts";
 import { type DigestHead, type DigestPlace, MAX_PLACES, type NamedPlace, PLACE_KINDS, placeAt } from "./digestPlaces.ts";
+import { oncePerTitle, OPENS_FAULT_AT_MERGE } from "./followUps.ts";
 import { markerJson } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
@@ -139,8 +140,14 @@ export function isDigestComment(body: string): boolean {
   return digestMarkIn(body) !== null || noDigestIn(body) !== null;
 }
 
-/** How the writer answers an ask: the thing asked for is in the head, is not, or the writer could not tell. */
-export const ASK_ANSWERS = ["in-head", "not-in-head", "could-not-tell"] as const;
+/**
+ * How the writer answers an ask: the thing asked for is in the head, is not,
+ * or the writer could not tell. Or, for an ask the Kit opened a Spin-off
+ * from (#884), that the whole of it was set aside: the Operator asked for
+ * every point of it to be an issue of its own, so nothing of it was to be
+ * built on the pull request. Kit code takes `set-aside` on no other ask.
+ */
+export const ASK_ANSWERS = ["in-head", "not-in-head", "could-not-tell", "set-aside"] as const;
 export type AskAnswer = (typeof ASK_ANSWERS)[number];
 
 /** How the writer checked an ask: by a test, an end-to-end test, reading the code, a search of it, or Required checks. */
@@ -555,8 +562,15 @@ export interface DigestData {
   readonly items: readonly DigestDataItem[];
   readonly whatItDoes: string;
   readonly howItGotHere: string;
-  /** Each Follow-up shown, with its Open as issue link. */
+  /** Each idea shown, with its Open as issue link: the Follow-ups the writer chose. */
   readonly followUps: readonly { readonly title: string; readonly url: string }[];
+  /**
+   * Each fault the pull request's passes named (#885), once by its title:
+   * the Follow-ups the Kit opens as issues when the pull request merges,
+   * which Kit code shows whatever the writer chose. None on a Digest written
+   * before a Follow-up had a kind.
+   */
+  readonly faults: readonly { readonly title: string }[];
 }
 
 /**
@@ -566,9 +580,10 @@ export interface DigestData {
  * (digestItemsOf); each place is as it resolves in the head, one that does
  * not being dropped and its item kept (placeAt); a picture is kept only when
  * it is one of the pictures, a captured route or a produced named shot's
- * name, compared exactly, and is dropped otherwise, its item kept; the Follow-ups are the ones the reply names,
- * once, in the order Kit code listed them; and every text has lost its
- * mentions.
+ * name, compared exactly, and is dropped otherwise, its item kept; the Follow-ups are the ideas the reply names,
+ * once, in the order Kit code listed them; the faults are every one Kit code
+ * listed, once by its trimmed title, as the merge opens them
+ * (src/loop/followUpIssues.ts); and every text has lost its mentions.
  */
 function digestDataOf(reply: DigestReply, { facts, head, pictures }: Pick<DigestGiven, "facts" | "head" | "pictures">): DigestData {
   return {
@@ -583,7 +598,8 @@ function digestDataOf(reply: DigestReply, { facts, head, pictures }: Pick<Digest
     })),
     whatItDoes: shown(reply.whatItDoes),
     howItGotHere: shown(reply.howItGotHere),
-    followUps: facts.followUps.filter(({ id }) => reply.followUps.includes(id)).map(({ title, url }) => ({ title: withoutMentions(title), url })),
+    followUps: facts.followUps.flatMap(({ id, title, url }) => (url !== null && reply.followUps.includes(id) ? [{ title: withoutMentions(title), url }] : [])),
+    faults: oncePerTitle(facts.followUps.filter(({ kind }) => kind === "fault")).map(({ title }) => ({ title: withoutMentions(title.trim()) })),
   };
 }
 
@@ -621,7 +637,7 @@ function isDataItem(value: unknown): value is DigestDataItem {
 
 /** Whether a value has every field of a data line at this release's version, each of its type. A field it does not know is no fault: a later release may add one. */
 function isDigestData(value: Record<string, unknown>): boolean {
-  const { v, items, whatItDoes, howItGotHere, followUps } = value;
+  const { v, items, whatItDoes, howItGotHere, followUps, faults } = value;
   return (
     v === DIGEST_DATA_VERSION &&
     Array.isArray(items) &&
@@ -629,7 +645,9 @@ function isDigestData(value: Record<string, unknown>): boolean {
     typeof whatItDoes === "string" &&
     typeof howItGotHere === "string" &&
     Array.isArray(followUps) &&
-    followUps.every((followUp) => isObject(followUp) && typeof followUp["title"] === "string" && typeof followUp["url"] === "string")
+    followUps.every((followUp) => isObject(followUp) && typeof followUp["title"] === "string" && typeof followUp["url"] === "string") &&
+    // A data line written before a Follow-up had a kind has no faults (#885).
+    (faults === undefined || (Array.isArray(faults) && faults.every((fault) => isObject(fault) && typeof fault["title"] === "string")))
   );
 }
 
@@ -678,7 +696,8 @@ export function readDigestComment(body: string): DigestCommentRead {
   if (value["v"] !== DIGEST_DATA_VERSION) return { ok: false, why: "unknown-version" };
   if (!isDigestData(value)) return { ok: false, why: "malformed" };
   const foldsLine = lines.indexOf(DIGEST_FOLDS_MARKER);
-  return { ok: true, ...mark, data: value as unknown as DigestData, folds: foldsLine === -1 ? "" : lines.slice(foldsLine + 1).join("\n") };
+  const data = { faults: [], ...value } as unknown as DigestData;
+  return { ok: true, ...mark, data, folds: foldsLine === -1 ? "" : lines.slice(foldsLine + 1).join("\n") };
 }
 
 /** Where a Digest is: the Product repo's web address, its pull request, the head it is written as of, a full sha, and what its pictures name. */
@@ -714,8 +733,10 @@ function asCode(name: string): string {
  * each item as its bold claim and its sentence, then its places as plain
  * links, then its picture, named in words as a captured route or an Evidence
  * shot as `where` says, or "Nothing." when there is none;
- * What it does; How it got here; and the Follow-ups, each as its title and
- * its Open as issue link, or that none is named. No code appears in it, no
+ * What it does; How it got here; and the Follow-ups, first each fault as its
+ * title and the line saying the Kit opens it when the pull request merges
+ * (#885), then each idea shown as its title and its Open as issue link, or
+ * that none is named. No code appears in it, no
  * image is embedded or linked, and an item's suggested request is not
  * rendered: it is for a reader of the data.
  */
@@ -745,15 +766,21 @@ export function digestTop(data: DigestData, where: DigestWhere): string {
     "",
     "### Follow-ups",
     "",
-    ...(data.followUps.length === 0 ? ["None named."] : data.followUps.map(({ title, url }) => `- ${withoutMentions(title)}: [Open as issue](${url})`)),
+    ...(data.faults.length + data.followUps.length === 0
+      ? ["None named."]
+      : [
+          ...data.faults.map(({ title }) => `- ${withoutMentions(title)}: the Kit ${OPENS_FAULT_AT_MERGE}`),
+          ...data.followUps.map(({ title, url }) => `- ${withoutMentions(title)}: [Open as issue](${url})`),
+        ]),
   ].join("\n");
 }
 
-/** Each answer, as the criteria table says it. One that is not "in the head" is marked, in bold. */
+/** Each answer, as the criteria table says it. One that is missing, or that the writer could not tell, is marked, in bold. */
 const ANSWERED: Readonly<Record<AskAnswer, string>> = {
   "in-head": "In the head",
   "not-in-head": "**Not in the head**",
   "could-not-tell": "**Could not tell**",
+  "set-aside": "Set aside",
 };
 
 /** How an ask was checked, as the criteria table says it. */
@@ -765,11 +792,17 @@ const CHECKED: Readonly<Record<CheckedBy, string>> = {
   "required-checks": "Required checks",
 };
 
-/** An ask of the Operator's, as the criteria table names it to the Operator: a link to it, and for a line comment where it is. */
-function askedFor({ what, url, path, line }: DigestAsk): string {
-  if (what === "request-changes") return `Your [Request changes](${url})`;
+/**
+ * An ask of the Operator's, as the criteria table names it to the Operator:
+ * a link to it, and for a line comment where it is. Under it, in the same
+ * cell, go the Spin-offs the Kit opened from it (#884), each by its issue
+ * and title, which are Kit code's facts and never the writer's words.
+ */
+function askedFor({ what, url, path, line, spinOffs = [] }: DigestAsk): string {
+  const opened = spinOffs.length === 0 ? "" : `<br>Opened as ${spinOffs.length === 1 ? "a Spin-off" : "Spin-offs"}: ${spinOffs.map(({ issue, title }) => `#${issue} ${cell(title)}`).join("; ")}`;
+  if (what === "request-changes") return `Your [Request changes](${url})${opened}`;
   const on = path === undefined ? "" : ` on \`${cell(path)}\`${typeof line === "number" ? `, line ${line}` : ""}`;
-  return `Your [line comment](${url})${on}`;
+  return `Your [line comment](${url})${on}${opened}`;
 }
 
 /**
@@ -793,14 +826,22 @@ function criteriaTable(answers: readonly DigestAnswer[], asks: readonly DigestAs
  * Why Kit code refuses a reply over its answers, each reason a clause, or
  * none: an ask of Kit code's it leaves unanswered, and an answer under an id
  * that is neither one of Kit code's nor a criterion's. A criterion is the
- * writer's own to add, so Kit code cannot tell that one was left out.
+ * writer's own to add, so Kit code cannot tell that one was left out. And an
+ * answer of "set aside" (#884) for anything but an ask the Kit opened a
+ * Spin-off from: only the Operator's words set a point aside, and the Kit's
+ * record of the Spin-off is what shows they did.
  */
 function answersRefused(answers: readonly DigestAnswer[], asks: readonly DigestAsk[]): string[] {
   const unanswered = asks.filter((ask) => !answers.some(({ id }) => id === ask.id)).map(({ id }) => id);
   const unknown = answers.filter(({ id }) => !CRITERION_ID.test(id) && !asks.some((ask) => ask.id === id)).map(({ id }) => id);
+  const known = (id: string): boolean => CRITERION_ID.test(id) || asks.some((ask) => ask.id === id);
+  const notSetAside = answers
+    .filter(({ id, answer }) => answer === "set-aside" && known(id) && (asks.find((ask) => ask.id === id)?.spinOffs ?? []).length === 0)
+    .map(({ id }) => id);
   return [
     ...(unanswered.length === 0 ? [] : [`the reply left ${unanswered.length === 1 ? "an ask" : "asks"} unanswered: ${named(unanswered)}`]),
     ...(unknown.length === 0 ? [] : [`the reply answers under an id that is neither an ask Kit code listed nor a criterion's: ${named(unknown)}`]),
+    ...(notSetAside.length === 0 ? [] : [`the reply answers set aside for ${notSetAside.length === 1 ? "an ask" : "asks"} the Kit opened no Spin-off from: ${named(notSetAside)}`]),
   ];
 }
 
@@ -817,12 +858,14 @@ const KIND_SAID: Readonly<Record<ItemKind, string>> = {
  * head" or "could not tell", a criterion's included, is named by an
  * asked-for-and-not-here item. Such an item names at least one ask, each one
  * answered and none answered "in the head"; an item of another kind names
- * none. An item is named by its place in the reply.
+ * none. An item is named by its place in the reply. An ask answered "set
+ * aside" (#884) needs no item, and an asked-for-and-not-here item may not
+ * name it: nothing of it was to be built, so nothing of it is missing.
  */
 function itemsRefused(items: readonly DigestItem[], answers: readonly DigestAnswer[]): string[] {
   const asks = (ids: readonly string[]): string => `${ids.length === 1 ? "an ask" : "asks"}`;
   const covered = new Set(items.flatMap((item) => (item.kind === "asked-not-here" ? item.asks : [])));
-  const uncovered = answers.filter(({ id, answer }) => answer !== "in-head" && !covered.has(id)).map(({ id }) => id);
+  const uncovered = answers.filter(({ id, answer }) => answer !== "in-head" && answer !== "set-aside" && !covered.has(id)).map(({ id }) => id);
   return [
     ...(uncovered.length === 0 ? [] : [`no asked-for-and-not-here item names ${asks(uncovered)} answered not in the head or could not tell: ${named(uncovered)}`]),
     ...items.flatMap((item, index) => {
@@ -832,9 +875,11 @@ function itemsRefused(items: readonly DigestItem[], answers: readonly DigestAnsw
       if (ids.length === 0) return [`${said} names no ask`];
       const unanswered = ids.filter((id) => !answers.some((answer) => answer.id === id));
       const inHead = ids.filter((id) => answers.some((answer) => answer.id === id && answer.answer === "in-head"));
+      const setAside = ids.filter((id) => answers.some((answer) => answer.id === id && answer.answer === "set-aside"));
       return [
         ...(unanswered.length === 0 ? [] : [`${said} names ${asks(unanswered)} the reply does not answer: ${named(unanswered)}`]),
         ...(inHead.length === 0 ? [] : [`${said} names ${asks(inHead)} answered in the head: ${named(inHead)}`]),
+        ...(setAside.length === 0 ? [] : [`${said} names ${asks(setAside)} answered set aside: ${named(setAside)}`]),
       ];
     }),
   ];
@@ -875,10 +920,19 @@ function wordsRefused({ items, whatItDoes, howItGotHere }: DigestReply): string[
   return [`Needs your eyes, What it does and How it got here come to ${words} words between them, over the ${MAX_TOP_WORDS} a Digest's top may hold`];
 }
 
-/** Why Kit code refuses a reply over the Follow-ups it names, or nothing: one Kit code did not list. */
+/**
+ * Why Kit code refuses a reply over the Follow-ups it names, or nothing: one
+ * Kit code did not list, and a fault (#885), which Kit code shows itself in
+ * every Digest, so the writer's choice is only among the ideas.
+ */
 function followUpsRefused(shown: readonly string[], listed: DigestFacts["followUps"]): string[] {
-  const unlisted = [...new Set(shown)].filter((id) => !listed.some((followUp) => followUp.id === id));
-  return unlisted.length === 0 ? [] : [`the reply names ${unlisted.length === 1 ? "a Follow-up" : "Follow-ups"} Kit code did not list: ${named(unlisted)}`];
+  const ids = [...new Set(shown)];
+  const unlisted = ids.filter((id) => !listed.some((followUp) => followUp.id === id));
+  const faults = ids.filter((id) => listed.some((followUp) => followUp.id === id && followUp.kind === "fault"));
+  return [
+    ...(unlisted.length === 0 ? [] : [`the reply names ${unlisted.length === 1 ? "a Follow-up" : "Follow-ups"} Kit code did not list: ${named(unlisted)}`]),
+    ...(faults.length === 0 ? [] : [`the reply names ${faults.length === 1 ? "a fault" : "faults"} among the Follow-ups to show, which Kit code shows itself: ${named(faults)}`]),
+  ];
 }
 
 /**

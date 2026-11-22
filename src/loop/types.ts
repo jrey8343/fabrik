@@ -15,7 +15,8 @@ import type { ChangeFingerprint } from "./changeFingerprint.ts";
 import type { DigestGiven, PictureOf } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
 import type { Label, TriggerLabel } from "./labels.ts";
-import type { CheckFixMark, FlakyCheckMark, OperatorMentionMark, PrototypeRequestMarker } from "./markers.ts";
+import type { CheckFixMark, FlakyCheckMark, OpenedSpinOff, OperatorMentionMark, PrototypeRequestMarker } from "./markers.ts";
+import type { Fault } from "./verdict.ts";
 import type { RequestChangesText, RollInIssue } from "./owedRollIn.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
@@ -1085,6 +1086,27 @@ export interface PullRequestSnapshot {
    */
   readonly digests: readonly DigestOnThread[];
   /**
+   * Each fault its passes named (#885), oldest pass first, in the order each
+   * named them, one named twice held twice, read from the Fabrik App's
+   * Verdict comments (faultsNamedIn, src/loop/followUps.ts): what the Kit
+   * opens as issues when it merges (src/loop/followUpIssues.ts).
+   */
+  readonly faults: readonly Fault[];
+  /**
+   * Whether the Kit has posted its comment saying what became of those
+   * faults, which it posts once the pull request has merged: with it, a
+   * second look at the same merge opens nothing more.
+   */
+  readonly followUpsOpened: boolean;
+  /**
+   * Each Spin-off the Kit's notes on it record as opened from a Request
+   * changes (#884), oldest first, each issue once (openedSpinOffsAmong):
+   * read from the notes that landed, so one whose push was refused records
+   * nothing here. A later run that returns one of them again has it dropped
+   * (src/loop/implement.ts).
+   */
+  readonly openedSpinOffs: readonly OpenedSpinOff[];
+  /**
    * The Kit's list of asks on it now, by id, oldest first: each Request
    * changes of the Operator's a Review is given and each line comment in it,
    * as a Digest's first line records the ones it answered
@@ -1626,6 +1648,32 @@ export interface Snapshot {
    */
   readonly namedPullRequests: readonly NamedPullRequestSnapshot[] | null;
   /**
+   * Gathered for a Request-changes run finishing whose output returns
+   * Spin-offs (#884): the Operator's Request changes on its pull request
+   * that are not dismissed, oldest first, each with its asks, as the push
+   * job reads them from GitHub itself. A Spin-off's `from` is checked
+   * against them, never against what the agent job passed out. Null for any
+   * other event, and for a run that returned none.
+   */
+  readonly requestChangesAsks: readonly RequestChangesAsks[] | null;
+  /**
+   * Gathered with `requestChangesAsks`, and null whenever it is: the
+   * Spin-off issues the Fabrik App already opened from that pull request
+   * (#884), open or closed, lowest number first, each with the ask its
+   * marker names and its title as it is now. An earlier landing of the same
+   * run that was applied only in part, or whose push was refused, leaves
+   * them, and the plan opens none of them again.
+   */
+  readonly spinOffIssues: readonly OpenedSpinOff[] | null;
+  /**
+   * Gathered for an agent pull request merging whose passes named a fault
+   * and whose faults the Kit has not seen to yet (#885): what tells which of
+   * them to open as issues (src/loop/followUpIssues.ts). Null for any other
+   * event, a pull request closed unmerged, a Plain one, one whose passes
+   * named no fault, and one already seen to.
+   */
+  readonly followUpIssues: FollowUpIssuesSnapshot | null;
+  /**
    * Gathered for an agent pull request closing, merged or not, only: what
    * tells which Roll-ins were left unsent on it, so their issues are
    * reopened for Triage (src/loop/rollInReopening.ts, #663). Null for any other
@@ -1716,6 +1764,33 @@ export interface RollInsSnapshot {
    * Roll-in's mark in its closing comment is what counts.
    */
   readonly issues: readonly RollInIssue[];
+}
+
+/**
+ * What the merge of an agent pull request reads of the repo's issues to open
+ * its faults as issues (src/loop/followUpIssues.ts, #885), `pullRequest` in
+ * the same snapshot.
+ */
+export interface FollowUpIssuesSnapshot {
+  /** The Product repo's web address, whose new-issue form a fault left over the cap links. */
+  readonly repoUrl: string;
+  /**
+   * How many open issues in the repo the Fabrik App wrote that carry the
+   * Follow-up marker (followUpIssueOf), whichever pull request each names:
+   * what `caps.follow_up_issues` counts.
+   */
+  readonly open: number;
+  /**
+   * The issues that already hold a Follow-up of this pull request, open or
+   * closed, lowest number first: each the Operator opened whose `From PR`
+   * line names it, as its Open as issue link writes, and each the Fabrik
+   * App opened whose Follow-up marker names it. A fault with the title of
+   * one is not opened again. `openedBy` tells the two apart for the Kit's
+   * comment at the merge: one the Fabrik App opened, in an earlier plan
+   * applied only in part, is recorded there as the issue the Kit opened for
+   * the fault, and one the Operator opened is named apart.
+   */
+  readonly ofPullRequest: readonly { readonly number: number; readonly title: string; readonly openedBy: "operator" | "kit" }[];
 }
 
 /** What the stuck-trigger sweep weighs (src/loop/triggerSweep.ts, #419). */
@@ -1830,6 +1905,19 @@ export interface HeldTargetSnapshot {
    * it off as it started (#438). Missing when not read.
    */
   readonly labeledAt?: Readonly<Record<string, string>>;
+}
+
+/**
+ * One of the Operator's Request changes on a pull request, with its asks
+ * (#884), as the Digest's facts list them (src/loop/digestFacts.ts): the
+ * review itself when it says something of its own, then each of the
+ * Operator's comments on the code in it, each by Kit code's id for it,
+ * `review-<id>` or `inline-<id>`, with its place on the pull request's page.
+ */
+export interface RequestChangesAsks {
+  /** GitHub's own id for the review. */
+  readonly review: number;
+  readonly asks: readonly { readonly id: string; readonly url: string }[];
 }
 
 /** A PR an Auditor named (src/loop/auditLanding.ts), or the one a Design session's Roll-in names (src/loop/design.ts), as GitHub has it. */
@@ -2029,16 +2117,13 @@ export interface OpenTicketRef {
 }
 
 /**
- * An Open as issue link to the repo's new-issue form (#825), prefilled with an
- * Operator step's `newIssue` and a `Follows` line naming the Spec the step is
- * filed under and that Spec's Tickets, each created earlier in the plan or,
- * for the Spec, existing.
+ * The Spec an issue the plan creates builds on, and that Spec's Tickets, for
+ * the `Follows` line its body ends with (followsSpecLine): the Spec created
+ * earlier in the plan or, on a split, existing, and each Ticket created
+ * earlier in the plan.
  */
-export interface OpenAsIssueLink {
-  readonly repoUrl: string;
-  readonly title: string;
-  readonly body: string;
-  readonly follows: CreatedIssue | number;
+export interface FollowedSpec {
+  readonly spec: CreatedIssue | number;
   readonly tickets: readonly CreatedIssue[];
 }
 
@@ -2079,6 +2164,13 @@ export type Action =
       readonly blockedBy: readonly (CreatedIssue | ExistingIssue | OpenTicketRef)[];
       /** Who it is assigned to when it is created; none when left out. */
       readonly assignees?: readonly string[];
+      /**
+       * For a Spin-off of a Spec's or a split's finish (#883): the Spec and
+       * its Tickets, which the body's last line, a `Follows` line, names by
+       * the numbers the plan gave them. The issue is created with that line,
+       * so whatever reads its body first finds it. None when left out.
+       */
+      readonly follows?: FollowedSpec;
     }
   | {
       /** Comments on an issue, then closes it as completed: another issue now carries its work. */
@@ -2107,17 +2199,6 @@ export type Action =
       readonly body: string;
       /** Names the comment for later `comment-linking` actions in the plan, which link to it. */
       readonly key?: string;
-    }
-  | {
-      /**
-       * Rewrites the body of an issue created earlier in the plan with an Open
-       * as issue link in it (#825), once every issue the link's `Follows` line
-       * names exists: an Operator step whose job is to open a new issue.
-       */
-      readonly kind: "link-new-issue";
-      readonly on: CreatedIssue;
-      /** The body's Markdown, with the link written where it stands. */
-      readonly body: readonly (string | OpenAsIssueLink)[];
     }
   | {
       /** Comments on an issue created earlier in the plan (#778). */

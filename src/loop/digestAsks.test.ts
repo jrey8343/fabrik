@@ -126,7 +126,7 @@ describe("The Digest writer's reply, with its answers and its items", () => {
     ["asks is missing", { asks: undefined }, "asks must be a list of answers"],
     ["an ask is no object", { asks: ["review-8"] }, "asks[0] must be an object"],
     ["an ask has no id", { asks: [{ ...anAnswer("review-8"), id: " " }] }, "asks[0].id must be non-empty text"],
-    ["an answer is unknown", { asks: [aCriterion(1), { ...anAnswer("review-8"), answer: "mostly" }] }, 'asks[1].answer must be one of in-head, not-in-head, could-not-tell, not "mostly"'],
+    ["an answer is unknown", { asks: [aCriterion(1), { ...anAnswer("review-8"), answer: "mostly" }] }, 'asks[1].answer must be one of in-head, not-in-head, could-not-tell, set-aside, not "mostly"'],
     ["how it was checked is unknown", { asks: [{ ...anAnswer("review-8"), checkedBy: "a hunch" }] }, 'asks[0].checkedBy must be one of test, end-to-end-test, reading, search, required-checks, not "a hunch"'],
     ["where the writer looked is missing", { asks: [{ ...anAnswer("review-8"), where: undefined }] }, "asks[0].where must be non-empty text"],
     ["a criterion's own line is missing", { asks: [{ ...aCriterion(1), criterion: undefined }] }, "asks[0].criterion must be non-empty text, the criterion in one line"],

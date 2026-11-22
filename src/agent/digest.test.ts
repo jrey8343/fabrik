@@ -21,7 +21,7 @@ import {
 import type { DigestFacts } from "../loop/digestFacts.ts";
 import { DIGEST_SECTIONS, digestContext } from "./digest.ts";
 import { type DigestPullRequest, readDigestPullRequest, type Reader } from "./inputs.ts";
-import { OPERATOR_COMMENTS_HEADING, REQUESTED_CHANGES_HEADING } from "./operatorComments.ts";
+import { OPERATOR_COMMENTS_HEADING, REQUESTED_CHANGES_HEADING, SPIN_OFFS_HEADING } from "./operatorComments.ts";
 
 const HEAD = "a".repeat(40);
 const EARLIER = "b".repeat(40);
@@ -558,6 +558,20 @@ describe("The Digest writer's prompt", () => {
     for (const how of CHECKED_BY) expect(asks).toContain(`\`${how}\``);
   });
 
+  it("has the writer answer only for what was to be built on an ask the Kit opened a Spin-off from, and say set aside where nothing of it was (#884)", async () => {
+    const text = await prompt();
+    const asks = part(text, "The asks");
+    const bullet = asks.split("\n").find((line) => line.startsWith("- An ask Kit code lists with `spinOffs`")) ?? "";
+
+    expect(section(text, "What you are given")).toContain(`- "${SPIN_OFFS_HEADING}", when the Kit opened any`);
+    expect(section(text, "What you are given")).toContain("with `spinOffs` on each one the Kit opened a Spin-off from");
+    expect(bullet).toContain("Answer such an ask only for what was to be built on this pull request");
+    expect(bullet).toContain("When the whole of it was set aside, answer `set-aside`");
+    expect(bullet).toContain("Never answer `set-aside` for an ask with no `spinOffs`, nor for a criterion: the Kit refuses it");
+    expect(bullet).toContain("A point set aside is not missing");
+    expect(part(text, "Needs your eyes")).toContain("never one you answered `in-head` or `set-aside`");
+  });
+
   it("names the three kinds of item in the order the contract shows them, and what an item must and must not hold", async () => {
     const eyes = part(await prompt(), "Needs your eyes");
     const kinds = ITEM_KINDS.map((kind) => eyes.indexOf(`- \`${kind}\``));
@@ -623,7 +637,7 @@ describe("The Digest writer's prompt", () => {
     const words = (text: string) => text.split(/\s+/).filter((word) => word !== "").length;
     // Kit code's asks are the ones the example answers under no id of its own, and its Follow-ups the one it shows.
     const asks = example.asks.filter(({ criterion }) => criterion === undefined).map(({ id }) => ({ id, what: "request-changes" as const, url: "about:blank" }));
-    const facts = aDigestFacts({ asks, followUps: [{ id: "f1", title: "Share a saved basket by link", url: "about:blank" }] });
+    const facts = aDigestFacts({ asks, followUps: [{ id: "f1", kind: "idea", title: "Share a saved basket by link", url: "about:blank" }] });
 
     expect(asks.length).toBeGreaterThan(0);
     expect(example.asks.some(({ criterion }) => criterion !== undefined)).toBe(true);
@@ -674,6 +688,17 @@ describe("The Digest writer's prompt", () => {
     expect(followUps).toContain("Leave out one that repeats another");
     expect(followUps).toContain("Leave out one an existing Ticket already covers, and name it in the second fold, with that Ticket");
     expect(part(text, "Decided without you, and left alone")).toContain("Each Follow-up you left out because an existing Ticket already covers it, with that Ticket");
+  });
+
+  it("says the Kit shows every fault itself, so the writer chooses only among the ideas, and that its choice gates nothing (#885)", async () => {
+    const text = await prompt();
+    const followUps = part(text, "Follow-ups");
+
+    expect(text).toContain("`followUps`, every Follow-up a pass on this pull request named, each with Kit code's id for it and its `kind`, a `fault` or an `idea`");
+    expect(followUps).toContain("Which of the ideas to show");
+    expect(followUps).toContain("The Kit shows every fault itself, with a line saying it opens as an issue when the pull request merges");
+    expect(followUps).toContain("Name only ideas: the Kit refuses a Digest that names a fault's id.");
+    expect(followUps).toContain("Your choice gates nothing: the Kit opens every fault at the merge whatever you show, and an idea you leave out keeps its link on its Verdict.");
   });
 
   it("asks for the rounds' closing line: one line under the Kit's table, which also says where two Verdicts disagreed with each other", async () => {

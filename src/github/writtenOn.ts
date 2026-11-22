@@ -5,7 +5,10 @@
 // (operatorsRequestChangesIn): an agent's input reads them through it
 // (src/agent/inputs.ts) and so does the read for a Digest's asks
 // (src/github/digestGiven.ts), so the ids the Digest writer answers under are
-// the ids its reply is checked against.
+// the ids its reply is checked against. The push job's read of the asks a
+// Request-changes run's Spin-offs may name goes through it too
+// (src/github/snapshot.ts, #884).
+import type { ThreadRequestChanges } from "../loop/digestFacts.ts";
 import { allPages, type ReadClient, type Repo } from "./client.ts";
 
 /** A user as GitHub's REST API names one. */
@@ -97,4 +100,29 @@ export function operatorsRequestChangesIn({ lineComments, reviews }: Pick<Writte
       lineComments: lineComments.filter((comment) => theirs(comment) && comment.pull_request_review_id === review.id).sort(byTime((comment) => comment.created_at)),
     }))
     .sort(byTime(({ review }) => review.submitted_at ?? ""));
+}
+
+/**
+ * The Operator's reviews that requested changes as a thread's readers take
+ * them (src/loop/digestFacts.ts), oldest first: each with its own text, its
+ * place and the Operator's line comments in it, one dismissed since marked
+ * so, and one among `deferred` marked so. One GitHub gives no time for is
+ * left out.
+ */
+export function threadRequestChangesIn(written: Pick<WrittenOn, "lineComments" | "reviews">, operator: string, deferred: readonly number[] = []): ThreadRequestChanges[] {
+  return operatorsRequestChangesIn(written, operator).flatMap(({ review, dismissed, lineComments }) =>
+    typeof review.submitted_at === "string"
+      ? [
+          {
+            review: review.id,
+            at: review.submitted_at,
+            dismissed,
+            deferred: deferred.includes(review.id),
+            body: review.body ?? "",
+            url: review.html_url,
+            lineComments: lineComments.map((comment) => ({ comment: comment.id, url: comment.html_url, path: comment.path, line: lineOf(comment) })),
+          },
+        ]
+      : [],
+  );
 }

@@ -13,7 +13,7 @@ import type { RequestChangesAnswers } from "./implementOutput.ts";
 import { fableCapsIn } from "./fableCap.ts";
 import { type HandBack, HAND_BACKS } from "./handBacks.ts";
 import type { TriggerLabel } from "./labels.ts";
-import { AGENT_ROLES, type AgentRole, type GateRerunDone, type GateRerunMark, isStepUpReason, type StepUpReason, type Strength, type VerdictRecord } from "./types.ts";
+import { AGENT_ROLES, type AgentRole, type CreatedIssue, type GateRerunDone, type GateRerunMark, isStepUpReason, type StepUpReason, type Strength, type VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
@@ -226,6 +226,209 @@ export function flakyCheckIssueOf(body: string): string | null {
  */
 export function withoutFlakyCheckIssueMarker(body: string): string {
   return flakyCheckIssueOf(body) === null ? body : body.replace(/^.*(?:\r?\n|$)/, "");
+}
+
+const SPIN_OFF_MARKER = /^<!-- fabrik:spin-off (\{.*?\}) -->/;
+
+/**
+ * Where a Spin-off came from: the issue whose Design session opened it as
+ * the session finished (#883), or the pull request and the Operator's
+ * Request changes on it, by GitHub's id for the review, that asked for a
+ * point to be its own issue (#884), with the ask in that review the point
+ * is in, by Kit code's id for it: `review-<id>` for the review's own words,
+ * `inline-<id>` for a comment on the code. The ask is what tells a second
+ * landing of the same run which issue is already there for a Spin-off it
+ * returns (src/loop/implement.ts).
+ */
+export type SpinOffSource =
+  | { readonly from: "design"; readonly issue: number }
+  | { readonly from: "request-changes"; readonly pullRequest: number; readonly review: number; readonly ask: string };
+
+/**
+ * A Spin-off's first line (#883): it says the issue is a Spin-off, which the
+ * Kit opened on the Operator's word, and where it came from. It is the whole
+ * of what marks one: a Spin-off carries no label of its own.
+ */
+export function spinOffMarker(source: SpinOffSource): string {
+  const value =
+    source.from === "design" ? { from: source.from, issue: source.issue } : { from: source.from, pullRequest: source.pullRequest, review: source.review, ask: source.ask };
+  return `<!-- fabrik:spin-off ${markerJson(value)} -->`;
+}
+
+/**
+ * Where the Spin-off whose body this is came from, or null for any other
+ * body. Read as the body's first line only, and only on an issue the Fabrik
+ * App opened, which the caller checks: anyone can quote a marker in an issue
+ * they open (ADR-0037). A Design session that rewrites the issue drops the
+ * line, as Triage, its one reader, has sorted the issue by then.
+ */
+export function spinOffIn(body: string): SpinOffSource | null {
+  const json = SPIN_OFF_MARKER.exec(body)?.[1];
+  if (json === undefined) return null;
+  try {
+    const { from, issue, pullRequest, review, ask } = JSON.parse(json) as Record<string, unknown>;
+    if (from === "design") return isPositiveInteger(issue) ? { from, issue } : null;
+    if (from === "request-changes") {
+      return isPositiveInteger(pullRequest) && isPositiveInteger(review) && typeof ask === "string" && ask !== "" ? { from, pullRequest, review, ask } : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a marker's field is a number GitHub could have given an issue, a pull request or a review. */
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+const SPIN_OFF_OPENED_MARKER = /^<!-- fabrik:spin-off-opened #([1-9][0-9]*) (\{.*\}) -->$/;
+
+/** A Spin-off the Kit opened from a Request changes, as the pull request's thread records it (#884). */
+export interface OpenedSpinOff {
+  /** The issue the Kit opened. */
+  readonly issue: number;
+  /** The id of the Request changes, or of the comment on the code in one, that asked for it: `review-<id>` or `inline-<id>`. */
+  readonly from: string;
+  readonly title: string;
+}
+
+/**
+ * The marker line a Request-changes run's outcome note records one Spin-off
+ * on (#884), among the marker lines the note opens with: the issue the plan
+ * opens for it, written as its `#number` once it exists, or the number of
+ * the issue that is there already, what asked for it, and its title. It is
+ * where every later run on the pull request, its Reviews and its Digest
+ * read the Spin-offs from (openedSpinOffsAmong).
+ */
+export function openedSpinOffLine(issue: CreatedIssue | number, { from, title }: Pick<OpenedSpinOff, "from" | "title">): readonly (string | CreatedIssue)[] {
+  const end = ` ${markerJson({ from, title })} -->`;
+  return typeof issue === "number" ? [`<!-- fabrik:spin-off-opened #${issue}${end}`] : ["<!-- fabrik:spin-off-opened ", issue, end];
+}
+
+/**
+ * The Spin-offs a comment records as opened, in the order written, read only
+ * among the marker lines it opens with: the Kit writes those, and an agent's
+ * text further down can't add one. None for any other comment. Only a bot's
+ * comment should be passed in.
+ */
+export function openedSpinOffsIn(body: string): OpenedSpinOff[] {
+  const opened: OpenedSpinOff[] = [];
+  for (const line of body.split("\n")) {
+    if (!line.startsWith("<!-- fabrik:")) break;
+    const [, number, json] = SPIN_OFF_OPENED_MARKER.exec(line) ?? [];
+    if (number === undefined || json === undefined) continue;
+    try {
+      const { from, title } = JSON.parse(json) as Record<string, unknown>;
+      if (typeof from === "string" && typeof title === "string") opened.push({ issue: Number(number), from, title });
+    } catch {
+      // A line that doesn't read records nothing.
+    }
+  }
+  return opened;
+}
+
+/**
+ * The Spin-offs a pull request's notes record as opened, oldest first, given
+ * the Fabrik App's comments on it in that order, each issue once: a note
+ * whose push never landed and the note of the landing that followed both
+ * record the issue the first one opened.
+ */
+export function openedSpinOffsAmong(bodies: readonly string[]): OpenedSpinOff[] {
+  const opened = bodies.flatMap(openedSpinOffsIn);
+  return opened.filter(({ issue }, at) => opened.findIndex((earlier) => earlier.issue === issue) === at);
+}
+
+const FOLLOW_UP_MARKER = /^<!-- fabrik:follow-up (\{.*?\}) -->/;
+
+/**
+ * The first line of an issue the Kit opened for a Follow-up that is a fault
+ * (#885, ADR-0039): it says the issue is one, and names the pull request
+ * whose pass named the fault. It is the whole of what marks one: such an
+ * issue carries no label of its own.
+ */
+export function followUpMarker(pullRequest: number): string {
+  return `<!-- fabrik:follow-up ${markerJson({ pullRequest })} -->`;
+}
+
+/**
+ * The pull request whose pass named the fault this body's issue was opened
+ * for, or null for any other body. Read as the body's first line only, and
+ * only on an issue the Fabrik App opened, which the caller checks: anyone
+ * can quote a marker in an issue they open (ADR-0037). A Design session's
+ * rewrite carries the line forward (src/loop/design.ts), so the issue still
+ * counts toward `caps.follow_up_issues` while it is open.
+ */
+export function followUpIssueOf(body: string): number | null {
+  const json = FOLLOW_UP_MARKER.exec(body)?.[1];
+  if (json === undefined) return null;
+  try {
+    const { pullRequest } = JSON.parse(json) as Record<string, unknown>;
+    return isPositiveInteger(pullRequest) ? pullRequest : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The first line of the Kit's comment on a merged agent pull request that
+ * says what became of the faults its passes named (#885). Any such comment
+ * says the merge was seen to, so its issues are opened once.
+ */
+export const FOLLOW_UPS_OPENED_MARKER = "<!-- fabrik:follow-ups-opened -->";
+
+const FOLLOW_UP_OPENED_MARKER = /^<!-- fabrik:follow-up-opened #([1-9][0-9]*) (\{.*\}) -->$/;
+const FOLLOW_UP_LEFT_MARKER = /^<!-- fabrik:follow-up-left (\{.*\}) -->$/;
+
+/** What the Kit's comment on a merged pull request records of its faults (#885). */
+export interface FollowUpsOpened {
+  /** Each fault the Kit opened as an issue, with the issue, in the order opened. */
+  readonly opened: readonly { readonly issue: number; readonly title: string }[];
+  /** The title of each fault left an Open as issue link, over `caps.follow_up_issues`. */
+  readonly left: readonly string[];
+}
+
+/**
+ * The marker line that comment records one opened fault on, among the
+ * marker lines it opens with: the issue the plan opens for it, written as
+ * its `#number` once it exists, or the number of the issue an earlier plan
+ * of the Kit's opened for it, and its title. It is where the Retro's
+ * evidence and a row's Follow-ups read which issue a fault became.
+ */
+export function followUpOpenedLine(issue: CreatedIssue | number, title: string): readonly (string | CreatedIssue)[] {
+  const end = ` ${markerJson({ title })} -->`;
+  return typeof issue === "number" ? [`<!-- fabrik:follow-up-opened #${issue}${end}`] : ["<!-- fabrik:follow-up-opened ", issue, end];
+}
+
+/** The marker line that comment records one fault left a link on, over the cap. */
+export function followUpLeftLine(title: string): string {
+  return `<!-- fabrik:follow-up-left ${markerJson({ title })} -->`;
+}
+
+/**
+ * What a comment records of a merged pull request's faults, read only among
+ * the marker lines it opens with, which the Kit writes: null unless its
+ * first line is that comment's mark, so quoting the mark further down counts
+ * for nothing. Pass it only the Fabrik App's comments.
+ */
+export function followUpsOpenedIn(body: string): FollowUpsOpened | null {
+  if (body.split("\n")[0]?.replace(/\r$/, "") !== FOLLOW_UPS_OPENED_MARKER) return null;
+  const opened: { issue: number; title: string }[] = [];
+  const left: string[] = [];
+  for (const line of body.split("\n").map((each) => each.replace(/\r$/, ""))) {
+    if (!line.startsWith("<!-- fabrik:")) break;
+    const [, number, openedJson] = FOLLOW_UP_OPENED_MARKER.exec(line) ?? [];
+    const leftJson = FOLLOW_UP_LEFT_MARKER.exec(line)?.[1];
+    try {
+      const { title } = JSON.parse(openedJson ?? leftJson ?? "{}") as Record<string, unknown>;
+      if (typeof title !== "string") continue;
+      if (number !== undefined) opened.push({ issue: Number(number), title });
+      else if (leftJson !== undefined) left.push(title);
+    } catch {
+      // A line that doesn't read records nothing.
+    }
+  }
+  return { opened, left };
 }
 
 const GATE_RERUN_MARKER = /^<!-- fabrik:gate-rerun (\{.*?\}) -->/;
@@ -1056,10 +1259,11 @@ export function fromAuditIn(body: string): number | null {
 }
 
 /**
- * The line an issue opened from an Operator step's Open as issue link ends
- * with (#825), naming the Spec the step was filed under and, in brackets, that
- * Spec's Tickets, matched against a whole line with its outer whitespace
- * trimmed. A Design session on the issue is given that Spec's open Tickets.
+ * The line a Spin-off of a Spec's or a split's finish ends with (#883), as
+ * an issue opened from an Operator step's Open as issue link did before it
+ * (#825), naming the Spec the issue builds on and, in brackets, that Spec's
+ * Tickets, matched against a whole line with its outer whitespace trimmed. A
+ * Design session on the issue is given that Spec's open Tickets.
  */
 export const FOLLOWS_SPEC_LINE = /^Follows #([1-9][0-9]*)(?: \(.*\))?$/;
 

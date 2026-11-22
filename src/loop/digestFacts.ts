@@ -11,9 +11,10 @@ import { operatorCommentId } from "../agent/operatorComments.ts";
 import { verdictsIn } from "../github/threads.ts";
 import { type ProductChange, productChangeBetween, type VerdictEffect, verdictEffect } from "./changeFingerprint.ts";
 import { listedFollowUpsIn } from "./followUps.ts";
-import { conflictAttemptIn, CONFLICT_RUN_MARKER, handBackMarkIn, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, startedReviewsIn, touchUpBodyOnlyIn, touchUpPushIn, UNMARKED_RETRY_PUSH } from "./markers.ts";
+import { conflictAttemptIn, CONFLICT_RUN_MARKER, handBackMarkIn, openedSpinOffsAmong, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, startedReviewsIn, touchUpBodyOnlyIn, touchUpPushIn, UNMARKED_RETRY_PUSH } from "./markers.ts";
 import { MAX_RETRIES, MAX_TOUCH_UPS, retryNumber, touchUpNumber } from "./retry.ts";
-import { isBrokenRun, type Verdict, type VerdictRecord } from "./types.ts";
+import { isBrokenRun, type RequestChangesAsks, type Verdict, type VerdictRecord } from "./types.ts";
+import type { FollowUpKind } from "./verdict.ts";
 
 /** A pull request's thread, as much of it as the facts are worked out from. */
 export interface DigestThread {
@@ -78,6 +79,20 @@ export interface DigestAsk {
   readonly path?: string;
   /** On a line comment: the line it is on, or null when GitHub no longer places it on one. */
   readonly line?: number | null;
+  /**
+   * The Spin-offs the Kit opened from it (#884), oldest first, as its notes
+   * on the pull request record them: points of this ask the Operator asked,
+   * in words, to be issues of their own, which no run built. Absent when
+   * there are none. The writer answers for what was to be built, and may
+   * answer `set-aside` only for an ask that has some.
+   */
+  readonly spinOffs?: readonly AskSpinOff[];
+}
+
+/** A Spin-off the Kit opened from an ask: its issue and its title. */
+export interface AskSpinOff {
+  readonly issue: number;
+  readonly title: string;
 }
 
 /** Who a round was. */
@@ -119,9 +134,11 @@ export interface Round {
 export interface DigestFollowUp {
   /** Kit code's id for it on this thread: `f1`, `f2`, … in the order listed. */
   readonly id: string;
+  /** A fault, which Kit code shows in every Digest and opens as an issue at the merge, or an idea, which the writer may show (#885). */
+  readonly kind: FollowUpKind;
   readonly title: string;
-  /** Its Open as issue link, as its Verdict comment has it. */
-  readonly url: string;
+  /** An idea's Open as issue link, as its Verdict comment has it; null on a fault, which has none. */
+  readonly url: string | null;
 }
 
 /** How many rounds of each counted kind the thread holds. */
@@ -148,7 +165,7 @@ export interface DigestFacts {
   readonly rounds: readonly Round[];
   /** The rounds, counted. */
   readonly counts: RoundCounts;
-  /** The Follow-ups of every pass on the pull request, in the order their Verdicts list them. The writer says which to show, by id. */
+  /** The Follow-ups of every pass on the pull request, in the order their Verdicts list them. The writer says which of the ideas to show, by id; Kit code shows every fault (#885). */
   readonly followUps: readonly DigestFollowUp[];
   /**
    * The asks: every Request changes of the Operator's as the Reviewer is
@@ -228,8 +245,8 @@ export function digestFactsOf(thread: DigestThread): DigestFacts {
     rounds,
     followUps: bodies
       .flatMap((body) => (verdictsIn([body])[0]?.verdict === "pass" ? listedFollowUpsIn(body) : []))
-      .map(({ title, url }, index) => ({ id: `f${index + 1}`, title, url })),
-    asks: asksIn(thread.requestChanges),
+      .map(({ kind, title, url }, index) => ({ id: `f${index + 1}`, kind, title, url })),
+    asks: asksIn(thread.requestChanges, bodies),
     // The next flaw would call for Retry `retryNumber`, so the ones before it are used.
     retriesLeft: Math.max(0, MAX_RETRIES + 1 - retryNumber(verdicts, thread.landedNothing)),
     // Likewise the next all-tagged flaw would call for Touch-up `touchUpNumber`.
@@ -253,22 +270,52 @@ export function digestFactsOf(thread: DigestThread): DigestFacts {
  * The asks among the Operator's Request changes: those the Reviewer is given,
  * so neither a dismissed one nor one deferred during a Retry, oldest first.
  * Each is listed when its own text says something, then each of its line
- * comments.
+ * comments. Each names the Spin-offs the Kit opened from it (#884), which
+ * `kitBodies`, the Kit's own comments oldest first, record.
  */
-function asksIn(requestChanges: readonly ThreadRequestChanges[]): DigestAsk[] {
+function asksIn(requestChanges: readonly ThreadRequestChanges[], kitBodies: readonly string[]): DigestAsk[] {
+  const opened = openedSpinOffsAmong(kitBodies);
   return requestChanges
     .filter(({ dismissed, deferred }) => !dismissed && !deferred)
-    .toSorted((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
-    .flatMap(({ review, body, url, lineComments }): DigestAsk[] => [
-      ...(body.trim() === "" ? [] : [{ id: operatorCommentId("review", review), what: "request-changes" as const, url }]),
-      ...lineComments.map((comment) => ({
-        id: operatorCommentId("inline", comment.comment),
-        what: "line-comment" as const,
-        url: comment.url,
-        path: comment.path,
-        line: comment.line,
-      })),
-    ]);
+    .toSorted(oldestFirst)
+    .flatMap(asksOf)
+    .map((ask) => {
+      const spinOffs = opened.filter(({ from }) => from === ask.id).map(({ issue, title }) => ({ issue, title }));
+      return spinOffs.length === 0 ? ask : { ...ask, spinOffs };
+    });
+}
+
+/** One Request changes' asks: the review itself when its own text says something, then each of its line comments. */
+function asksOf({ review, body, url, lineComments }: ThreadRequestChanges): DigestAsk[] {
+  return [
+    ...(body.trim() === "" ? [] : [{ id: operatorCommentId("review", review), what: "request-changes" as const, url }]),
+    ...lineComments.map((comment) => ({
+      id: operatorCommentId("inline", comment.comment),
+      what: "line-comment" as const,
+      url: comment.url,
+      path: comment.path,
+      line: comment.line,
+    })),
+  ];
+}
+
+/** Orders two Request changes by when each was submitted, the older first. */
+function oldestFirst(a: ThreadRequestChanges, b: ThreadRequestChanges): number {
+  return a.at < b.at ? -1 : a.at > b.at ? 1 : 0;
+}
+
+/**
+ * The asks of each of the Operator's Request changes that is not dismissed,
+ * oldest first, review by review (#884): what a Request-changes run's
+ * Spin-offs may name in `from`, and what the Kit weighs a run that committed
+ * nothing against. An ask is what it is in a Digest's facts (asksOf), so the
+ * id a Spin-off names is the id the Digest shows it under.
+ */
+export function requestChangesAsksIn(requestChanges: readonly ThreadRequestChanges[]): RequestChangesAsks[] {
+  return requestChanges
+    .filter(({ dismissed }) => !dismissed)
+    .toSorted(oldestFirst)
+    .map((one) => ({ review: one.review, asks: asksOf(one).map(({ id, url }) => ({ id, url })) }));
 }
 
 /** A row that is no Verdict, so it says nothing of the code. */

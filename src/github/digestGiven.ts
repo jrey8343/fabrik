@@ -16,7 +16,7 @@ import type { ReadClient, Repo } from "./client.ts";
 import { readDigestHead } from "./digestHead.ts";
 import { digestSnapshotOn } from "./snapshot.ts";
 import { countLandedNothing } from "./threads.ts";
-import { lineOf, operatorsRequestChangesIn, readWrittenOn, type WrittenOn } from "./writtenOn.ts";
+import { readWrittenOn, threadRequestChangesIn, type WrittenOn } from "./writtenOn.ts";
 
 /** What the push job already knows of a Digest when its run ends: where it goes, the head it is written as of, its run, and who the Operator is. */
 export interface DigestWritten {
@@ -143,21 +143,7 @@ export async function readDigestThread(
   return {
     openedAt: opened.createdAt,
     kitComments: all.conversation.filter(({ user }) => user?.type === "Bot").map(({ body, created_at }) => ({ at: created_at, body: body ?? "" })),
-    requestChanges: operatorsRequestChangesIn(all, operator).flatMap(({ review, dismissed, lineComments }) =>
-      typeof review.submitted_at === "string"
-        ? [
-            {
-              review: review.id,
-              at: review.submitted_at,
-              dismissed,
-              deferred: deferred.includes(review.id),
-              body: review.body ?? "",
-              url: review.html_url,
-              lineComments: lineComments.map((comment) => ({ comment: comment.id, url: comment.html_url, path: comment.path, line: lineOf(comment) })),
-            },
-          ]
-        : [],
-    ),
+    requestChanges: threadRequestChangesIn(all, operator, deferred),
     landedNothing: countLandedNothing(onTicket.map(({ body, author }) => ({ body, byApp: author?.__typename === "Bot" }))),
   };
 }

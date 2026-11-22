@@ -767,7 +767,7 @@ describe("The starters the Product repo then owns", () => {
         step_up: { model: "claude-opus-5-5", effort: "medium" },
       },
       max_in_flight: 2,
-      caps: { design_sessions: 2, monitor_issues: 5, maps: 1, merge_gate: 3 },
+      caps: { design_sessions: 2, monitor_issues: 5, maps: 1, merge_gate: 3, follow_up_issues: 5 },
       monitor: { errors: null, red_main: true, main_checks: [] },
       audit: { day: "sunday" },
       retro: { day: "saturday" },

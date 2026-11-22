@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { aReplayIssue, replaySlice } from "../__fixtures__/replay.ts";
 import { aDesignQueueIssue, anIssue, aPullRequest, designQueueSnapshotOf, kitConfig, snapshotOf, snapshotOfPullRequest, tickSnapshot, withoutNotes } from "../__fixtures__/snapshots.ts";
+import { followUpMarker, spinOffMarker } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { LoopEvent } from "./types.ts";
 
@@ -485,6 +486,30 @@ describe("Applying Triage output", () => {
     });
   });
 
+  it.each([
+    ["a Design session's Spin-off", spinOffMarker({ from: "design", issue: 41 }), "The Kit opened this issue as a Spin-off of the Design session on #41, so its question is yours."],
+    [
+      "a Request changes' Spin-off",
+      spinOffMarker({ from: "request-changes", pullRequest: 50, review: 900, ask: "inline-9" }),
+      "The Kit opened this issue as a Spin-off of your Request changes on #50, so its question is yours.",
+    ],
+    ["a Follow-up the Kit opened", followUpMarker(42), "The Kit opened this issue for a fault the Reviewer named on #42, so its question is yours."],
+  ])("asks the Operator on a needs-info issue that is %s, saying what the issue is from its marker: it is not the Monitor's (#882)", (_, marker, opening) => {
+    const issue = anIssue({ number: 7, author: "fabrik-app[bot]", byApp: true, labels: ["needs-triage"], body: `${marker}\nThe waitlist needs an export.` });
+
+    const plan = planFor(triaged({ category: "enhancement", state: "needs-info", comment: "Which format?" }), snapshotOf(issue, { operator: "jrey8343" }), kitConfig());
+
+    expect(plan.kind === "act" ? plan.actions[0] : null).toEqual({ kind: "comment", issue: 7, body: `@jrey8343 ${opening}\n\nWhich format?` });
+  });
+
+  it("takes a marker for nothing on an issue the Fabrik App didn't open: the question goes to its author", () => {
+    const issue = anIssue({ number: 7, author: "kate", labels: ["needs-triage"], body: `${followUpMarker(42)}\nQuoted.` });
+
+    const plan = planFor(triaged({ category: "enhancement", state: "needs-info", comment: "Which format?" }), snapshotOf(issue, { operator: "jrey8343" }), kitConfig());
+
+    expect(plan.kind === "act" ? plan.actions[0] : null).toEqual({ kind: "comment", issue: 7, body: "@kate\n\nWhich format?" });
+  });
+
   it("assigns a ready-for-human issue to the Operator, with Triage's comment saying what to do", () => {
     const issue = anIssue({ number: 7, author: "kate", labels: ["needs-triage"] });
 
@@ -523,6 +548,51 @@ describe("Applying Triage output", () => {
         { kind: "check-design-queue" },
       ],
     });
+  });
+});
+
+// A Spin-off exists because the Operator asked for it (#883): the push job tells one by the Fabrik App's marker.
+describe("Applying Triage output on a Spin-off", () => {
+  const triaged = (output: unknown) => ({ kind: "agent-run-finished", role: "triage", issue: 104, output: JSON.stringify(output) }) as const;
+  const body = '<!-- fabrik:spin-off {"from":"design","issue":7} -->\nText each waitlisted patient a day before.';
+  const spinOff = anIssue({ number: 104, labels: ["needs-triage"], author: "fabrik-app[bot]", byApp: true, body });
+  const wontfix = { category: "enhancement", state: "wontfix", comment: "Not worth building." };
+
+  it("refuses a wontfix that names no original, so the issue the Operator asked for stays open", () => {
+    expect(planFor(triaged(wontfix), snapshotOf(spinOff), kitConfig())).toEqual({
+      kind: "fail",
+      failure: "infrastructure",
+      reason:
+        "Triage on #104 emitted output that breaks its contract: a wontfix on a Spin-off needs duplicateOf: the Operator asked for this issue, so Triage sets it aside only as a duplicate of a named issue",
+    });
+  });
+
+  it("closes one as a duplicate of the issue the wontfix names", () => {
+    const plan = planFor(triaged({ ...wontfix, comment: "The same reminders as the open one.", duplicateOf: 98 }), snapshotOf(spinOff), kitConfig());
+
+    expect(plan.kind === "act" ? plan.actions.at(-1) : plan).toEqual({ kind: "close", issue: 104, reason: "duplicate" });
+  });
+
+  it("sorts one to a Design session as it would any issue", () => {
+    const plan = planFor(triaged({ category: "enhancement", state: "needs-design", comment: "Needs a design pass." }), snapshotOf(spinOff), kitConfig());
+
+    expect(plan.kind === "act" ? plan.actions : plan).toContainEqual({ kind: "add-labels", issue: 104, labels: ["enhancement", "needs-design"] });
+  });
+
+  it("reads the marker only on an issue the Fabrik App opened: one quoting it is set aside like any other", () => {
+    const quoted = anIssue({ number: 104, labels: ["needs-triage"], author: "kate", byApp: false, body });
+
+    const plan = planFor(triaged(wontfix), snapshotOf(quoted), kitConfig());
+
+    expect(plan.kind === "act" ? plan.actions.at(-1) : plan).toEqual({ kind: "close", issue: 104, reason: "not_planned" });
+  });
+
+  it("reads the marker only as the body's first line", () => {
+    const later = anIssue({ number: 104, labels: ["needs-triage"], author: "fabrik-app[bot]", byApp: true, body: `The Monitor saw an error.\n${body}` });
+
+    const plan = planFor(triaged(wontfix), snapshotOf(later), kitConfig());
+
+    expect(plan.kind === "act" ? plan.actions.at(-1) : plan).toEqual({ kind: "close", issue: 104, reason: "not_planned" });
   });
 });
 

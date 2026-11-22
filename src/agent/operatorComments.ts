@@ -4,8 +4,11 @@
 // the issue's `sentBack.operatorComments` for the Design session that follows a
 // return. Each is context for the run, never a request for work. Beside them,
 // for a Review or a retry, are the Operator's Request changes reviews, under
-// the PR's `requestedChanges`: those amend the Ticket (ADR-0010).
+// the PR's `requestedChanges`: those amend the Ticket (ADR-0010). And beside
+// those, under the PR's `spinOffs`, the points of them the Kit opened as
+// Spin-offs (#884), which are no longer part of the PR's work.
 import { isGivenOperatorComment } from "../loop/considered.ts";
+import type { OpenedSpinOff } from "../loop/markers.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
 
 /** The three places on a PR an Operator comment can be. */
@@ -59,6 +62,39 @@ export interface RequestedChange {
   readonly submittedAt: string;
   readonly body: string;
   readonly comments: readonly RequestedChangeComment[];
+}
+
+/**
+ * A point of a Request changes that the Kit opened as a Spin-off (#884), as
+ * fed to every later run on the PR: the issue it became, and the Operator's
+ * words it came from. Only one whose Request changes the run is still given
+ * is fed to it.
+ */
+export interface SetAsidePoint {
+  /** The issue the Kit opened for it. */
+  readonly issue: number;
+  readonly title: string;
+  /** The id of the Request changes, or of the inline comment in one, that asked for it, as that review or comment is headed. */
+  readonly from: string;
+  /** Where the Operator asked, on the PR's page. */
+  readonly url: string;
+  /** The Operator's words there, as they stood when the run read its inputs. */
+  readonly words: string;
+}
+
+/**
+ * The points the Kit's notes on a PR record as opened as Spin-offs, each
+ * joined to the Operator's words among `requestedChanges`. `opened` is what
+ * the notes record, oldest first, each issue once (openedSpinOffsAmong). One whose Request
+ * changes is not among those given, as one dismissed since, is left out:
+ * the run is not given what it asked, so it has nothing to weigh it by.
+ */
+export function setAsidePoints(opened: readonly OpenedSpinOff[], requestedChanges: readonly RequestedChange[]): SetAsidePoint[] {
+  const said = new Map(requestedChanges.flatMap((review) => [review, ...review.comments]).map(({ id, url, body }) => [id, { url, words: body }]));
+  return opened.flatMap(({ issue, from, title }) => {
+    const there = said.get(from);
+    return there === undefined ? [] : [{ issue, title, from, ...there }];
+  });
 }
 
 /**
@@ -120,6 +156,40 @@ export const REQUESTED_CHANGES_HEADING = "The Operator's Request changes, which 
 interface RequestedChangesInput {
   readonly operatorComments: unknown;
   readonly requestedChanges: unknown;
+  /** The points of those Request changes the Kit opened as Spin-offs (#884); none when left out. */
+  readonly spinOffs?: unknown;
+}
+
+/** The heading every run's prompt sets out the points of the Operator's Request changes that the Kit opened as Spin-offs under (#884). */
+export const SPIN_OFFS_HEADING = "The points set aside as Spin-offs";
+
+/**
+ * The points of the Operator's Request changes that the Kit opened as
+ * Spin-offs (#884), from a run's PR input, set out for its prompt under
+ * SPIN_OFFS_HEADING at heading level 2, oldest first: each headed by the
+ * issue it became, with the id of what asked for it and the Operator's words
+ * there, quoted. Nothing when there are none, so the prompt of a PR with no
+ * Spin-off is as it always was.
+ */
+export function spinOffsSection(spinOffs: unknown): string[] {
+  const list = Array.isArray(spinOffs) ? (spinOffs as { issue?: unknown; title?: unknown; from?: unknown; words?: unknown }[]) : [];
+  if (list.length === 0) return [];
+  const parts = [
+    `## ${SPIN_OFFS_HEADING}`,
+    "Points of the Operator's Request changes above that the Operator asked, in words, to be issues of their own. A Request-changes run left each unbuilt, and the Kit opened it as the issue that heads it here, so it is no part of this pull request's work. Under each are the Operator's words it came from. Weigh them as this prompt says.",
+  ];
+  for (const spinOff of list) {
+    const words = text(spinOff.words).trim();
+    parts.push(
+      `### #${text(spinOff.issue)}: ${text(spinOff.title)}`,
+      `Set aside from \`${text(spinOff.from)}\`, where the Operator wrote:`,
+      (words === "" ? "(nothing)" : words)
+        .split("\n")
+        .map((line) => `> ${line}`.trimEnd())
+        .join("\n"),
+    );
+  }
+  return parts;
 }
 
 /** A PR input's Request changes reviews, or none when it carries none. */
@@ -161,11 +231,12 @@ export function requestedChangesSection(requestedChanges: unknown): string[] {
 /**
  * A Review's or a retry's Operator input, set out for its prompt: the
  * Request changes reviews as amendments (requestedChangesSection), then the
- * Operator's other comments (operatorCommentsSection), leaving out the
+ * points of them the Kit opened as Spin-offs (spinOffsSection, #884), then
+ * the Operator's other comments (operatorCommentsSection), leaving out the
  * inline comments the amendments already show. Its `given` is every comment
  * and review the run may name as weighed: the comments, then the reviews.
  */
-export function operatorInputSections({ operatorComments, requestedChanges }: RequestedChangesInput): {
+export function operatorInputSections({ operatorComments, requestedChanges, spinOffs }: RequestedChangesInput): {
   parts: string[];
   given: GivenOperatorComment[];
 } {
@@ -179,6 +250,7 @@ export function operatorInputSections({ operatorComments, requestedChanges }: Re
   return {
     parts: [
       ...requestedChangesSection(reviews),
+      ...spinOffsSection(spinOffs),
       ...(reviews.length === 0
         ? operatorCommentsSection(others)
         : operatorCommentsSection(others, 2, "(The Operator hasn't commented on it beyond the Request changes above.)")),

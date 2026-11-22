@@ -7,6 +7,7 @@ import { fableCapsInForce, onFableLeft } from "./fableCap.ts";
 import { failureNotice } from "./failures.ts";
 import { bringInCheckFix, type CheckFixes, checkConflicts } from "./conflicts.ts";
 import { flakyCheckGate } from "./flakyChecks.ts";
+import { openFaults } from "./followUpIssues.ts";
 import { gateRerunGate, rerunChecksOnLabel } from "./gateRerun.ts";
 import { operatorMentionGate } from "./operatorMention.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
@@ -30,7 +31,7 @@ import {
   REVIEW_LABEL,
   WONTFIX,
 } from "./labels.ts";
-import { flakyCheckIssueOf } from "./markers.ts";
+import { flakyCheckIssueOf, followUpIssueOf, spinOffIn } from "./markers.ts";
 import { requestChanges, sendBackToDesign } from "./mergeGate.ts";
 import { acknowledgeComment } from "./acknowledge.ts";
 import { closeSpecAfter } from "./specClosing.ts";
@@ -195,11 +196,17 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return withAgentPullRequest(snapshot, () => ({ kind: "act", actions: [CHECK_DISPATCH] }));
     // One closed unmerged by hand stops its Ticket first, so the Dispatch check
     // doesn't start it again (#428). Merged or closed, whoever closed it, each
-    // Roll-in left unsent on it has its issue reopened for Triage (#663).
+    // Roll-in left unsent on it has its issue reopened for Triage (#663). One
+    // that merged has each fault its passes named opened as an issue (#885).
     case "pull-request-closed":
       return withAgentPullRequest(snapshot, (pullRequest) => ({
         kind: "act",
-        actions: [...stopTicketOf(event, pullRequest, snapshot.operator), ...reopenUnsentRollIns(event, pullRequest, snapshot.rollIns), CHECK_DISPATCH],
+        actions: [
+          ...stopTicketOf(event, pullRequest, snapshot.operator),
+          ...reopenUnsentRollIns(event, pullRequest, snapshot.rollIns),
+          ...openFaults(event, pullRequest, snapshot.followUpIssues, config),
+          CHECK_DISPATCH,
+        ],
       }));
     case "dispatch-check":
       return snapshot.dispatch === null
@@ -515,9 +522,14 @@ function replyOnNeedsInfo(
   };
 }
 
-/** Triage's sorting lands as its comment, then needs-triage swapped for a category and a state. */
+/**
+ * Triage's sorting lands as its comment, then needs-triage swapped for a
+ * category and a state. On a Spin-off (#883), an issue the Fabrik App opened
+ * whose body opens with the Spin-off marker, the contract refuses a `wontfix`
+ * that names no original, so nothing sets aside what the Operator asked for.
+ */
 function applyTriage(issueNumber: number, text: string, issue: IssueSnapshot, operator: string): Plan {
-  const parsed = parseTriageOutput(text, issueNumber);
+  const parsed = parseTriageOutput(text, issueNumber, issue.byApp && spinOffIn(issue.body) !== null);
   if (!parsed.ok) {
     return {
       kind: "fail",
@@ -571,16 +583,33 @@ function outcome(issueNumber: number, { state, duplicateOf }: TriageOutput, oper
 }
 
 /**
+ * What an issue the Fabrik App opened is, as its body's marker says, for
+ * the Operator who is asked its question: a Spin-off, with where it came
+ * from, or the issue of a Follow-up that is a fault, with its pull request
+ * (ADR-0039). Any other is the Monitor's, as every issue of the App's that
+ * reached Triage was before the Kit opened those. The caller has checked the
+ * App opened it: anyone can quote a marker.
+ */
+function openedAs(body: string): string {
+  const spinOff = spinOffIn(body);
+  if (spinOff?.from === "design") return `The Kit opened this issue as a Spin-off of the Design session on #${spinOff.issue}`;
+  if (spinOff?.from === "request-changes") return `The Kit opened this issue as a Spin-off of your Request changes on #${spinOff.pullRequest}`;
+  const followUp = followUpIssueOf(body);
+  if (followUp !== null) return `The Kit opened this issue for a fault the Reviewer named on #${followUp}`;
+  return "The Monitor filed this issue";
+}
+
+/**
  * Triage's comment: addressed to the author on needs-info, or to the Operator
- * when the App filed the issue as the Monitor (#425), and followed on the Fast
- * path by the agent brief the Implementer works to.
+ * when the App opened the issue (#425), saying what the issue is (openedAs),
+ * and followed on the Fast path by the agent brief the Implementer works to.
  */
 function triageComment({ state, comment, brief, duplicateOf }: TriageOutput, issue: IssueSnapshot, operator: string): string {
   // needs-info's one notification: the question reaches its author by @-mention.
-  // The App never answers, and a bot's reply never restarts Triage, so the
-  // Monitor's issue asks the Operator.
+  // The App never answers, and a bot's reply never restarts Triage, so an
+  // issue the App opened asks the Operator.
   if (state === NEEDS_INFO) {
-    return issue.byApp ? `@${operator} The Monitor filed this issue, so its question is yours.\n\n${comment}` : `@${issue.author}\n\n${comment}`;
+    return issue.byApp ? `@${operator} ${openedAs(issue.body)}, so its question is yours.\n\n${comment}` : `@${issue.author}\n\n${comment}`;
   }
   if (duplicateOf !== null) return `${comment}\n\nClosing as a duplicate of #${duplicateOf}.`;
   if (brief === null) return comment;

@@ -66,6 +66,13 @@ export interface KitConfig {
      * if its PR could fit. 0 holds Tickets while any is at or on its way.
      */
     readonly mergeGate: number;
+    /**
+     * How many issues the Kit may have open that it opened for a Follow-up
+     * that is a fault (#885, ADR-0039): a merge opens its faults only up to
+     * the room under it, and a fault over it stays an Open as issue link. 0
+     * opens none.
+     */
+    readonly followUpIssues: number;
   };
   /** What the Monitor watches in this Product repo (#148). */
   readonly monitor: {
@@ -526,7 +533,7 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   },
   allowFable: false,
   maxInFlight: 2,
-  caps: { designSessions: 2, monitorIssues: 5, maps: 1, mergeGate: 3 },
+  caps: { designSessions: 2, monitorIssues: 5, maps: 1, mergeGate: 3, followUpIssues: 5 },
   monitor: { errors: null, redMain: true, mainChecks: [] },
   // Sunday, so a fresh Audit is open by Monday's Weekly summary and misses the Monday skills bump.
   audit: { day: "sunday" },
@@ -850,6 +857,7 @@ function readCaps(caps: Reader, defaults: KitConfig["caps"]): KitConfig["caps"] 
     monitorIssues: caps.cap("monitor_issues", defaults.monitorIssues) ?? defaults.monitorIssues,
     maps: caps.cap("maps", defaults.maps) ?? defaults.maps,
     mergeGate: caps.cap("merge_gate", defaults.mergeGate) ?? defaults.mergeGate,
+    followUpIssues: caps.cap("follow_up_issues", defaults.followUpIssues) ?? defaults.followUpIssues,
   };
 }
 

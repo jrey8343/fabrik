@@ -18,14 +18,14 @@
 // bundle goes. The pending Retro is the Actions event's issue.
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { gatherOpenIssuesOn, gatherRetroFacts, gatherRetroHistory, gatherTickets } from "../github/facts.ts";
+import { gatherKitFollowUpIssues, gatherOpenIssuesOn, gatherRetroFacts, gatherRetroHistory, gatherTickets } from "../github/facts.ts";
 import { GitHub, type Repo } from "../github/client.ts";
 import { readKitConfigSources } from "../github/snapshot.ts";
 import { retroMarksIn } from "../loop/markers.ts";
 import { retroWindowEnd } from "../loop/retro.ts";
 import { proposalReposBeside } from "../loop/retroLanding.ts";
 import { resolveKitConfig } from "./config.ts";
-import { type EvidenceBundle, evidenceBundle, evidenceReachOf, evidenceTicketsOf, RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
+import { type EvidenceBundle, evidenceBundle, evidenceKitFollowUpIssuesOf, evidenceReachOf, evidenceTicketsOf, RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { RUN_STORE_REPO, storeIsPrivate } from "./runStore.ts";
 import { readStoreRunRecords, readStoreScoreFiles, readStoreTranscripts } from "./storeCheckout.ts";
 
@@ -93,8 +93,12 @@ async function main(): Promise<string> {
     fromRetroIssues: [...history.openIssues, ...elsewhere.issues],
   };
   // The facts hold each PR's Ticket by number: the bundle carries the escaped and sampled PRs' as written.
-  const tickets = await gatherTickets(product, repo, evidenceTicketsOf(input));
-  const bundle = evidenceBundle({ ...input, tickets });
+  // Likewise each fault's issue by the comment that says the Kit opened it: the bundle says what became of each (#885).
+  const [tickets, kitFollowUpIssues] = await Promise.all([
+    gatherTickets(product, repo, evidenceTicketsOf(input)),
+    gatherKitFollowUpIssues(product, repo, evidenceKitFollowUpIssuesOf(input)),
+  ]);
+  const bundle = evidenceBundle({ ...input, tickets, kitFollowUpIssues });
   // Compact, as the budget measures it.
   const text = JSON.stringify(bundle);
   const outDir = required("FABRIK_OUT_DIR");

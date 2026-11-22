@@ -36,7 +36,7 @@ describe("The Digest's comment", () => {
     expect(bodyOf(aReply())).toBe(
       [
         `<!-- fabrik:digest {"head":"${HEAD}","asks":[],"carriedFrom":null} -->`,
-        `<!-- fabrik:digest-data {"v":1,"items":[],"whatItDoes":"A shopper can now save their basket from /basket. A saved basket keeps its prices for a day.","howItGotHere":"One Review passed it at the first head.","followUps":[]} -->`,
+        `<!-- fabrik:digest-data {"v":1,"items":[],"whatItDoes":"A shopper can now save their basket from /basket. A saved basket keeps its prices for a day.","howItGotHere":"One Review passed it at the first head.","followUps":[],"faults":[]} -->`,
         `**Digest** of #50, written as of [\`aaaaaaa\`](https://github.com/acme/shop/pull/50/commits/${HEAD}).`,
         "",
         "### Needs your eyes",
