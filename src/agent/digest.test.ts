@@ -21,7 +21,7 @@ import {
 import type { DigestFacts } from "../loop/digestFacts.ts";
 import { DIGEST_SECTIONS, digestContext } from "./digest.ts";
 import { type DigestPullRequest, readDigestPullRequest, type Reader } from "./inputs.ts";
-import { OPERATOR_COMMENTS_HEADING, REQUESTED_CHANGES_HEADING } from "./operatorComments.ts";
+import { OPERATOR_COMMENTS_HEADING, REQUESTED_CHANGES_HEADING, SPIN_OFFS_HEADING } from "./operatorComments.ts";
 
 const HEAD = "a".repeat(40);
 const EARLIER = "b".repeat(40);
@@ -556,6 +556,20 @@ describe("The Digest writer's prompt", () => {
     expect(asks).toContain("`where`");
     for (const answer of ASK_ANSWERS) expect(asks).toContain(`\`${answer}\``);
     for (const how of CHECKED_BY) expect(asks).toContain(`\`${how}\``);
+  });
+
+  it("has the writer answer only for what was to be built on an ask the Kit opened a Spin-off from, and say set aside where nothing of it was (#884)", async () => {
+    const text = await prompt();
+    const asks = part(text, "The asks");
+    const bullet = asks.split("\n").find((line) => line.startsWith("- An ask Kit code lists with `spinOffs`")) ?? "";
+
+    expect(section(text, "What you are given")).toContain(`- "${SPIN_OFFS_HEADING}", when the Kit opened any`);
+    expect(section(text, "What you are given")).toContain("with `spinOffs` on each one the Kit opened a Spin-off from");
+    expect(bullet).toContain("Answer such an ask only for what was to be built on this pull request");
+    expect(bullet).toContain("When the whole of it was set aside, answer `set-aside`");
+    expect(bullet).toContain("Never answer `set-aside` for an ask with no `spinOffs`, nor for a criterion: the Kit refuses it");
+    expect(bullet).toContain("A point set aside is not missing");
+    expect(part(text, "Needs your eyes")).toContain("never one you answered `in-head` or `set-aside`");
   });
 
   it("names the three kinds of item in the order the contract shows them, and what an item must and must not hold", async () => {

@@ -139,8 +139,14 @@ export function isDigestComment(body: string): boolean {
   return digestMarkIn(body) !== null || noDigestIn(body) !== null;
 }
 
-/** How the writer answers an ask: the thing asked for is in the head, is not, or the writer could not tell. */
-export const ASK_ANSWERS = ["in-head", "not-in-head", "could-not-tell"] as const;
+/**
+ * How the writer answers an ask: the thing asked for is in the head, is not,
+ * or the writer could not tell. Or, for an ask the Kit opened a Spin-off
+ * from (#884), that the whole of it was set aside: the Operator asked for
+ * every point of it to be an issue of its own, so nothing of it was to be
+ * built on the pull request. Kit code takes `set-aside` on no other ask.
+ */
+export const ASK_ANSWERS = ["in-head", "not-in-head", "could-not-tell", "set-aside"] as const;
 export type AskAnswer = (typeof ASK_ANSWERS)[number];
 
 /** How the writer checked an ask: by a test, an end-to-end test, reading the code, a search of it, or Required checks. */
@@ -749,11 +755,12 @@ export function digestTop(data: DigestData, where: DigestWhere): string {
   ].join("\n");
 }
 
-/** Each answer, as the criteria table says it. One that is not "in the head" is marked, in bold. */
+/** Each answer, as the criteria table says it. One that is missing, or that the writer could not tell, is marked, in bold. */
 const ANSWERED: Readonly<Record<AskAnswer, string>> = {
   "in-head": "In the head",
   "not-in-head": "**Not in the head**",
   "could-not-tell": "**Could not tell**",
+  "set-aside": "Set aside",
 };
 
 /** How an ask was checked, as the criteria table says it. */
@@ -765,11 +772,17 @@ const CHECKED: Readonly<Record<CheckedBy, string>> = {
   "required-checks": "Required checks",
 };
 
-/** An ask of the Operator's, as the criteria table names it to the Operator: a link to it, and for a line comment where it is. */
-function askedFor({ what, url, path, line }: DigestAsk): string {
-  if (what === "request-changes") return `Your [Request changes](${url})`;
+/**
+ * An ask of the Operator's, as the criteria table names it to the Operator:
+ * a link to it, and for a line comment where it is. Under it, in the same
+ * cell, go the Spin-offs the Kit opened from it (#884), each by its issue
+ * and title, which are Kit code's facts and never the writer's words.
+ */
+function askedFor({ what, url, path, line, spinOffs = [] }: DigestAsk): string {
+  const opened = spinOffs.length === 0 ? "" : `<br>Opened as ${spinOffs.length === 1 ? "a Spin-off" : "Spin-offs"}: ${spinOffs.map(({ issue, title }) => `#${issue} ${cell(title)}`).join("; ")}`;
+  if (what === "request-changes") return `Your [Request changes](${url})${opened}`;
   const on = path === undefined ? "" : ` on \`${cell(path)}\`${typeof line === "number" ? `, line ${line}` : ""}`;
-  return `Your [line comment](${url})${on}`;
+  return `Your [line comment](${url})${on}${opened}`;
 }
 
 /**
@@ -793,14 +806,22 @@ function criteriaTable(answers: readonly DigestAnswer[], asks: readonly DigestAs
  * Why Kit code refuses a reply over its answers, each reason a clause, or
  * none: an ask of Kit code's it leaves unanswered, and an answer under an id
  * that is neither one of Kit code's nor a criterion's. A criterion is the
- * writer's own to add, so Kit code cannot tell that one was left out.
+ * writer's own to add, so Kit code cannot tell that one was left out. And an
+ * answer of "set aside" (#884) for anything but an ask the Kit opened a
+ * Spin-off from: only the Operator's words set a point aside, and the Kit's
+ * record of the Spin-off is what shows they did.
  */
 function answersRefused(answers: readonly DigestAnswer[], asks: readonly DigestAsk[]): string[] {
   const unanswered = asks.filter((ask) => !answers.some(({ id }) => id === ask.id)).map(({ id }) => id);
   const unknown = answers.filter(({ id }) => !CRITERION_ID.test(id) && !asks.some((ask) => ask.id === id)).map(({ id }) => id);
+  const known = (id: string): boolean => CRITERION_ID.test(id) || asks.some((ask) => ask.id === id);
+  const notSetAside = answers
+    .filter(({ id, answer }) => answer === "set-aside" && known(id) && (asks.find((ask) => ask.id === id)?.spinOffs ?? []).length === 0)
+    .map(({ id }) => id);
   return [
     ...(unanswered.length === 0 ? [] : [`the reply left ${unanswered.length === 1 ? "an ask" : "asks"} unanswered: ${named(unanswered)}`]),
     ...(unknown.length === 0 ? [] : [`the reply answers under an id that is neither an ask Kit code listed nor a criterion's: ${named(unknown)}`]),
+    ...(notSetAside.length === 0 ? [] : [`the reply answers set aside for ${notSetAside.length === 1 ? "an ask" : "asks"} the Kit opened no Spin-off from: ${named(notSetAside)}`]),
   ];
 }
 
@@ -817,12 +838,14 @@ const KIND_SAID: Readonly<Record<ItemKind, string>> = {
  * head" or "could not tell", a criterion's included, is named by an
  * asked-for-and-not-here item. Such an item names at least one ask, each one
  * answered and none answered "in the head"; an item of another kind names
- * none. An item is named by its place in the reply.
+ * none. An item is named by its place in the reply. An ask answered "set
+ * aside" (#884) needs no item, and an asked-for-and-not-here item may not
+ * name it: nothing of it was to be built, so nothing of it is missing.
  */
 function itemsRefused(items: readonly DigestItem[], answers: readonly DigestAnswer[]): string[] {
   const asks = (ids: readonly string[]): string => `${ids.length === 1 ? "an ask" : "asks"}`;
   const covered = new Set(items.flatMap((item) => (item.kind === "asked-not-here" ? item.asks : [])));
-  const uncovered = answers.filter(({ id, answer }) => answer !== "in-head" && !covered.has(id)).map(({ id }) => id);
+  const uncovered = answers.filter(({ id, answer }) => answer !== "in-head" && answer !== "set-aside" && !covered.has(id)).map(({ id }) => id);
   return [
     ...(uncovered.length === 0 ? [] : [`no asked-for-and-not-here item names ${asks(uncovered)} answered not in the head or could not tell: ${named(uncovered)}`]),
     ...items.flatMap((item, index) => {
@@ -832,9 +855,11 @@ function itemsRefused(items: readonly DigestItem[], answers: readonly DigestAnsw
       if (ids.length === 0) return [`${said} names no ask`];
       const unanswered = ids.filter((id) => !answers.some((answer) => answer.id === id));
       const inHead = ids.filter((id) => answers.some((answer) => answer.id === id && answer.answer === "in-head"));
+      const setAside = ids.filter((id) => answers.some((answer) => answer.id === id && answer.answer === "set-aside"));
       return [
         ...(unanswered.length === 0 ? [] : [`${said} names ${asks(unanswered)} the reply does not answer: ${named(unanswered)}`]),
         ...(inHead.length === 0 ? [] : [`${said} names ${asks(inHead)} answered in the head: ${named(inHead)}`]),
+        ...(setAside.length === 0 ? [] : [`${said} names ${asks(setAside)} answered set aside: ${named(setAside)}`]),
       ];
     }),
   ];

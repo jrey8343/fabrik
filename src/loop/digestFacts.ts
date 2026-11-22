@@ -11,7 +11,7 @@ import { operatorCommentId } from "../agent/operatorComments.ts";
 import { verdictsIn } from "../github/threads.ts";
 import { type ProductChange, productChangeBetween, type VerdictEffect, verdictEffect } from "./changeFingerprint.ts";
 import { listedFollowUpsIn } from "./followUps.ts";
-import { conflictAttemptIn, CONFLICT_RUN_MARKER, handBackMarkIn, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, startedReviewsIn, touchUpBodyOnlyIn, touchUpPushIn, UNMARKED_RETRY_PUSH } from "./markers.ts";
+import { conflictAttemptIn, CONFLICT_RUN_MARKER, handBackMarkIn, openedSpinOffsIn, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, startedReviewsIn, touchUpBodyOnlyIn, touchUpPushIn, UNMARKED_RETRY_PUSH } from "./markers.ts";
 import { MAX_RETRIES, MAX_TOUCH_UPS, retryNumber, touchUpNumber } from "./retry.ts";
 import { isBrokenRun, type RequestChangesAsks, type Verdict, type VerdictRecord } from "./types.ts";
 
@@ -78,6 +78,20 @@ export interface DigestAsk {
   readonly path?: string;
   /** On a line comment: the line it is on, or null when GitHub no longer places it on one. */
   readonly line?: number | null;
+  /**
+   * The Spin-offs the Kit opened from it (#884), oldest first, as its notes
+   * on the pull request record them: points of this ask the Operator asked,
+   * in words, to be issues of their own, which no run built. Absent when
+   * there are none. The writer answers for what was to be built, and may
+   * answer `set-aside` only for an ask that has some.
+   */
+  readonly spinOffs?: readonly AskSpinOff[];
+}
+
+/** A Spin-off the Kit opened from an ask: its issue and its title. */
+export interface AskSpinOff {
+  readonly issue: number;
+  readonly title: string;
 }
 
 /** Who a round was. */
@@ -229,7 +243,7 @@ export function digestFactsOf(thread: DigestThread): DigestFacts {
     followUps: bodies
       .flatMap((body) => (verdictsIn([body])[0]?.verdict === "pass" ? listedFollowUpsIn(body) : []))
       .map(({ title, url }, index) => ({ id: `f${index + 1}`, title, url })),
-    asks: asksIn(thread.requestChanges),
+    asks: asksIn(thread.requestChanges, bodies),
     // The next flaw would call for Retry `retryNumber`, so the ones before it are used.
     retriesLeft: Math.max(0, MAX_RETRIES + 1 - retryNumber(verdicts, thread.landedNothing)),
     // Likewise the next all-tagged flaw would call for Touch-up `touchUpNumber`.
@@ -253,13 +267,19 @@ export function digestFactsOf(thread: DigestThread): DigestFacts {
  * The asks among the Operator's Request changes: those the Reviewer is given,
  * so neither a dismissed one nor one deferred during a Retry, oldest first.
  * Each is listed when its own text says something, then each of its line
- * comments.
+ * comments. Each names the Spin-offs the Kit opened from it (#884), which
+ * `kitBodies`, the Kit's own comments oldest first, record.
  */
-function asksIn(requestChanges: readonly ThreadRequestChanges[]): DigestAsk[] {
+function asksIn(requestChanges: readonly ThreadRequestChanges[], kitBodies: readonly string[]): DigestAsk[] {
+  const opened = kitBodies.flatMap(openedSpinOffsIn);
   return requestChanges
     .filter(({ dismissed, deferred }) => !dismissed && !deferred)
     .toSorted(oldestFirst)
-    .flatMap(asksOf);
+    .flatMap(asksOf)
+    .map((ask) => {
+      const spinOffs = opened.filter(({ from }) => from === ask.id).map(({ issue, title }) => ({ issue, title }));
+      return spinOffs.length === 0 ? ask : { ...ask, spinOffs };
+    });
 }
 
 /** One Request changes' asks: the review itself when its own text says something, then each of its line comments. */
