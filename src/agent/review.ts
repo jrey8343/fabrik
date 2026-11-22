@@ -53,14 +53,15 @@ export async function reviewContext(
   red: RedRequiredChecks | null = null,
   shots: DownloadedShots | null = null,
 ): Promise<PullRequestRunContext> {
-  const { operatorComments, requestedChanges, ...pullRequest } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
+  const { operatorComments, requestedChanges, spinOffs, ...pullRequest } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
     number?: unknown;
     body?: unknown;
     headRefOid?: unknown;
     operatorComments?: unknown;
     requestedChanges?: unknown;
+    spinOffs?: unknown;
   };
-  const fromOperator = operatorInputSections({ operatorComments, requestedChanges });
+  const fromOperator = operatorInputSections({ operatorComments, requestedChanges, spinOffs });
   const number = pullRequest.number;
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
   return {

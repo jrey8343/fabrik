@@ -54,12 +54,12 @@ import type { SentBack } from "../loop/backToDesign.ts";
 import { withoutChangeLines } from "../loop/changeFingerprint.ts";
 import { type DigestFacts, digestFactsOf } from "../loop/digestFacts.ts";
 import { mapOfferOf, type MapOfferOf } from "../loop/mapCap.ts";
-import { flakyCheckIssueOf, followsSpecIn, fromAuditIn, fromPullRequestIn, spinOffIn } from "../loop/markers.ts";
+import { flakyCheckIssueOf, followsSpecIn, fromAuditIn, fromPullRequestIn, openedSpinOffsIn, spinOffIn } from "../loop/markers.ts";
 import { withoutRoundLines } from "../loop/roundLine.ts";
 import type { AuditIssueSnapshot, AuditWindow, KitConfig } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
 import { AGENT_FAILURE_FILE, inputsFailureReportFor } from "./failure.ts";
-import { operatorCommentId, type OperatorComment, type RequestedChange } from "./operatorComments.ts";
+import { operatorCommentId, type OperatorComment, type RequestedChange, type SetAsidePoint, setAsidePoints } from "./operatorComments.ts";
 
 /** What these reads need of a GitHub client. */
 export type Reader = Pick<GitHub, "graphql" | "rest">;
@@ -355,7 +355,11 @@ export async function readOperatorComments(
  * reviews are the Operator's Request changes, and which line comments are in
  * each, is the one rule a Digest's asks are read by too
  * (operatorsRequestChangesIn). `written` is everything written on the PR,
- * when the caller has read it already.
+ * when the caller has read it already. And the points of those Request
+ * changes the Kit opened as Spin-offs (#884), read from the marker lines of
+ * the Kit's notes on the PR, each with the Operator's words it came from.
+ * Only a bot's note counts, as this job takes any bot for the App (byAppOf),
+ * so nobody plants one by quoting a marker.
  */
 async function readOperatorFeedback(
   github: Reader,
@@ -364,7 +368,7 @@ async function readOperatorFeedback(
   operator: string,
   deferred: readonly number[] = [],
   written?: WrittenOn,
-): Promise<{ operatorComments: OperatorComment[]; requestedChanges: RequestedChange[] }> {
+): Promise<{ operatorComments: OperatorComment[]; requestedChanges: RequestedChange[]; spinOffs: SetAsidePoint[] }> {
   const all = written ?? (await readWrittenOn(github, repo, pullRequest));
   const { conversation, lineComments: inline, reviews } = all;
   const theirs = writtenBy(operator);
@@ -412,7 +416,8 @@ async function readOperatorFeedback(
         body: c.body ?? "",
       })),
     }));
-  return { operatorComments: comments.sort(byTime((c) => c.createdAt)), requestedChanges };
+  const opened = conversation.filter(({ user }) => user?.type === "Bot").flatMap(({ body }) => openedSpinOffsIn(body ?? ""));
+  return { operatorComments: comments.sort(byTime((c) => c.createdAt)), requestedChanges, spinOffs: setAsidePoints(opened, requestedChanges) };
 }
 
 const PULL_REQUEST_QUERY = `
@@ -469,15 +474,16 @@ export async function readPullRequest(
     written,
   }: { readonly withComments: boolean; readonly operator: string; readonly deferred?: readonly number[]; readonly written?: WrittenOn },
 ): Promise<unknown> {
-  const [data, { operatorComments, requestedChanges }] = await Promise.all([
+  const [data, { operatorComments, requestedChanges, spinOffs }] = await Promise.all([
     github.graphql<PullRequestQueryResult>(PULL_REQUEST_QUERY, { owner: repo.owner, name: repo.name, number }),
     readOperatorFeedback(github, repo, number, operator, deferred, written),
   ]);
   const pullRequest = data.repository.pullRequest;
   if (pullRequest === null) throw new Error(`Pull request #${number} not found`);
   const { title, body, baseRefName, headRefName, headRefOid, comments } = pullRequest;
-  // Only a PR the Operator requested changes on carries them, so every other PR's input is as it always was.
-  const amended = requestedChanges.length === 0 ? {} : { requestedChanges };
+  // Only a PR the Operator requested changes on carries them, so every other PR's input is as it always was. Likewise
+  // the points of them the Kit opened as Spin-offs (#884), which every later run and Review is given.
+  const amended = { ...(requestedChanges.length === 0 ? {} : { requestedChanges }), ...(spinOffs.length === 0 ? {} : { spinOffs }) };
   // A Verdict among the comments keeps its marker and loses its change line (#643), which says nothing to an agent.
   const kept = comments.nodes.map((comment) => ({ ...comment, body: withoutChangeLines(comment.body) }));
   return withComments
@@ -504,6 +510,8 @@ export interface DigestPullRequest {
   readonly operatorComments: readonly OperatorComment[];
   /** The Operator's Request changes with their line comments, as the Reviewer is given them; absent when there are none. */
   readonly requestedChanges?: readonly RequestedChange[];
+  /** The points of those Request changes the Kit opened as Spin-offs (#884), as the Reviewer is given them; absent when there are none. */
+  readonly spinOffs?: readonly SetAsidePoint[];
   /** Every Verdict the Fabrik App gave it, oldest first. */
   readonly verdicts: readonly GivenVerdict[];
   /** The Kit's own notes on its thread, oldest first: every comment of the Kit's that is no Verdict, held lines left out. */
@@ -572,7 +580,7 @@ export async function readDigestPullRequest(
   const byApp = openedBy?.type === "Bot";
   const shots = byApp ? shotsMarkerIn((read as { body: string }).body) : null;
   const routes = byApp ? evidenceMarkerIn((read as { body: string }).body) : null;
-  const { comments, ...pullRequest } = read as Pick<DigestPullRequest, "number" | "title" | "body" | "operatorComments" | "requestedChanges"> & {
+  const { comments, ...pullRequest } = read as Pick<DigestPullRequest, "number" | "title" | "body" | "operatorComments" | "requestedChanges" | "spinOffs"> & {
     comments: { body: string; author: { __typename: string } | null }[];
   };
   return {

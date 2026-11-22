@@ -41,7 +41,7 @@ export async function digestContext(
   headSha: string,
 ): Promise<{ pullRequest: number; parts: string[] }> {
   const given = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as Partial<DigestPullRequest>;
-  const { number, title, body, baseRefName, operatorComments, requestedChanges } = given;
+  const { number, title, body, baseRefName, operatorComments, requestedChanges, spinOffs } = given;
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
   // The rounds, the counts, the Retries left, the Follow-ups, the asks and the product code since the first Verdict (src/loop/digestFacts.ts).
   const { facts } = given;
@@ -56,7 +56,7 @@ export async function digestContext(
       `This is #${number}. You're checked out at \`${headSha}\`, the head its pass was given on, which your Digest is written as of.${base}`,
       ...jsonBlock({ number, title, body }),
       // The Operator's Request changes, which amend the Ticket, then the Operator's comments, as the Reviewer is given them.
-      ...operatorInputSections({ operatorComments, requestedChanges }).parts,
+      ...operatorInputSections({ operatorComments, requestedChanges, spinOffs }).parts,
       ...(await ticketContext(productDir, specFile)),
       `## ${DIGEST_SECTIONS.verdicts}`,
       ...(verdicts.length === 0 ? [NONE] : jsonBlock(verdicts)),

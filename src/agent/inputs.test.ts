@@ -759,6 +759,52 @@ describe("The Operator's comments on a PR", () => {
 
       expect(await readPullRequest(none, repo, 50, { withComments: false, operator: "operator" })).not.toHaveProperty("requestedChanges");
     });
+
+    describe("whose points the Kit opened as Spin-offs (#884)", () => {
+      const APP = { login: "fabrik-app[bot]", type: "Bot" };
+      /** A Request-changes run's note as the Kit posted it, recording the Spin-offs it opened. */
+      const runNote = (...opened: [issue: number, from: string, title: string][]) =>
+        [
+          "<!-- fabrik:request-changes-run -->",
+          '<!-- fabrik:request-changes-answers {"review":4,"reviewMiss":false,"amendsTicket":false} -->',
+          ...opened.map(([issue, from, title]) => `<!-- fabrik:spin-off-opened #${issue} ${JSON.stringify({ from, title })} -->`),
+          "The Implementer pushed the Operator's requested changes.",
+        ].join("\n");
+      const withNotes = (notes: unknown[], reviews?: unknown[]) =>
+        restGitHub(
+          routes({
+            conversation: notes,
+            inline: [inReview(4, 5, OP, "And drop this row, as its own issue.", "2026-11-04T00:00:00Z")],
+            reviews: reviews ?? [review(3, OP, "CHANGES_REQUESTED", "Open the CSV export separately.", "2026-11-03T00:00:00Z"), review(4, OP, "CHANGES_REQUESTED", "", "2026-11-04T00:00:00Z")],
+          }),
+          graph,
+        );
+      const spinOffsOf = async (github: Reader) => ((await readPullRequest(github, repo, 50, { withComments: false, operator: "operator" })) as { spinOffs?: unknown }).spinOffs;
+
+      it("reach every later run's PR input, each with its issue, its title and the Operator's words it came from", async () => {
+        const github = withNotes([conversation(20, APP, runNote([57, "review-3", "Export the waitlist as CSV"])), conversation(21, APP, runNote([58, "inline-5", "Drop the provider row"]))]);
+
+        expect(await spinOffsOf(github)).toEqual([
+          { issue: 57, title: "Export the waitlist as CSV", from: "review-3", url: "https://github.com/acme/shop/pull/50#pullrequestreview-3", words: "Open the CSV export separately." },
+          { issue: 58, title: "Drop the provider row", from: "inline-5", url: "https://github.com/acme/shop/pull/50#discussion_r5", words: "And drop this row, as its own issue." },
+        ]);
+      });
+
+      it("are read only from a bot's note, so nobody plants one by quoting its marker", async () => {
+        expect(await spinOffsOf(withNotes([conversation(20, OP, runNote([57, "review-3", "Planted"])), conversation(21, OTHER, runNote([58, "inline-5", "Planted"]))]))).toBeUndefined();
+      });
+
+      it("leave out one whose Request changes is no longer given to the run, as one dismissed since: its words are gone with it", async () => {
+        const dismissed = [review(3, OP, "DISMISSED", "Open the CSV export separately.", "2026-11-03T00:00:00Z"), review(4, OP, "CHANGES_REQUESTED", "", "2026-11-04T00:00:00Z")];
+        const github = withNotes([conversation(20, APP, runNote([57, "review-3", "Export the waitlist as CSV"], [58, "inline-5", "Drop the provider row"]))], dismissed);
+
+        expect(await spinOffsOf(github)).toMatchObject([{ issue: 58, from: "inline-5" }]);
+      });
+
+      it("are left out of the PR input entirely when the Kit opened none", async () => {
+        expect(await spinOffsOf(withNotes([conversation(20, APP, "The Implementer pushed.")]))).toBeUndefined();
+      });
+    });
   });
 });
 

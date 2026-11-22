@@ -23,6 +23,7 @@ import {
   operatorCommentsSection,
   operatorInputSections,
   requestedChangesSection,
+  spinOffsSection,
 } from "./operatorComments.ts";
 import type { ImplementRunKind } from "../loop/implementOutput.ts";
 import { LeftBranchError, UnlandableBranchError } from "./failure.ts";
@@ -130,18 +131,19 @@ export interface PullRequestRunContext {
  */
 export async function retryContext(pullRequestFile: string): Promise<PullRequestRunContext> {
   const value: unknown = JSON.parse(await readFile(pullRequestFile, "utf8"));
-  const { number, title, body, comments, operatorComments, requestedChanges } = (value ?? {}) as {
+  const { number, title, body, comments, operatorComments, requestedChanges, spinOffs } = (value ?? {}) as {
     number?: unknown;
     title?: unknown;
     body?: unknown;
     comments?: { body?: unknown; author?: { __typename?: unknown } | null }[];
     operatorComments?: unknown;
     requestedChanges?: unknown;
+    spinOffs?: unknown;
   };
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
   const latest = latestVerdictIn(comments);
   if (latest === undefined) throw new Error(`#${number} has no Verdict for the retry to fix`);
-  const fromOperator = operatorInputSections({ operatorComments, requestedChanges });
+  const fromOperator = operatorInputSections({ operatorComments, requestedChanges, spinOffs });
   return {
     pullRequest: number,
     parts: [
@@ -199,7 +201,9 @@ function latestVerdictIn(comments: readonly PullRequestComment[] | undefined): s
  * Kit job's plan named that review only once it checked the Operator wrote it,
  * so this is the Operator speaking. Their earlier Request changes are built
  * too where the PR doesn't meet them yet: GitHub may have started no run for
- * one (#341). When the PR's head conflicts with main (`merge`, #341), the run
+ * one (#341). The points of those the Kit already opened as Spin-offs follow
+ * them (#884), so the run builds none of them and returns none again. When
+ * the PR's head conflicts with main (`merge`, #341), the run
  * merges main in first, never rebasing, and its fix lists each conflicted
  * file and how it was resolved.
  */
@@ -214,6 +218,7 @@ export async function requestChangesContext(
     body?: unknown;
     operatorComments?: unknown;
     requestedChanges?: unknown;
+    spinOffs?: unknown;
     comments?: PullRequestComment[];
   };
   const { number, title } = pullRequest;
@@ -293,6 +298,7 @@ export async function requestChangesContext(
         : [
             "On this run, also build each of these the pull request doesn't meet yet, as well as the requested changes above: GitHub may have started no run for one. Where they differ, the later one wins. One that asks how the branch takes in `main`, such as a rebase, never rewrites the PR's history: if the PR doesn't hold `origin/main` yet, merge it in instead.",
           ]),
+      ...spinOffsSection(pullRequest.spinOffs),
       ...operatorCommentsSection(others, 2, "(The Operator hasn't commented on it beyond the Request changes above.)"),
     ],
     // The earlier reviews are shown under their ids too, so the run may name them as weighed.
@@ -310,15 +316,16 @@ export async function requestChangesContext(
  */
 export async function conflictContext(pullRequestFile: string, main: string): Promise<PullRequestRunContext> {
   if (!FULL_SHA.test(main)) throw new Error(`FABRIK_CONFLICT_MAIN isn't a full commit sha: ${JSON.stringify(main)}`);
-  const { number, title, body, operatorComments, requestedChanges } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
+  const { number, title, body, operatorComments, requestedChanges, spinOffs } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as {
     number?: unknown;
     title?: unknown;
     body?: unknown;
     operatorComments?: unknown;
     requestedChanges?: unknown;
+    spinOffs?: unknown;
   };
   if (typeof number !== "number") throw new Error("FABRIK_PULL_REQUEST_FILE has no PR number");
-  const fromOperator = operatorInputSections({ operatorComments, requestedChanges });
+  const fromOperator = operatorInputSections({ operatorComments, requestedChanges, spinOffs });
   return {
     pullRequest: number,
     parts: [
