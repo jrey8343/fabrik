@@ -27,7 +27,7 @@
 import { gatherWeeklyRunIssues, isAgent, labelEventsOf, openIssueOf, openKitIssueOf, openPullRequestOf, plainPullRequestOf } from "../github/facts.ts";
 import { pagesOf, type ReadClient, type Repo, whyUnread } from "../github/client.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
-import { byAppOf, gatherClosedCheckIssues, gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, loginOf, readKitConfigSources } from "../github/snapshot.ts";
+import { byAppOf, CLOSED_AS, gatherClosedCheckIssues, gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, loginOf, readKitConfigSources } from "../github/snapshot.ts";
 import { type EvidenceMarker, evidenceMarkerIn } from "../evidence/uiEvidence.ts";
 import { type ShotsMarker, shotsMarkerIn } from "../evidence/shotsEvidence.ts";
 import { checkCallerWorkflow, fabrikRefsIn } from "../kit/caller.ts";
@@ -786,9 +786,6 @@ function trialProblemOf({ number, title, state, stateReason, body }: RawTrialIss
   const closedAs = state !== "CLOSED" || stateReason === undefined || stateReason === null || stateReason === "REOPENED" ? null : CLOSED_AS[stateReason];
   return [{ issue: number, pullRequest: named, title: title ?? "", open: state === "OPEN", closedAs }];
 }
-
-/** How the Kit names each reason GitHub closes an issue with. */
-const CLOSED_AS = { COMPLETED: "completed", NOT_PLANNED: "not_planned", DUPLICATE: "duplicate" } as const;
 
 /** GitHub's cross-reference to open agent pull request `pullRequest` as a fact, when it is an issue's; none for a pull request's. */
 function crossReferenceOf(pullRequest: number, { source }: RawCrossReference): CrossReferenceFacts[] {

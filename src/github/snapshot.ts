@@ -1483,7 +1483,7 @@ async function gatherFollowUpIssues(
 }
 
 /** How the Kit names each reason GitHub closes an issue with. */
-const CLOSED_AS = { COMPLETED: "completed", NOT_PLANNED: "not_planned", DUPLICATE: "duplicate" } as const;
+export const CLOSED_AS = { COMPLETED: "completed", NOT_PLANNED: "not_planned", DUPLICATE: "duplicate" } as const;
 
 /**
  * The open `wayfinder:map` issues, oldest first, whoever opened them. One

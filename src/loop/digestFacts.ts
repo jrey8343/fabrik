@@ -299,6 +299,7 @@ function asksOf({ review, body, url, lineComments }: ThreadRequestChanges): Dige
   ];
 }
 
+/** Orders two Request changes by when each was submitted, the older first. */
 function oldestFirst(a: ThreadRequestChanges, b: ThreadRequestChanges): number {
   return a.at < b.at ? -1 : a.at > b.at ? 1 : 0;
 }

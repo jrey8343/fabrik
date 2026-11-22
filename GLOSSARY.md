@@ -279,7 +279,7 @@ Sending a Ticket that can't be built as designed to a new Design session: after 
 _Avoid_: rejection, bounce
 
 **Follow-up**:
-Work the Reviewer names on a pass that deserves its own issue but lies outside the Ticket's scope. It is one of two kinds. A fault is something already wrong that its body shows, saying where it is, by file and line, and what shows it: the Kit opens it as an issue when the pull request merges, up to `caps.follow_up_issues`, and that issue enters at Triage. An idea is anything else, and stays a link the Operator opens as an issue or ignores, as a fault over the cap does.
+Work the Reviewer names on a pass that deserves its own issue but lies outside the Ticket's scope. It is one of two kinds. A fault is something already wrong that its body shows, saying where it is, by file and line, and what shows it: the Kit opens it as an issue when the pull request merges, up to `caps.follow_up_issues`, and that issue, a Follow-up issue, enters at Triage. An idea is anything else, and stays a link the Operator opens as an issue or ignores, as a fault over the cap does.
 _Avoid_: nit, suggestion
 
 **Infrastructure failure**:

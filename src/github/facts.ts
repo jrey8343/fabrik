@@ -41,6 +41,7 @@ import { allPages, GitHubError, pagesOf, type ReadClient, type Repo } from "./cl
 import { allBlockersOf, blockedByFields, type RawBlockedBy, type RawBlocker, type RawDependenciesSummary } from "./blockers.ts";
 import { leavingOutHeldLines } from "./heldLines.ts";
 import {
+  CLOSED_AS,
   gatherDesignQueueSlice,
   gatherClosedCheckIssues,
   gatherKitIssues,
@@ -373,9 +374,6 @@ export async function gatherTickets(github: Pick<ReadClient, "rest">, repo: Repo
   );
   return tickets.filter((ticket) => ticket !== null);
 }
-
-/** How the facts name each reason GitHub closes an issue with. */
-const CLOSED_AS = { COMPLETED: "completed", NOT_PLANNED: "not_planned", DUPLICATE: "duplicate" } as const;
 
 /** An issue as gatherKitFollowUpIssues reads it. */
 interface RawKitFollowUpIssue {
