@@ -16,6 +16,16 @@
 //   up in 370 failed jobs read across the Kit's and two Product repos; its
 //   step's log, if GitHub holds none, reads as a step that left none.
 // - A check run's error annotation has the level `failure`, not `error`.
+//
+// What a real run showed of a run attempt's jobs (#890, tried on 2026-11-23
+// on the Kit's own run 42449956659, which has one job):
+// - A job read by its id gives its `run_id` and its `run_attempt`.
+// - `GET …/actions/runs/{run}/attempts/{attempt}/jobs` answers `jobs`, each
+//   with its id, name, conclusion and steps, and an `html_url` of the form a
+//   red check's link has, so a job listed there and a red check of it share
+//   one link.
+// Not tried on a real run: a job that only gathers other jobs' results beside
+// the job that failed, and the jobs of a re-run's second attempt.
 import { allPages, GitHubError, type ReadClient, whyUnread } from "../github/client.ts";
 import { withoutMentions } from "../loop/mentions.ts";
 
