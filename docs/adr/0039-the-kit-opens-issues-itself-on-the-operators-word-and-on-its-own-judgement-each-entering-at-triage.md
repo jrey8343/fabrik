@@ -53,7 +53,7 @@ A Follow-up that is a fault is the third part built (#885):
 - **The Digest shows every fault.** Kit code lists them itself, each with a line saying it opens at the merge. The writer chooses only among the ideas, a reply that names a fault's id is refused, and its choice gates nothing.
 - **The Retro's evidence says what became of each.** A fault carries the issue the Kit opened and its state label, or how it closed and whether the Operator or Triage closed it, or that it stayed a link over the cap. Faults the Operator keeps closing as not planned point at the Reviewer's bar or at the cap, and the Retro is where either is tuned.
 
-This reverses #825's "The Operator still opens it from the link": the `newIssue` Operator step and its link go, and the contract refuses the field by name. It also reverses #101's "nothing auto-filed", for faults only: an idea, an Audit candidate and a Retro proposal are still links the Operator opens. ADR-0007 and ADR-0010 stand: an Operator comment still triggers nothing, and a point of a Request changes is built on the pull request unless the Operator's own words ask for it to be separate.
+This reverses #825's "The Operator still opens it from the link": the `newIssue` Operator step and its link go, and the contract refuses the field by name. It also reverses #101's "nothing auto-filed", for faults only: an idea, an Audit candidate and a Retro proposal are still links the Operator opens. ADR-0007 and ADR-0010 stand: an Operator comment still triggers nothing, and a point of a Request changes is built on the pull request unless the Operator's own words ask for it to be separate. It refines ADR-0036 in one case: a Request-changes run that commits nothing on a head that didn't move is still handed to the Operator, unless its review asked only for Spin-offs, when the pull request returns to the Merge gate as above.
 
 ## Considered options
 
@@ -81,7 +81,7 @@ This reverses #825's "The Operator still opens it from the link": the `newIssue`
 - A Spin-off blocked by a Ticket that is closed as not planned stays held, as any work behind such a Blocker does.
 - A Design session that later rewrites a Spin-off drops its marker line. Triage, the marker's one reader, has sorted the issue by then.
 - A Design session that rewrites a Follow-up issue keeps its marker line, and a Spec written from one carries it: the cap reads the marker for as long as the issue is open.
-- The agent-inputs job doesn't know the Fabrik App's login, so it takes any bot's issue that opens with the marker for a Spin-off, as it does for a Check's issue. The push job, which knows the login, reads the marker only on the App's own.
+- The agent-inputs job doesn't know the Fabrik App's login, so it takes any bot's issue that opens with the marker for a Spin-off, or for a Follow-up issue, as it does for a Check's issue. The push job, which knows the login, reads the marker only on the App's own.
 - A live Design session files as the Operator, so nothing it opens is a Spin-off to the Kit.
 - Kit code goes by asks, not by points, so a run of only Spin-offs rests on the run's own statement too. One ask can hold a point to build and a point to set aside: a run that commits nothing on such a review and does not state `onlySpinOffs` is handed back, its Spin-off opened. A run that states it wrongly, with a Spin-off for every ask, goes back to the Merge gate with that point unbuilt and no Review to find it. The run's note, which lists what was set aside and says the run stated it, is what the Operator reads there.
 - A Request-changes run that ends without landing, as on a trust-root refusal or a conflict with `main` it did not resolve, opens no Spin-off: the Operator's Request changes still stands, and its next run returns them.
@@ -89,7 +89,7 @@ This reverses #825's "The Operator still opens it from the link": the `newIssue`
 - A Spin-off whose Request changes is dismissed later is no longer given to later runs, as the Request changes itself is not. Its issue stays.
 - A Design session on a Request changes' Spin-off is told of the pull request it was set aside from, and that a Roll-in onto it is not on offer.
 - A fault has no link on its Verdict. One named on a pull request that closes unmerged, or whose merge the Kit's plan never saw, is words on that Verdict and nothing more, and the Operator opens it by hand if they want it.
-- Only the merge's own event opens a pull request's faults. No Tick looks at merged pull requests yet, so the comment's mark guards a second look that nothing takes today.
+- Only the merge's own event opens a pull request's faults. No Tick looks at merged pull requests yet, so the comment's mark guards a second look that nothing takes today. A merge whose event job fails before it opens anything opens nothing later, and each of its faults then has neither an issue nor a link: its text is on the Verdict.
 - A Verdict posted before a Follow-up had a kind lists links alone, so every Follow-up on it is an idea, and nothing opens for it at the merge.
 - A fault the Operator opened and has since retitled is not known as opened, and the merge opens it.
 - The cap is read as the merge is planned. Two pull requests that merge at the same moment can each read the count before the other's issues exist, and between them open more than the room.

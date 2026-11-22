@@ -57,7 +57,7 @@ A Design session now opens the issue for work you put off in an answer: a Spin-o
 - **A Design session that later rewrites a Spin-off drops its hidden line.** Triage has sorted the issue by then, and nothing else reads the line. A Follow-up issue keeps its own, which the cap reads.
 - **No veto before the merge.** A fault you don't want opens all the same. Close its issue, and nothing reopens it. Lower `caps.follow_up_issues` if too many open.
 - **A fault has no link on its Verdict.** One named on a pull request that closes unmerged opens nothing and has no link: its text is on the Verdict, and you open it by hand if you want it.
-- **Only the merge's own event opens them.** No Tick looks at merged pull requests, so a merge whose push job failed before it opened anything opens nothing later. The faults are on the pull request's Verdicts.
+- **Only the merge's own event opens them.** No Tick looks at merged pull requests, so a merge whose push job failed before it opened anything opens nothing later. Each of its faults then has neither an issue nor a link: its text is on the pull request's Verdict, and you open it by hand if you want it.
 - **A fault you opened and then retitled is opened again.** The Kit knows an issue as the fault's by its `From PR` line and its exact title.
 - **Two merges at the same moment can pass the cap.** Each reads the count of open Follow-up issues before the other's exist.
 - **A merged row carries its Follow-ups for 24 hours.** The read library reads a merged pull request's comments only while its merge is within the last 24 hours, so a row that stands longer, as one waiting at Staging does, carries none after that.

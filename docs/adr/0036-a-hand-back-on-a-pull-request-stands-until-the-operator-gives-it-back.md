@@ -27,5 +27,6 @@ We chose this because the Kit's rebase and the Operator's each end in a force-pu
 - A handed-back pull request a red check holds at the Merge gate stays red after the check's fix lands, until the Operator takes the label off. The Tick reads only the Check's issues closed in the last 7 days, so a label left on longer than that leaves the fix for the Operator to bring in.
 - The label doubles as the Operator's way to keep the Kit off any agent pull request at the Merge gate, which #304 left as an open question.
 - A conflicted draft whose Review stopped waiting (ADR-0028) and carries the label gets the note that hands it to the Operator, not a rebase.
+- ADR-0039 refines "a Request-changes run commits nothing on a head that didn't move, the Kit hands the pull request to the Operator": a run whose review asked only for Spin-offs, which returned one for every ask the Kit read and stated that no point was to be built, is no Hand-back: its pull request returns to the Merge gate on the pass it had. Every other such run is still handed to the Operator.
 
 Decided in [The Kit hands a conflicting pull request back as ready-for-human, then starts a conflict-only run on it while the Operator is resolving it](https://github.com/jrey8343/fabrik/issues/841).

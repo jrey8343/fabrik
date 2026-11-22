@@ -281,6 +281,22 @@ describe("ADR-0039 and ADR-0010, on a Request changes' Spin-offs (#884)", () => 
   });
 });
 
+describe("ADR-0039 and ADR-0036, on a Request-changes run that commits nothing (#884)", () => {
+  const file = (prefix: string) => readdirSync(`${KIT}/docs/adr`).find((name) => name.startsWith(prefix)) ?? "";
+
+  it("ADR-0039 names ADR-0036 and says which of its cases is no Hand-back", () => {
+    expect(read(`docs/adr/${file("0039-")}`)).toContain(
+      "It refines ADR-0036 in one case: a Request-changes run that commits nothing on a head that didn't move is still handed to the Operator, unless its review asked only for Spin-offs, when the pull request returns to the Merge gate as above.",
+    );
+  });
+
+  it("ADR-0036 gains a line pointing at it", () => {
+    const consequences = read(`docs/adr/${file("0036-")}`).split("\n## Consequences\n")[1] ?? "";
+    expect(consequences).toContain('ADR-0039 refines "a Request-changes run commits nothing on a head that didn\'t move, the Kit hands the pull request to the Operator"');
+    expect(consequences).toContain("is no Hand-back: its pull request returns to the Merge gate on the pass it had");
+  });
+});
+
 describe("The README's account of a Request changes' Spin-offs (#884)", () => {
   const readme = read("README.md");
   const section = (heading: string) => readme.split(`\n## ${heading}\n`)[1]?.split("\n## ")[0] ?? "";
