@@ -168,7 +168,8 @@ export type RowFollowUp = FollowUp & { readonly filedAs: number | null };
  *
  * On a merged agent pull request the gather read the comments of (those
  * merged in the last 24 hours), the Follow-ups its last Verdict named, when
- * that is a pass (mergedFollowUpsOf). `filedAs` is then the issue the Kit
+ * that is a pass, then each fault only an earlier pass named that the Kit's
+ * comment at the merge records (mergedFollowUpsOf). `filedAs` is then the issue the Kit
  * opened for it at the merge, as the Kit's comment there records it, by the
  * same comparison of titles; else the open issue the Operator opened whose
  * `From PR` line names the pull request and whose title is its own; else
@@ -201,17 +202,37 @@ function mergedFollowUps({ github, operator, issueBodies, mergedFollowUps: read 
 
 /**
  * What the comments of merged agent pull request `pullRequest` say of its
- * Follow-ups (#885), as the facts keep it: those its last Verdict named,
- * when that is a pass, each with its kind, and each fault the Kit opened as
- * an issue at the merge, as its comment there records. Null when it named
- * none. Read from a bot's comments alone, as a Verdict is.
+ * Follow-ups (#885), as the facts keep it. Null when they say of none. Read
+ * from a bot's comments alone, as a Verdict is.
+ *
+ * - **`named`.** Those its last Verdict named, when that is a pass, each
+ *   with its kind. Then each fault the Kit's comment at the merge records,
+ *   opened or left over the cap, that the last pass did not name, in the
+ *   order recorded: the merge opens every pass's faults, so one only an
+ *   earlier pass named is an issue all the same. Its body is the one the
+ *   first pass to name it gave it, or empty when that pass is not among the
+ *   comments read, since the Kit's comment records a title alone.
+ * - **`opened`.** Each fault the Kit opened as an issue at the merge, with
+ *   the issue, as its comment there records.
  */
 export function mergedFollowUpsOf(pullRequest: number, comments: readonly { readonly body: string; readonly byBot: boolean }[]): MergedFollowUpsFacts | null {
   const byBots = comments.filter(({ byBot }) => byBot).map(({ body }) => body);
-  const last = byBots.findLast((body) => verdictsIn([body]).length > 0);
-  const named = last === undefined || verdictsIn([last])[0]?.verdict !== "pass" ? [] : followUpsIn(last);
+  const verdicts = byBots.filter((body) => verdictsIn([body]).length > 0);
+  const last = verdicts.at(-1);
+  const byLast = last === undefined || verdictsIn([last])[0]?.verdict !== "pass" ? [] : followUpsIn(last);
+  const recorded = byBots.flatMap((body) => {
+    const read = followUpsOpenedIn(body);
+    return read === null ? [] : [read];
+  });
+  const opened = recorded.flatMap((read) => read.opened);
+  const sameTitle = (title: string) => (other: { readonly title: string }) => other.title.trim() === title.trim();
+  const faults = verdicts.flatMap((body) => (verdictsIn([body])[0]?.verdict === "pass" ? followUpsIn(body).filter(({ kind }) => kind === "fault") : []));
+  const earlier = [...opened.map(({ title }) => title), ...recorded.flatMap(({ left }) => left)]
+    .filter((title, at, all) => all.findIndex((other) => other.trim() === title.trim()) === at && !byLast.some(sameTitle(title)))
+    .map((title): FollowUp => faults.find(sameTitle(title)) ?? { kind: "fault", title: title.trim(), body: "" });
+  const named = [...byLast, ...earlier];
   if (named.length === 0) return null;
-  return { pullRequest, named, opened: byBots.flatMap((body) => followUpsOpenedIn(body)?.opened ?? []) };
+  return { pullRequest, named, opened };
 }
 
 /** The open agent pull request issue `issue` could be rolled in to, or null. */

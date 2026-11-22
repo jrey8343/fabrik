@@ -128,6 +128,8 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Kit-opens-issues release notes, 
     expect(library).toContain("`filedAs` names the issue the Kit opened");
     expect(library).toContain("`readRow`");
     expect(library).toContain("`mergedFollowUps`");
+    expect(library).toContain("then each fault only an earlier pass named that the Kit opened at the merge or left over the cap");
+    expect(library).toContain("Nothing is removed and no field changes meaning.");
   });
 
   it("say why it is a minor in the releasing guide's terms: one new Kit config field, with a default", () => {
@@ -243,6 +245,9 @@ describe("The README's account of a Follow-up that is a fault (#885)", () => {
     const library = bullet(section("Reading the Kit from another program"), "Follow-ups.");
     expect(library).toContain("`kind`");
     expect(library).toContain("`filedAs`");
+    expect(bullet(section("Reading the Kit from another program"), "On a merged pull request's row")).toContain(
+      "then each fault only an earlier pass named that the Kit's comment at the merge records, opened or left over the cap: the merge opens every pass's faults",
+    );
     expect(bullet(section("Reading the Kit from another program"), "`readRow`")).toContain("A Follow-up kept before it had a `kind` reads as an idea");
   });
 });

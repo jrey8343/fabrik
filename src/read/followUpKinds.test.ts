@@ -66,6 +66,46 @@ describe("what a merged pull request's comments say of its Follow-ups (#885)", (
     expect(mergedFollowUpsOf(50, comments)).toEqual({ pullRequest: 50, named: [MONEY, BADGE, FOOTER], opened: [{ issue: 101, title: BADGE.title }] });
   });
 
+  it("also holds each fault an earlier pass named that the Kit's comment records, opened or left over the cap, after the last pass's and with the body its pass gave it", () => {
+    const README = { kind: "fault", title: "The README names a removed flag", body: "`README.md:40` says `--fast`." } as const;
+    const comments = [
+      verdictListing("pass", "2026-11-09T09:00:00Z", [BADGE, README, MONEY, { kind: "idea", title: "Rename the till", body: "It is a register." }]),
+      verdictListing("pass", "2026-11-09T10:00:00Z", [MONEY, FOOTER]),
+      faultsComment([[101, ` ${BADGE.title}`], [102, FOOTER.title]], [README.title]),
+    ];
+
+    // The last pass's, then the faults only the earlier pass named, in the order the comment records them. Never an earlier pass's idea.
+    expect(mergedFollowUpsOf(50, comments)).toEqual({
+      pullRequest: 50,
+      named: [MONEY, FOOTER, BADGE, README],
+      opened: [
+        { issue: 101, title: ` ${BADGE.title}` },
+        { issue: 102, title: FOOTER.title },
+      ],
+    });
+  });
+
+  it("holds the faults the Kit's comment records when the last Verdict is no pass, or its pass named none: the merge opened what the earlier passes named", () => {
+    const flawLast = [verdictListing("pass", "2026-11-09T09:00:00Z", [BADGE]), verdictListing("execution-flaw", "2026-11-09T10:00:00Z", []), faultsComment([[101, BADGE.title]])];
+    const noneLast = [verdictListing("pass", "2026-11-09T09:00:00Z", [BADGE]), verdictListing("pass", "2026-11-09T10:00:00Z", []), faultsComment([], [BADGE.title])];
+
+    expect(mergedFollowUpsOf(50, flawLast)).toEqual({ pullRequest: 50, named: [BADGE], opened: [{ issue: 101, title: BADGE.title }] });
+    expect(mergedFollowUpsOf(50, noneLast)).toEqual({ pullRequest: 50, named: [BADGE], opened: [] });
+  });
+
+  it("holds a recorded fault whose pass is not among the comments read, with no body: the comment records its title alone", () => {
+    const comments = [verdictListing("pass", "2026-11-09T10:00:00Z", [MONEY]), faultsComment([[101, BADGE.title]])];
+
+    expect(mergedFollowUpsOf(50, comments)?.named).toEqual([MONEY, { kind: "fault", title: BADGE.title, body: "" }]);
+  });
+
+  it("holds no earlier pass's fault the Kit's comment doesn't record, as before the merge is seen to, and none a person's comment records", () => {
+    const passes = [verdictListing("pass", "2026-11-09T09:00:00Z", [BADGE]), verdictListing("pass", "2026-11-09T10:00:00Z", [MONEY])];
+
+    expect(mergedFollowUpsOf(50, passes)?.named).toEqual([MONEY]);
+    expect(mergedFollowUpsOf(50, [...passes, faultsComment([[666, BADGE.title]], [], { author: "someone", byBot: false })])?.named).toEqual([MONEY]);
+  });
+
   it("is nothing when its last Verdict is no pass, or its pass named none", () => {
     expect(mergedFollowUpsOf(50, [verdictListing("pass", "2026-11-09T09:00:00Z", [BADGE]), verdictListing("execution-flaw", "2026-11-09T10:00:00Z", [BADGE])])).toBeNull();
     expect(mergedFollowUpsOf(50, [verdictListing("pass", "2026-11-09T10:00:00Z", [])])).toBeNull();
@@ -94,6 +134,16 @@ describe("a merged pull request's Follow-ups (#885)", () => {
       { title: BADGE.title, body: BADGE.body, kind: "fault", filedAs: 101 },
       { title: MONEY.title, body: MONEY.body, kind: "idea", filedAs: null },
       { title: FOOTER.title, body: FOOTER.body, kind: "fault", filedAs: null },
+    ]);
+  });
+
+  it("hold a fault only an earlier pass named, which the merge opened all the same, its filedAs naming that issue", () => {
+    const comments = [verdictListing("pass", "2026-11-09T09:00:00Z", [BADGE]), verdictListing("pass", "2026-11-09T10:00:00Z", [MONEY]), faultsComment([[101, BADGE.title]])];
+    const read = mergedFollowUpsOf(50, comments);
+
+    expect(rowOf50(merged({ mergedFollowUps: read === null ? [] : [read] }))?.followUps).toEqual([
+      { title: MONEY.title, body: MONEY.body, kind: "idea", filedAs: null },
+      { title: BADGE.title, body: BADGE.body, kind: "fault", filedAs: 101 },
     ]);
   });
 

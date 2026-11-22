@@ -63,9 +63,10 @@ export interface Row {
    * fault or an idea (#885), and the issue it was filed as, or null. On an
    * open agent pull request's row they are its head's pass's, and `filedAs`
    * is the related issue with its title. On the row of one merged in the
-   * last 24 hours they are its last pass's, and `filedAs` is the issue the
-   * Kit opened for a fault at the merge, or the open issue the Operator
-   * opened from its link.
+   * last 24 hours they are its last pass's, then each fault only an earlier
+   * pass named that the Kit's comment at the merge records, opened or left
+   * over the cap, and `filedAs` is the issue the Kit opened for a fault at
+   * the merge, or the open issue the Operator opened from its link.
    */
   readonly followUps: readonly RowFollowUp[];
   /**

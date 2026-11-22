@@ -295,9 +295,11 @@ export interface StagingFacts {
 
 /**
  * What a merged agent pull request's comments say of its Follow-ups (#885,
- * mergedFollowUpsOf in ./related.ts): those its last Verdict named, a pass,
- * each with its kind, and each fault the Kit opened as an issue when it
- * merged, with the issue, as the Kit's comment there records.
+ * mergedFollowUpsOf in ./related.ts): in `named`, those its last Verdict
+ * named, a pass, each with its kind, then each fault only an earlier pass
+ * named that the Kit's comment at the merge records; and in `opened`, each
+ * fault the Kit opened as an issue when it merged, with the issue, as that
+ * comment records.
  */
 export interface MergedFollowUpsFacts {
   readonly pullRequest: number;
@@ -336,7 +338,7 @@ export interface Facts {
   readonly ticketStates: readonly TicketStateFacts[];
   /**
    * What the comments of each agent pull request merged in the last 24 hours
-   * say of its Follow-ups (#885), for each whose last pass named one: empty
+   * say of its Follow-ups (#885), for each that says of one: empty
    * in a repo with none, which no query is made for. No such key in facts
    * kept from an earlier release.
    */
@@ -819,7 +821,7 @@ async function gatherClosedIssueComments(github: ReadClient, repo: Repo, crossRe
 
 /**
  * What the comments of each of these merged agent pull requests say of its
- * Follow-ups (#885), lowest number first, for each whose last pass named
+ * Follow-ups (#885), lowest number first, for each that says of
  * one: one query for them all, by number, each one's latest comments, and
  * none at all with no such pull request, so a repo where nothing merged in
  * the last day pays nothing. One GitHub no longer has is left out.
