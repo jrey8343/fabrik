@@ -16,6 +16,16 @@
 //   up in 370 failed jobs read across the Kit's and two Product repos; its
 //   step's log, if GitHub holds none, reads as a step that left none.
 // - A check run's error annotation has the level `failure`, not `error`.
+//
+// What a real run showed of a run attempt's jobs (#890, tried on 2026-11-23
+// on the Kit's own run 42449956659, which has one job):
+// - A job read by its id gives its `run_id` and its `run_attempt`.
+// - `GET …/actions/runs/{run}/attempts/{attempt}/jobs` answers `jobs`, each
+//   with its id, name, conclusion and steps, and an `html_url` of the form a
+//   red check's link has, so a job listed there and a red check of it share
+//   one link.
+// Not tried on a real run: a job that only gathers other jobs' results beside
+// the job that failed, and the jobs of a re-run's second attempt.
 import { allPages, GitHubError, type ReadClient, whyUnread } from "../github/client.ts";
 import { withoutMentions } from "../loop/mentions.ts";
 
@@ -39,8 +49,15 @@ export interface ActionsJobStep {
   readonly conclusion: string | null;
 }
 
-/** A GitHub Actions job, as `GET …/actions/jobs/{job}` gives it, cut to what an excerpt reads. */
+/** A GitHub Actions job, as `GET …/actions/jobs/{job}` gives it, and as a workflow run attempt's jobs list it, cut to what an excerpt reads. */
 export interface ActionsJob {
+  readonly id?: number;
+  readonly name?: string;
+  /** The job's page: …/actions/runs/<run>/job/<job>, the link a red check of it has. */
+  readonly html_url?: string | null;
+  /** The job's workflow run, and which attempt of it the job belongs to: a re-run's jobs are a new attempt's. */
+  readonly run_id?: number;
+  readonly run_attempt?: number;
   readonly status: string;
   readonly conclusion: string | null;
   /** The job's check run; its id is the job's, as observed (#710), and this is how to cross. */
@@ -85,6 +102,8 @@ export interface FailureReader {
   job(jobId: number): Promise<ActionsJob>;
   /** One step's log, as plain text. */
   stepLog(jobId: number, step: number): Promise<string>;
+  /** Every job of one attempt of a workflow run, each with its steps. */
+  runJobs(runId: number, attempt: number): Promise<readonly ActionsJob[]>;
   annotations(checkRunId: number): Promise<readonly CheckAnnotation[]>;
   /** One check run, by its id: an outside check's red run, whose link is its page on GitHub. */
   checkRun(checkRunId: number): Promise<CheckRun>;
@@ -105,8 +124,9 @@ export interface LogClient extends Pick<ReadClient, "rest"> {
 
 /**
  * The FailureReader on a job's own GitHub clients for `repo` (`owner/name`),
- * each named for the permission it needs: the job and its logs on `actions`
- * (Actions: read); the annotations and an outside check's check runs on
+ * each named for the permission it needs: the job, its logs and its workflow
+ * run attempt's jobs (#890) on `actions` (Actions: read); the annotations,
+ * the other failed jobs' among them, and an outside check's check runs on
  * `checks` (Checks: read); an outside check's commit statuses on `statuses`
  * (Commit statuses: read, #777), or null where the job holds no token with
  * it. The Review's waits hand in their workflow token for all three; the Tick
@@ -121,6 +141,8 @@ export function failureReaderOf(
   return {
     job: async (jobId) => (await actions.rest("GET", `/repos/${repo}/actions/jobs/${jobId}`)) as ActionsJob,
     stepLog: (jobId, step) => actions.logText(`/repos/${repo}/actions/jobs/${jobId}/steps/${step}/logs`),
+    runJobs: (runId, attempt) =>
+      allPages<ActionsJob>(actions, `/repos/${repo}/actions/runs/${runId}/attempts/${attempt}/jobs`, (page) => (page as { jobs: ActionsJob[] }).jobs),
     annotations: (checkRunId) => allPages<CheckAnnotation>(checks, `/repos/${repo}/check-runs/${checkRunId}/annotations`),
     checkRun: async (checkRunId) => (await checks.rest("GET", `/repos/${repo}/check-runs/${checkRunId}`)) as CheckRun,
     checkRuns: (sha, name) =>
@@ -151,21 +173,38 @@ export interface ExcerptAnnotation {
   readonly message: string;
 }
 
+/** What a failed job left: each failed step, none when no step failed, and its error annotations. */
+export interface JobFailure {
+  readonly steps: readonly FailedStep[];
+  readonly annotations: readonly ExcerptAnnotation[];
+  /** Why the annotations couldn't be read, when they couldn't. */
+  readonly annotationsUnread?: string;
+}
+
+/** Another job of a red check's workflow run attempt that failed (#890): its name, its link and what it left. */
+export interface FailedJob extends JobFailure {
+  readonly name: string;
+  readonly link: string;
+}
+
 /**
  * A red check's Failure excerpt, as data. A GitHub Actions check's holds each
- * failed step, none when no step failed, and its error annotations; one that
- * couldn't be read holds only why. Each keeps the check's link.
+ * failed step, none when no step failed, its error annotations, and the other
+ * failed jobs of its workflow run attempt (#890); one that couldn't be read
+ * holds only why. Each keeps the check's link.
  */
 export type FailureExcerpt =
-  | {
+  | ({
       readonly kind: "actions";
       readonly check: string;
       readonly link: string;
-      readonly steps: readonly FailedStep[];
-      readonly annotations: readonly ExcerptAnnotation[];
-      /** Why the annotations couldn't be read, when they couldn't. */
-      readonly annotationsUnread?: string;
-    }
+      /** The other jobs of the same workflow run attempt that failed, left out when there are none. */
+      readonly otherJobs?: readonly FailedJob[];
+      /** How many more failed that weren't read, past the first OTHER_JOBS. */
+      readonly otherJobsLeftOut?: number;
+      /** Why the run attempt's jobs couldn't be read, when they couldn't. */
+      readonly otherJobsUnread?: string;
+    } & JobFailure)
   /** A commit status from an outside service (#777): its description, empty when it wrote none, and its target link. */
   | { readonly kind: "commit-status"; readonly check: string; readonly link: string; readonly description: string }
   /** A check run from an outside service (#777): its output's title and summary, each empty when it wrote none, its error annotations, and its details link. */
@@ -205,6 +244,12 @@ export function isActionsJobLink(link: string): boolean {
  * read for what the service wrote to GitHub (#777). A failure that can't be
  * read gives only why, never throwing:
  * a missing excerpt is never the error of the job that tried.
+ *
+ * A GitHub Actions check's also carries the other jobs of its job's workflow
+ * run attempt that failed or timed out (#890), since a job that only gathers
+ * other jobs' results names nothing itself: up to OTHER_JOBS of them, each
+ * with its name, link, failed steps and error annotations, and the end of its
+ * failed steps' logs only when no annotation of its names a file.
  */
 export async function readFailureExcerpt(check: RedCheck, github: FailureReader): Promise<FailureExcerpt> {
   const unread = (why: string): FailureExcerpt => ({ kind: "unread", check: check.name, link: check.link, why });
@@ -218,32 +263,87 @@ export async function readFailureExcerpt(check: RedCheck, github: FailureReader)
   }
   if (job.status !== "completed") return unread("the job hadn't finished when the Kit read it");
   const steps: FailedStep[] = [];
-  for (const step of (job.steps ?? []).filter(({ conclusion }) => conclusion === "failure")) {
+  for (const step of failedStepsOf(job)) {
     steps.push(await failedStep(github, jobId, step));
   }
-  // The job's id is its check run's, as observed (#710); its check_run_url says so where GitHub gives one.
-  const checkRunId = Number(CHECK_RUN.exec(job.check_run_url ?? "")?.[1] ?? jobId);
-  let annotations: ExcerptAnnotation[] = [];
-  let annotationsUnread: string | null = null;
-  try {
-    annotations = (await github.annotations(checkRunId))
-      .filter(({ annotation_level }) => annotation_level === "failure")
-      .map(({ path, start_line, message }) => ({ path, line: start_line, message }));
-  } catch (error) {
-    annotationsUnread = refusal(error);
-  }
-  if ((job.steps ?? []).length === 0 && annotations.length === 0 && annotationsUnread === null) {
+  const annotations = await errorAnnotations(github, checkRunIdOf(job, jobId));
+  if ((job.steps ?? []).length === 0 && annotations.annotations.length === 0 && annotations.annotationsUnread === undefined) {
     return unread("the job never started, so it left no log and no annotation");
   }
-  return {
-    kind: "actions",
-    check: check.name,
-    link: check.link,
-    steps,
-    annotations,
-    ...(annotationsUnread === null ? {} : { annotationsUnread }),
-  };
+  return { kind: "actions", check: check.name, link: check.link, steps, ...annotations, ...(await otherFailedJobs(github, jobId, job)) };
 }
+
+/** The id of a job's check run: it is the job's own, as observed (#710), and its check_run_url says so where GitHub gives one. */
+function checkRunIdOf(job: ActionsJob, jobId: number): number {
+  return Number(CHECK_RUN.exec(job.check_run_url ?? "")?.[1] ?? jobId);
+}
+
+/** A check run's error annotations as file, line and message, or why they couldn't be read. */
+async function errorAnnotations(github: FailureReader, checkRunId: number): Promise<Pick<JobFailure, "annotations" | "annotationsUnread">> {
+  try {
+    const annotations = (await github.annotations(checkRunId))
+      .filter(({ annotation_level }) => annotation_level === "failure")
+      .map(({ path, start_line, message }) => ({ path, line: start_line, message }));
+    return { annotations };
+  } catch (error) {
+    return { annotations: [], annotationsUnread: refusal(error) };
+  }
+}
+
+/**
+ * The other failed jobs of a red job's workflow run attempt (#890): a job
+ * that only gathers other jobs' results says nothing of what failed, and the
+ * job that failed does. Every one that failed or timed out is taken, not
+ * only those the red job `needs`, which only the workflow file says. Each is
+ * read for its failed steps' names and its error annotations, and for the
+ * end of each failed step's log only when no annotation names a file: a test
+ * runner that writes annotations has named the test, and one that writes
+ * none leaves only the log to say it. A list that can't be read gives why.
+ */
+async function otherFailedJobs(
+  github: FailureReader,
+  jobId: number,
+  job: ActionsJob,
+): Promise<Pick<Extract<FailureExcerpt, { kind: "actions" }>, "otherJobs" | "otherJobsLeftOut" | "otherJobsUnread">> {
+  if (job.run_id === undefined || job.run_attempt === undefined) return {};
+  let jobs: readonly ActionsJob[];
+  try {
+    jobs = await github.runJobs(job.run_id, job.run_attempt);
+  } catch (error) {
+    return { otherJobsUnread: refusal(error) };
+  }
+  // A cancelled job is left out: most often another job stopped it, as a matrix's fail-fast does, and it says nothing of what failed.
+  const failed = jobs.filter(
+    (other): other is ActionsJob & { readonly id: number } =>
+      other.id !== undefined && other.id !== jobId && other.status === "completed" && (other.conclusion === "failure" || other.conclusion === "timed_out"),
+  );
+  const otherJobs: FailedJob[] = [];
+  for (const other of failed.slice(0, OTHER_JOBS)) {
+    const annotations = await errorAnnotations(github, checkRunIdOf(other, other.id));
+    const namesAFile = annotations.annotations.some(({ path }) => path !== NO_FILE);
+    const steps: FailedStep[] = [];
+    for (const step of failedStepsOf(other)) {
+      steps.push(namesAFile ? { name: step.name, lines: [], earlier: 0 } : await failedStep(github, other.id, step));
+    }
+    otherJobs.push({ name: other.name ?? "", link: other.html_url ?? "", steps, ...annotations });
+  }
+  if (otherJobs.length === 0) return {};
+  return { otherJobs, ...(failed.length > OTHER_JOBS ? { otherJobsLeftOut: failed.length - OTHER_JOBS } : {}) };
+}
+
+/** A job's steps whose conclusion is failure. */
+function failedStepsOf(job: ActionsJob): ActionsJobStep[] {
+  return (job.steps ?? []).filter(({ conclusion }) => conclusion === "failure");
+}
+
+/** How many other failed jobs of a run attempt an excerpt reads: a wide matrix can fail in every job, each a read or two of its own. */
+export const OTHER_JOBS = 10;
+
+/**
+ * The path GitHub gives an annotation that names no file, as the runner's own
+ * of a step's exit code: such an annotation says a step failed, never where.
+ */
+const NO_FILE = ".github";
 
 /**
  * A red check from an outside service's excerpt (#777): whatever the service
@@ -277,23 +377,13 @@ async function outsideExcerpt(check: RedCheck, github: FailureReader): Promise<F
     return unread(gone(error) && Number.isSafeInteger(byId) ? "GitHub holds no such check run any more" : refusal(error));
   }
   if (run !== undefined) {
-    let annotations: ExcerptAnnotation[] = [];
-    let annotationsUnread: string | null = null;
-    try {
-      annotations = (await github.annotations(run.id))
-        .filter(({ annotation_level }) => annotation_level === "failure")
-        .map(({ path, start_line, message }) => ({ path, line: start_line, message }));
-    } catch (error) {
-      annotationsUnread = refusal(error);
-    }
     return {
       kind: "outside-check-run",
       check: check.name,
       link: run.details_url || run.html_url || check.link,
       title: (run.output?.title ?? "").trim(),
       summary: (run.output?.summary ?? "").trim(),
-      annotations,
-      ...(annotationsUnread === null ? {} : { annotationsUnread }),
+      ...(await errorAnnotations(github, run.id)),
     };
   }
   if (status === undefined) return unread("GitHub holds no check run or commit status by that name on the head");
@@ -375,7 +465,7 @@ function isExcerpt(value: unknown): value is FailureExcerpt {
   if (!isString(excerpt["check"]) || !isString(excerpt["link"])) return false;
   if (excerpt["kind"] === "unread") return isString(excerpt["why"]);
   if (excerpt["kind"] === "commit-status") return isString(excerpt["description"]);
-  const { steps, annotations, annotationsUnread } = excerpt;
+  const { annotations, annotationsUnread } = excerpt;
   const isStep = (step: unknown) => {
     const { name, lines, earlier, why } = (step ?? {}) as Record<string, unknown>;
     return isString(name) && Array.isArray(lines) && lines.every(isString) && typeof earlier === "number" && (why === undefined || isString(why));
@@ -394,8 +484,18 @@ function isExcerpt(value: unknown): value is FailureExcerpt {
     );
   }
   if (excerpt["kind"] !== "actions") return false;
+  const isJob = ({ steps, annotations, annotationsUnread }: Record<string, unknown>) =>
+    Array.isArray(steps) && steps.every(isStep) && Array.isArray(annotations) && annotations.every(isAnnotation) && (annotationsUnread === undefined || isString(annotationsUnread));
+  const isOtherJob = (job: unknown) => {
+    const other = (job ?? {}) as Record<string, unknown>;
+    return isString(other["name"]) && isString(other["link"]) && isJob(other);
+  };
+  const { otherJobs, otherJobsLeftOut, otherJobsUnread } = excerpt;
   return (
-    Array.isArray(steps) && steps.every(isStep) && Array.isArray(annotations) && annotations.every(isAnnotation) && (annotationsUnread === undefined || isString(annotationsUnread))
+    isJob(excerpt) &&
+    (otherJobs === undefined || (Array.isArray(otherJobs) && otherJobs.every(isOtherJob))) &&
+    (otherJobsLeftOut === undefined || typeof otherJobsLeftOut === "number") &&
+    (otherJobsUnread === undefined || isString(otherJobsUnread))
   );
 }
 
@@ -413,17 +513,24 @@ const SHORTENED = "_Shortened to fit GitHub's size limit._";
  * failed both times then shows its first attempt, with no log lines, and
  * whether the same step failed both times (#776).
  *
+ * After a check's own excerpt come the other failed jobs of its workflow run
+ * (#890), each a list item under its name with its job link; one that is
+ * itself a red check among `given` shows once, under its own name.
+ *
  * The log lines share LOG_CAP equally between the excerpts that have any,
- * and a share one doesn't fill goes to no other. Each excerpt's lines are cut
- * from the top, and the cut says how many lines were left out and links the
- * job. Annotations are outside the cap. `room` is what the blocks may take
+ * and a share one doesn't fill goes to no other. A check's share goes
+ * equally to its jobs that have log lines, its own and the other failed
+ * ones. Each job's lines are cut from the top, and the cut says how many
+ * lines were left out and links the job. Annotations are outside the cap.
+ * `room` is what the blocks may take
  * together, joined by blank lines, as what's left of a comment or issue body around them:
  * past it, the log lines are cut further, then the annotation messages are
  * shortened, each saying so, and last each block is only its check's name
  * and job link. The text is posted as the runner masked it.
  */
-export function renderFailureExcerpts(excerpts: readonly CheckExcerpt[], { room = Number.POSITIVE_INFINITY }: { readonly room?: number } = {}): string[] {
-  const withLines = excerpts.filter((excerpt) => excerpt.kind === "actions" && excerpt.steps.some((step) => step.lines.length > 0)).length;
+export function renderFailureExcerpts(given: readonly CheckExcerpt[], { room = Number.POSITIVE_INFINITY }: { readonly room?: number } = {}): string[] {
+  const excerpts = shownOnce(given);
+  const withLines = excerpts.filter((excerpt) => jobsWithLines(excerpt) > 0).length;
   const share = withLines === 0 ? 0 : Math.floor(LOG_CAP / withLines);
   const render = (share: number, messageMax: number) => excerpts.map((excerpt) => withFirstAttempt(excerpt, rendered(excerpt, share, messageMax), messageMax));
   const fits = (blocks: readonly string[]) => blocks.join("\n\n").length <= room;
@@ -442,16 +549,47 @@ export function renderFailureExcerpts(excerpts: readonly CheckExcerpt[], { room 
   };
   const cutShare = most(share, (n) => fits(render(n, Number.POSITIVE_INFINITY)));
   if (cutShare !== null) return render(cutShare, Number.POSITIVE_INFINITY);
-  const attempts = (excerpt: CheckExcerpt): FailureExcerpt[] => (excerpt.firstAttempt === undefined ? [excerpt] : [excerpt, excerpt.firstAttempt]);
   const longest = Math.max(0, ...excerpts.flatMap(attempts).flatMap(shortenable).map(({ length }) => length));
   const messageMax = most(longest, (n) => fits(render(0, n)));
   if (messageMax !== null) return render(0, messageMax);
   return excerpts.map((excerpt) => `${headOf(excerpt)}\n\n  Its Failure excerpt didn't fit within GitHub's size limit.`);
 }
 
+/** A check's excerpt and, when it failed both times, its first attempt's. */
+function attempts(excerpt: CheckExcerpt): FailureExcerpt[] {
+  return excerpt.firstAttempt === undefined ? [excerpt] : [excerpt, excerpt.firstAttempt];
+}
+
+/**
+ * The excerpts, each without any other failed job that is itself a red check
+ * among them (#890): rendered together, such a job shows once, under its own
+ * name, and its log lines take their share of the cap once.
+ */
+function shownOnce(excerpts: readonly CheckExcerpt[]): CheckExcerpt[] {
+  const redCheckJobs = new Set(
+    excerpts
+      .flatMap(attempts)
+      .filter(({ kind }) => kind === "actions")
+      .map(({ link }) => link),
+  );
+  const without = (excerpt: FailureExcerpt): FailureExcerpt => {
+    if (excerpt.kind !== "actions" || excerpt.otherJobs === undefined) return excerpt;
+    return { ...excerpt, otherJobs: excerpt.otherJobs.filter(({ link }) => link === "" || !redCheckJobs.has(link)) };
+  };
+  return excerpts.map((excerpt) => (excerpt.firstAttempt === undefined ? without(excerpt) : { ...without(excerpt), firstAttempt: without(excerpt.firstAttempt) }));
+}
+
+/** How many of a check's jobs kept log lines: its own and each other failed job of its workflow run (#890). */
+function jobsWithLines(excerpt: FailureExcerpt): number {
+  if (excerpt.kind !== "actions") return 0;
+  return [excerpt, ...(excerpt.otherJobs ?? [])].filter(({ steps }) => steps.some((step) => step.lines.length > 0)).length;
+}
+
 /** The text of an excerpt a comment or issue body too long shortens: its annotation messages, and an outside check's description or title and summary (#777). */
 function shortenable(excerpt: FailureExcerpt): string[] {
-  const messages = excerpt.kind === "actions" || excerpt.kind === "outside-check-run" ? excerpt.annotations.map(({ message }) => message) : [];
+  const annotated: readonly Pick<JobFailure, "annotations">[] =
+    excerpt.kind === "actions" ? [excerpt, ...(excerpt.otherJobs ?? [])] : excerpt.kind === "outside-check-run" ? [excerpt] : [];
+  const messages = annotated.flatMap(({ annotations }) => annotations.map(({ message }) => message));
   if (excerpt.kind === "commit-status") return [excerpt.description];
   if (excerpt.kind === "outside-check-run") return [[excerpt.title, excerpt.summary].filter((part) => part !== "").join("\n\n"), ...messages];
   return messages;
@@ -470,15 +608,64 @@ function withFirstAttempt(excerpt: CheckExcerpt, block: string, messageMax: numb
   const parts: string[] = [];
   if (first.kind === "unread") parts.push(`Its first attempt, before the Kit re-ran it${job}, couldn't be read: ${prose(first.why)}.`);
   if (first.kind === "actions") {
-    const steps = first.steps.map(({ name }) => name);
-    const failed = steps.length === 0 ? "no step failed" : `the ${steps.length === 1 ? "step" : "steps"} ${listed(steps)} failed`;
-    const opening = `Its first attempt, before the Kit re-ran it${job}: ${failed}.`;
-    if (first.annotationsUnread !== undefined) parts.push(`${opening} Its annotations couldn't be read: ${prose(first.annotationsUnread)}.`);
-    else if (first.annotations.length === 0) parts.push(`${opening} It has no error annotation.`);
-    else parts.push(`${opening} Its error annotations:`, first.annotations.map((annotation) => annotationItem(annotation, messageMax)).join("\n\n"));
-    if (excerpt.kind === "actions") parts.push(sameStepLine(steps, excerpt.steps.map(({ name }) => name)));
+    parts.push(...withoutLogLines(`Its first attempt, before the Kit re-ran it${job}`, first, messageMax));
+    const names = (steps: readonly FailedStep[]) => steps.map(({ name }) => name);
+    if (excerpt.kind === "actions") parts.push(sameStepLine(names(first.steps), names(excerpt.steps)));
+    parts.push(...otherJobsParts(first, null, messageMax));
   }
   return [block, ...parts.map((part) => indent(part, 2))].join("\n\n");
+}
+
+/**
+ * What a failed job left, said after `opening` with none of its log lines:
+ * its failed steps by name, then its error annotations.
+ */
+function withoutLogLines(opening: string, job: JobFailure, messageMax: number): string[] {
+  const steps = job.steps.map(({ name }) => name);
+  const failed = steps.length === 0 ? "no step failed" : `the ${steps.length === 1 ? "step" : "steps"} ${listed(steps)} failed`;
+  const start = `${opening}: ${failed}.`;
+  if (job.annotationsUnread !== undefined) return [`${start} Its annotations couldn't be read: ${prose(job.annotationsUnread)}.`];
+  if (job.annotations.length === 0) return [`${start} It has no error annotation.`];
+  return [`${start} Its error annotations:`, job.annotations.map((annotation) => annotationItem(annotation, messageMax)).join("\n\n")];
+}
+
+/**
+ * The other failed jobs of a red check's workflow run (#890), after the
+ * check's own excerpt: each a list item under its name, with its job link.
+ * One that kept the end of a step's log, or says why it has none, shows it
+ * as the check's own job does, its lines held to `share` characters; any
+ * other shows its failed steps by name and its annotations. A first
+ * attempt's, whose `share` is null, show no log lines, as it shows none
+ * itself (#776).
+ */
+function otherJobsParts(excerpt: Extract<FailureExcerpt, { kind: "actions" }>, share: number | null, messageMax: number): string[] {
+  const jobs = excerpt.otherJobs ?? [];
+  const firstAttempt = share === null;
+  const parts: string[] = [];
+  if (jobs.length > 0) {
+    parts.push(firstAttempt ? "Other jobs failed on the first attempt too:" : "Other jobs of its workflow run failed too:");
+    parts.push(jobs.map((job) => otherJobItem(job, share, messageMax)).join("\n\n"));
+  }
+  const leftOut = excerpt.otherJobsLeftOut ?? 0;
+  if (leftOut > 0) {
+    const run = WORKFLOW_RUN.exec(excerpt.link)?.[0];
+    parts.push(`_${leftOut} more failed ${leftOut === 1 ? "job isn't" : "jobs aren't"} shown${run === undefined ? "" : `: [the workflow run](${run})`}._`);
+  }
+  if (excerpt.otherJobsUnread !== undefined) {
+    parts.push(`The other jobs of ${firstAttempt ? "the first attempt" : "its workflow run"} couldn't be read: ${prose(excerpt.otherJobsUnread)}.`);
+  }
+  return parts;
+}
+
+/** A job's workflow run, at the start of the job's link. */
+const WORKFLOW_RUN = /^.*\/actions\/runs\/\d+(?=\/job\/\d+)/;
+
+/** One other failed job's list item: with the end of its log where it kept one and `share` isn't null, else its failed steps by name. */
+function otherJobItem(job: FailedJob, share: number | null, messageMax: number): string {
+  const head = `- ${checkCode(job.name)}${job.link === "" ? "" : ` ([the job](${job.link}))`}`;
+  const withLog = share !== null && job.steps.some((step) => step.lines.length > 0 || step.why !== undefined);
+  const [first, ...rest] = withLog ? [head, ...jobParts(job, job.link, share, messageMax)] : withoutLogLines(head, job, messageMax);
+  return [first, ...rest.map((part) => indent(part, 2))].join("\n\n");
 }
 
 /** Whether the same step failed on the first attempt and on the re-run, naming both when they differ. */
@@ -508,9 +695,20 @@ function rendered(excerpt: FailureExcerpt, share: number, messageMax: number): s
   const block = (parts: readonly string[]) => [head, "", ...parts.flatMap((part, i) => (i === 0 ? [indent(part, 2)] : ["", indent(part, 2)]))].join("\n");
   if (excerpt.kind === "unread") return [head, "", indent(`Its failure couldn't be read: ${prose(excerpt.why)}.`, 2)].join("\n");
   if (excerpt.kind === "commit-status" || excerpt.kind === "outside-check-run") return block(outsideParts(excerpt, messageMax));
-  const kept = keptLines(excerpt.steps, share);
+  // A check's share goes equally to its jobs that have log lines (#890), and a part one doesn't fill goes to no other.
+  const jobShare = Math.floor(share / Math.max(jobsWithLines(excerpt), 1));
+  return block([...jobParts(excerpt, excerpt.link, jobShare, messageMax), ...otherJobsParts(excerpt, jobShare, messageMax)]);
+}
+
+/**
+ * A failed job's paragraphs: each failed step with the last of its log lines,
+ * held to `share` characters between them, then its error annotations.
+ * `link` is the job's, for the whole log.
+ */
+function jobParts(job: JobFailure, link: string, share: number, messageMax: number): string[] {
+  const kept = keptLines(job.steps, share);
   const parts: string[] = [];
-  for (const [i, step] of excerpt.steps.entries()) {
+  for (const [i, step] of job.steps.entries()) {
     if (step.why !== undefined) {
       parts.push(`The step ${checkCode(step.name)} failed, and its log couldn't be read: ${prose(step.why)}.`);
       continue;
@@ -518,17 +716,17 @@ function rendered(excerpt: FailureExcerpt, share: number, messageMax: number): s
     const lines = kept[i]!;
     const leftOut = step.earlier + step.lines.length - lines.length;
     parts.push(`The step ${checkCode(step.name)} failed. The end of its log:`);
-    if (leftOut > 0) parts.push(`_${leftOut} earlier lines left out: [the whole log](${excerpt.link})._`);
+    if (leftOut > 0) parts.push(`_${leftOut} earlier lines left out: [the whole log](${link})._`);
     if (lines.length > 0) parts.push(fenced(lines));
   }
-  const noStep = excerpt.steps.length === 0 ? "No step failed. " : "";
-  if (excerpt.annotationsUnread !== undefined) parts.push(`${noStep}Its annotations couldn't be read: ${prose(excerpt.annotationsUnread)}.`);
-  else if (excerpt.annotations.length === 0) parts.push(`${noStep}It has no error annotation.`);
+  const noStep = job.steps.length === 0 ? "No step failed. " : "";
+  if (job.annotationsUnread !== undefined) parts.push(`${noStep}Its annotations couldn't be read: ${prose(job.annotationsUnread)}.`);
+  else if (job.annotations.length === 0) parts.push(`${noStep}It has no error annotation.`);
   else {
     parts.push(`${noStep}Its error annotations:`);
-    parts.push(excerpt.annotations.map((annotation) => annotationItem(annotation, messageMax)).join("\n\n"));
+    parts.push(job.annotations.map((annotation) => annotationItem(annotation, messageMax)).join("\n\n"));
   }
-  return [head, "", ...parts.flatMap((part, i) => (i === 0 ? [indent(part, 2)] : ["", indent(part, 2)]))].join("\n");
+  return parts;
 }
 
 /**

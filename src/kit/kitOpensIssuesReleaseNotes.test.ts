@@ -27,7 +27,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Kit-opens-issues release notes, 
     expect(notes).toContain("Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.");
     const drafted = read("docs/releasing.md").split("\n").find((line) => line.includes("Notes drafted ahead of a release are in `docs/release-notes/`"));
     expect(drafted).toContain(
-      "(release-notes/main-moves-during-a-run.md), and the Kit-opens-issues minor's ([#882](https://github.com/jrey8343/fabrik/issues/882)) are [the Kit opens issues itself](release-notes/kit-opens-issues.md).",
+      "(release-notes/gathering-check-excerpts.md), and the Kit-opens-issues minor's ([#882](https://github.com/jrey8343/fabrik/issues/882)) are [the Kit opens issues itself](release-notes/kit-opens-issues.md).",
     );
   });
 
