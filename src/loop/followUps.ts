@@ -10,7 +10,7 @@
 import { verdictsIn } from "../github/threads.ts";
 import { fromPullRequestLine } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
-import type { FollowUp, FollowUpKind } from "./verdict.ts";
+import type { Fault, FollowUp, FollowUpKind } from "./verdict.ts";
 
 /** Kept under the URL length GitHub serves a prefilled new-issue form at. */
 export const MAX_ISSUE_URL_LENGTH = 8000;
@@ -25,11 +25,18 @@ const FOLLOW_UPS_HEADING = "### Follow-ups";
 const OPEN_AS_ISSUE_LINK = /^\[Open as issue\]\((.*)\)$/;
 
 /**
+ * What the Kit does with a fault, as every place that shows one says of the
+ * Kit (#885): a Verdict comment (FAULT_OPENS_AT_MERGE) and a Digest's
+ * Follow-ups (src/loop/digestContract.ts).
+ */
+export const OPENS_FAULT_AT_MERGE = "opens this fault as an issue when the pull request merges";
+
+/**
  * The line a fault in a Verdict comment ends with, in place of a link
  * (#885): it is how the comment says the Follow-up is a fault, and where the
  * merge reads that back.
  */
-export const FAULT_OPENS_AT_MERGE = "The Kit opens this fault as an issue when the pull request merges.";
+export const FAULT_OPENS_AT_MERGE = `The Kit ${OPENS_FAULT_AT_MERGE}.`;
 
 /** A Follow-up as a posted Verdict comment lists it: its kind, title and body, and an idea's Open as issue link as the comment has it, which a fault has none of. */
 export interface ListedFollowUp extends FollowUp {
@@ -113,10 +120,20 @@ export function listedFollowUpsIn(comment: string): ListedFollowUp[] {
  * comment alone, so pass it only the Fabrik App's comments: nobody names a
  * fault by quoting one.
  */
-export function faultsNamedIn(comments: readonly string[]): Pick<FollowUp, "title" | "body">[] {
+export function faultsNamedIn(comments: readonly string[]): Fault[] {
   return comments
     .flatMap((comment) => (verdictsIn([comment])[0]?.verdict === "pass" ? followUpsIn(comment) : []))
     .flatMap(({ kind, title, body }) => (kind === "fault" ? [{ title, body }] : []));
+}
+
+/**
+ * These faults, each once: one whose trimmed title repeats an earlier one's
+ * is left out. It is the one test of a fault named twice, by one pass or by
+ * two: what the merge opens (src/loop/followUpIssues.ts) and what a Digest
+ * shows (src/loop/digestContract.ts) both go by it.
+ */
+export function oncePerTitle<Titled extends { readonly title: string }>(faults: readonly Titled[]): Titled[] {
+  return faults.filter(({ title }, at) => faults.findIndex((earlier) => earlier.title.trim() === title.trim()) === at);
 }
 
 /**

@@ -8,6 +8,7 @@
 // those, under the PR's `spinOffs`, the points of them the Kit opened as
 // Spin-offs (#884), which are no longer part of the PR's work.
 import { isGivenOperatorComment } from "../loop/considered.ts";
+import type { OpenedSpinOff } from "../loop/markers.ts";
 import type { GivenOperatorComment } from "../loop/types.ts";
 
 /** The three places on a PR an Operator comment can be. */
@@ -88,7 +89,7 @@ export interface SetAsidePoint {
  * changes is not among those given, as one dismissed since, is left out:
  * the run is not given what it asked, so it has nothing to weigh it by.
  */
-export function setAsidePoints(opened: readonly { readonly issue: number; readonly from: string; readonly title: string }[], requestedChanges: readonly RequestedChange[]): SetAsidePoint[] {
+export function setAsidePoints(opened: readonly OpenedSpinOff[], requestedChanges: readonly RequestedChange[]): SetAsidePoint[] {
   const said = new Map(requestedChanges.flatMap((review) => [review, ...review.comments]).map(({ id, url, body }) => [id, { url, words: body }]));
   return opened.flatMap(({ issue, from, title }) => {
     const there = said.get(from);

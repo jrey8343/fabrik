@@ -28,6 +28,9 @@ export interface FollowUp {
   readonly kind: FollowUpKind;
 }
 
+/** A Follow-up that is a fault, as the Kit reads it to open its issue at the merge (#885): its title and its body. */
+export type Fault = Pick<FollowUp, "title" | "body">;
+
 /**
  * The tag a Reviewer's finding may open with (#749), as `[small: body]`,
  * `[small: comment]` or `[missed earlier]`. The Kit reads the tags and checks

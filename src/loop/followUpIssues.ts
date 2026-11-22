@@ -7,18 +7,15 @@
 // makes it happen once. An idea is never opened: it stays the link its
 // Verdict comment gave it (src/loop/followUps.ts). Pure, no I/O.
 import type { KitConfig } from "../kit/config.ts";
-import { issueTitleOf, openAsIssueLink } from "./followUps.ts";
+import { issueTitleOf, oncePerTitle, openAsIssueLink } from "./followUps.ts";
 import { NEEDS_TRIAGE } from "./labels.ts";
 import { joinLinked, type Linked, linkedComment } from "./linked.ts";
 import { FOLLOW_UPS_OPENED_MARKER, followUpLeftLine, followUpMarker, followUpOpenedLine, fromPullRequestLine } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import type { Action, CreatedIssue, FollowUpIssuesSnapshot, LoopEvent, PullRequestSnapshot } from "./types.ts";
-import type { FollowUp } from "./verdict.ts";
+import type { Fault } from "./verdict.ts";
 
 type PullRequestClosed = Extract<LoopEvent, { kind: "pull-request-closed" }>;
-
-/** A fault as a pass's Verdict comment lists it. */
-type Fault = Pick<FollowUp, "title" | "body">;
 
 /** The issue a plan creates for the fault at this place among those it opens, counted from 0. */
 function followUpIssue(index: number): CreatedIssue {
@@ -49,7 +46,7 @@ function followUpIssue(index: number): CreatedIssue {
  */
 export function openFaults({ merged }: PullRequestClosed, pullRequest: PullRequestSnapshot, issues: FollowUpIssuesSnapshot | null, config: KitConfig): Action[] {
   if (!merged || pullRequest.followUpsOpened || issues === null) return [];
-  const faults = pullRequest.faults.filter(({ title }, at, all) => all.findIndex((earlier) => earlier.title.trim() === title.trim()) === at);
+  const faults = oncePerTitle(pullRequest.faults);
   if (faults.length === 0) return [];
   const existing = (fault: Fault) => issues.ofPullRequest.find(({ title }) => title.trim() === issueTitleOf(fault.title.trim()).trim());
   const fresh = faults.filter((fault) => existing(fault) === undefined);

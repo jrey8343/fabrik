@@ -6,6 +6,7 @@
 // and nothing that runs an agent or a job. Pure.
 import type { DigestAsk, DigestFacts, Round } from "./digestFacts.ts";
 import { type DigestHead, type DigestPlace, MAX_PLACES, type NamedPlace, PLACE_KINDS, placeAt } from "./digestPlaces.ts";
+import { oncePerTitle, OPENS_FAULT_AT_MERGE } from "./followUps.ts";
 import { markerJson } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
 import { GITHUB_COMMENT_LIMIT } from "./roundLine.ts";
@@ -598,9 +599,7 @@ function digestDataOf(reply: DigestReply, { facts, head, pictures }: Pick<Digest
     whatItDoes: shown(reply.whatItDoes),
     howItGotHere: shown(reply.howItGotHere),
     followUps: facts.followUps.flatMap(({ id, title, url }) => (url !== null && reply.followUps.includes(id) ? [{ title: withoutMentions(title), url }] : [])),
-    faults: facts.followUps
-      .filter(({ kind, title }, at, all) => kind === "fault" && all.findIndex((earlier) => earlier.kind === "fault" && earlier.title.trim() === title.trim()) === at)
-      .map(({ title }) => ({ title: withoutMentions(title.trim()) })),
+    faults: oncePerTitle(facts.followUps.filter(({ kind }) => kind === "fault")).map(({ title }) => ({ title: withoutMentions(title.trim()) })),
   };
 }
 
@@ -770,7 +769,7 @@ export function digestTop(data: DigestData, where: DigestWhere): string {
     ...(data.faults.length + data.followUps.length === 0
       ? ["None named."]
       : [
-          ...data.faults.map(({ title }) => `- ${withoutMentions(title)}: the Kit opens this fault as an issue when the pull request merges`),
+          ...data.faults.map(({ title }) => `- ${withoutMentions(title)}: the Kit ${OPENS_FAULT_AT_MERGE}`),
           ...data.followUps.map(({ title, url }) => `- ${withoutMentions(title)}: [Open as issue](${url})`),
         ]),
   ].join("\n");

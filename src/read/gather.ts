@@ -39,7 +39,7 @@ import type { TrialFacts, TrialProblemFacts } from "../kit/trialResult.ts";
 import type { CommentFacts, GitHubFacts, RepoKitFacts } from "../kit/weeklySummary.ts";
 import { sameRepo } from "../loop/blockers.ts";
 import { AUDIT_LABEL, MAP_LABEL, REPLAY_LABEL, RETRO_LABEL, TRIAL_LABELS } from "../loop/labels.ts";
-import { trialProblemIn } from "../loop/markers.ts";
+import { type FollowUpsOpened, trialProblemIn } from "../loop/markers.ts";
 import type { FollowUp } from "../loop/verdict.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import {
@@ -304,7 +304,7 @@ export interface StagingFacts {
 export interface MergedFollowUpsFacts {
   readonly pullRequest: number;
   readonly named: readonly FollowUp[];
-  readonly opened: readonly { readonly issue: number; readonly title: string }[];
+  readonly opened: FollowUpsOpened["opened"];
 }
 
 /**

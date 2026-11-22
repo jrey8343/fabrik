@@ -16,6 +16,7 @@ import type { DigestGiven, PictureOf } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
 import type { Label, TriggerLabel } from "./labels.ts";
 import type { CheckFixMark, FlakyCheckMark, OpenedSpinOff, OperatorMentionMark, PrototypeRequestMarker } from "./markers.ts";
+import type { Fault } from "./verdict.ts";
 import type { RequestChangesText, RollInIssue } from "./owedRollIn.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
@@ -1090,7 +1091,7 @@ export interface PullRequestSnapshot {
    * Verdict comments (faultsNamedIn, src/loop/followUps.ts): what the Kit
    * opens as issues when it merges (src/loop/followUpIssues.ts).
    */
-  readonly faults: readonly { readonly title: string; readonly body: string }[];
+  readonly faults: readonly Fault[];
   /**
    * Whether the Kit has posted its comment saying what became of those
    * faults, which it posts once the pull request has merged: with it, a
