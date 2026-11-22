@@ -603,12 +603,15 @@ function bodyOnlyTouchUpLanded(
  * Whatever the run set aside as Spin-offs is opened first, in all three
  * cases, and named in the note (#884). And one case is no Hand-back: on a
  * head that didn't move, whose latest Verdict is a pass on it, a run that
- * set aside every ask it read had nothing to build. The pull request goes
- * back to the Merge gate on that pass (backAtGateOnStandingPass), with no
- * Review, and its note, still the run's outcome, says so. The Kit can't tell
- * a point to build from a point to set aside inside one ask, so it goes by
- * the asks alone (SetAside.everyAsk), and anything short of that is handed
- * back as before: a wrong call here would skip a Review.
+ * returned a Spin-off for every ask it read (SetAside.everyAsk) and stated
+ * that no point at all was to be built (`onlySpinOffs`) had nothing to
+ * build. The pull request goes back to the Merge gate on that pass
+ * (backAtGateOnStandingPass), with no Review, and its note, still the run's
+ * outcome, says so. It takes both: the Kit can't tell a point to build from
+ * a point to set aside inside one ask, so only the run can say that an ask
+ * a Spin-off names held nothing else, and the run's word is held to the
+ * asks the Kit read itself. Anything short of that is handed back as
+ * before: a wrong call here would skip a Review.
  */
 function requestChangesRunEmpty(
   pullRequest: PullRequestSnapshot,
@@ -617,7 +620,7 @@ function requestChangesRunEmpty(
   snapshot: Pick<Snapshot, "operator" | "kitIssues">,
   config: KitConfig,
   recorded: AnswerLines | null,
-  output: Pick<ImplementOutput, "summary" | "fix">,
+  output: Pick<ImplementOutput, "summary" | "fix" | "onlySpinOffs">,
   setAside: SetAside,
 ): Action[] {
   const { number, headSha } = pullRequest;
@@ -626,7 +629,7 @@ function requestChangesRunEmpty(
   const head = headSha.slice(0, 7);
   const moved = headSha !== fixes.headSha;
   const committedNothing = `The Request-changes run on #${number} committed nothing to \`${branch}\` on top of ${started}`;
-  const backAtGate = !moved && setAside.everyAsk ? backAtGateOnStandingPass(pullRequest, snapshot, config) : null;
+  const backAtGate = !moved && setAside.everyAsk && output.onlySpinOffs === true ? backAtGateOnStandingPass(pullRequest, snapshot, config) : null;
   if (backAtGate !== null) {
     const opens = backAtGate.some((action) => action.kind === "mark-ready-for-review");
     return [
@@ -635,7 +638,8 @@ function requestChangesRunEmpty(
         REQUEST_CHANGES_RUN_EMPTY_MARKER,
         ...(recorded === null ? [] : [recorded.marker]),
         ...setAside.markers,
-        `${committedNothing}: every ask of the Operator's Request changes, the review's own words and each comment on the code in it, was set aside as a Spin-off, so nothing was to be built. ${
+        // What Kit code checked, then what the run stated: the note claims no more than both.
+        `${committedNothing}: it returned a Spin-off for every ask of the Operator's Request changes, the review's own words and each comment on the code in it, and stated that every point was asked for as an issue of its own, so nothing was to be built. ${
           opens
             ? `#${number} is back at the Merge gate at ${head}, where its pass stands. No Review runs, and no retry was used.`
             : `Its pass on ${head} stands, so no Review runs and no retry was used. The Merge gate opens once its Digest is written.`
@@ -681,13 +685,15 @@ interface SetAside {
   readonly markers: Linked[];
   readonly listed: Linked[];
   /**
-   * Whether the run set aside every ask it read: it returned at least one
-   * Spin-off, and each review it was in flight for is among those the push
-   * job read, has at least one ask, and has every ask named by some
+   * Whether a Spin-off names every ask the run read: it returned at least
+   * one Spin-off, and each review it was in flight for is among those the
+   * push job read, has at least one ask, and has every ask named by some
    * Spin-off's `from`. An ask is a review's own words, or one comment on the
    * code in it, as the Digest's facts list them. Kit code checks this and
    * nothing finer, so a review it cannot read, as one dismissed since, never
-   * counts as set aside.
+   * counts. It does not say the asks held nothing to build: one ask can
+   * hold a point to build beside the point set aside, which only the run's
+   * own statement (`onlySpinOffs`) rules out.
    */
   readonly everyAsk: boolean;
 }

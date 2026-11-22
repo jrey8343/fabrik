@@ -65,6 +65,16 @@ export interface ImplementOutput {
    * run's output carries them: the Kit never reads the field there.
    */
   readonly spinOffs?: readonly RequestedSpinOff[];
+  /**
+   * For a Request-changes run alone (#884): the run's statement that every
+   * point of every Request changes it was given was asked for, in the
+   * Operator's words, as an issue of its own, so it built nothing. Kit code
+   * can't read a point, only an ask, so a run that committed nothing returns
+   * its pull request to the Merge gate only with this beside what Kit code
+   * checks itself (src/loop/implement.ts). Present only when the run gave
+   * `true`: anything else is no statement, and never fails the run.
+   */
+  readonly onlySpinOffs?: true;
 }
 
 /**
@@ -173,8 +183,9 @@ export function readPullRequestRunOutput(value: unknown): ImplementOutputResult 
 
 /**
  * The contract for a Request-changes run: a run on an existing PR's, plus its
- * two answers about the review it was started for, both required, and the
- * Spin-offs it set aside (#884), if any. `given` is the id of each Request
+ * two answers about the review it was started for, both required, the
+ * Spin-offs it set aside (#884), if any, and its statement that no point was
+ * to be built (`onlySpinOffs`), if it made it. `given` is the id of each Request
  * changes, and of each comment on the code in one, that the run was given: a
  * Spin-off whose `from` names anything else is refused. The agent job passes
  * the ids its prompt headed, and the push job the ones its own read of the
@@ -183,7 +194,7 @@ export function readPullRequestRunOutput(value: unknown): ImplementOutputResult 
 export function readRequestChangesRunOutput(value: unknown, given?: readonly string[]): ImplementOutputResult {
   const result = readPullRequestRunOutput(value);
   if (!result.ok) return result;
-  const { reviewMiss, reviewMissPoints, amendsTicket, spinOffs: written } = value as Record<string, unknown>;
+  const { reviewMiss, reviewMissPoints, amendsTicket, spinOffs: written, onlySpinOffs } = value as Record<string, unknown>;
   const errors: string[] = [];
   const spinOffs = readSpinOffs(written, given, errors);
   if (typeof reviewMiss !== "boolean") errors.push("reviewMiss must be true or false on a Request-changes run");
@@ -198,6 +209,8 @@ export function readRequestChangesRunOutput(value: unknown, given?: readonly str
       // A no names no point, whatever the run listed.
       answers: { reviewMiss: reviewMiss as boolean, points: reviewMiss === true ? (points as string[]).map((point) => point.trim()) : [], amendsTicket: amendsTicket as boolean },
       ...(spinOffs.length === 0 ? {} : { spinOffs }),
+      // Only `true` states it: anything else leaves the pull request to be handed back.
+      ...(onlySpinOffs === true ? { onlySpinOffs } : {}),
     },
   };
 }

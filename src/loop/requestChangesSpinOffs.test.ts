@@ -23,8 +23,8 @@ const spinOff = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-/** A Request-changes run's push job, for review 900, whose output returns these Spin-offs. */
-function landed(changes: Changes, spinOffs: readonly unknown[] | null = [spinOff()]): LoopEvent {
+/** A Request-changes run's push job, for review 900, whose output returns these Spin-offs, and whatever else `stated` holds. */
+function landed(changes: Changes, spinOffs: readonly unknown[] | null = [spinOff()], stated: Record<string, unknown> = {}): LoopEvent {
   return {
     kind: "implement-run-finished",
     runUrl: RUN,
@@ -36,6 +36,7 @@ function landed(changes: Changes, spinOffs: readonly unknown[] | null = [spinOff
       reviewMiss: false,
       amendsTicket: true,
       ...(spinOffs === null ? {} : { spinOffs }),
+      ...stated,
     }),
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
@@ -193,10 +194,12 @@ describe("The plan landing a Request-changes run that returned a Spin-off (#884)
 
 /** Both of review 900's asks, each set aside. */
 const EVERY_ASK = [spinOff({ title: "Text the waitlist", from: "review-900" }), spinOff()];
+/** The run's statement that no point at all was to be built. */
+const ONLY = { onlySpinOffs: true };
 
-describe("A Request-changes run that committed nothing and returned a Spin-off for every ask (#884)", () => {
+describe("A Request-changes run that committed nothing, returned a Spin-off for every ask and stated that no point was to be built (#884)", () => {
   it("opens them and returns the pull request to the Merge gate at the same head: no Review, no Hand-back, no Retry", () => {
-    const plan = planFor(landed(NOTHING, EVERY_ASK), snapshot(), kitConfig());
+    const plan = planFor(landed(NOTHING, EVERY_ASK, ONLY), snapshot(), kitConfig());
     const actions = actionsOf(plan);
 
     expect(actions.map((action) => action.kind)).toEqual(["create-issue", "create-issue", "comment-linking", "mark-ready-for-review", "request-review"]);
@@ -211,15 +214,15 @@ describe("A Request-changes run that committed nothing and returned a Spin-off f
   });
 
   it("notifies the Operator once, by the review request, as any return to the Merge gate does", () => {
-    expect(notificationsOf(planFor(landed(NOTHING, EVERY_ASK), snapshot(), kitConfig()))).toEqual(["review request on #50"]);
+    expect(notificationsOf(planFor(landed(NOTHING, EVERY_ASK, ONLY), snapshot(), kitConfig()))).toEqual(["review request on #50"]);
   });
 
   it("says so in its note, which is the run's outcome and no Hand-back, and shows what the run said in fix", () => {
-    const lines = note(planFor(landed(NOTHING, EVERY_ASK), snapshot(), kitConfig())).split("\n");
+    const lines = note(planFor(landed(NOTHING, EVERY_ASK, ONLY), snapshot(), kitConfig())).split("\n");
 
     expect(lines[0]).toBe("<!-- fabrik:request-changes-run-empty -->");
     expect(lines[4]).toBe(
-      "The Request-changes run on #50 committed nothing to `fabrik/ticket-7` on top of aaaaaaa: every ask of the Operator's Request changes, the review's own words and each comment on the code in it, was set aside as a Spin-off, so nothing was to be built. #50 is back at the Merge gate at aaaaaaa, where its pass stands. No Review runs, and no retry was used.",
+      "The Request-changes run on #50 committed nothing to `fabrik/ticket-7` on top of aaaaaaa: it returned a Spin-off for every ask of the Operator's Request changes, the review's own words and each comment on the code in it, and stated that every point was asked for as an issue of its own, so nothing was to be built. #50 is back at the Merge gate at aaaaaaa, where its pass stands. No Review runs, and no retry was used.",
     );
     expect(lines).toContain("Renamed the total, and set the CSV export aside as the Operator asked.");
     expect(lines).toContain("- #57 Text the waitlist");
@@ -228,7 +231,7 @@ describe("A Request-changes run that committed nothing and returned a Spin-off f
   });
 
   it("writes the Digest the pass still owes, in place of opening the gate, when the Request changes came before the gate opened (ADR-0022)", () => {
-    const plan = planFor(landed(NOTHING, EVERY_ASK), snapshot(ASKS, { leftDraftSinceVerdict: false }), kitConfig());
+    const plan = planFor(landed(NOTHING, EVERY_ASK, ONLY), snapshot(ASKS, { leftDraftSinceVerdict: false }), kitConfig());
 
     expect(actionsOf(plan).slice(2).map((action) => action.kind)).toEqual(["comment-linking", "add-labels"]);
     expect(actionsOf(plan).at(-1)).toEqual({ kind: "add-labels", issue: 50, labels: ["agent:digest"] });
@@ -237,7 +240,7 @@ describe("A Request-changes run that committed nothing and returned a Spin-off f
   });
 
   it("opens the gate at once on such a pull request when the Digest is off", () => {
-    const plan = planFor(landed(NOTHING, EVERY_ASK), snapshot(ASKS, { leftDraftSinceVerdict: false }), kitConfig({ digest: { ...kitConfig().digest, enabled: false } }));
+    const plan = planFor(landed(NOTHING, EVERY_ASK, ONLY), snapshot(ASKS, { leftDraftSinceVerdict: false }), kitConfig({ digest: { ...kitConfig().digest, enabled: false } }));
 
     expect(actionsOf(plan).slice(-2).map((action) => action.kind)).toEqual(["mark-ready-for-review", "request-review"]);
   });
@@ -263,24 +266,46 @@ describe("A Request-changes run that committed nothing with some ask left to bui
     expect(openedSpinOffsIn(note(plan))).toEqual([{ issue: 57, from: "inline-9", title: "Export the waitlist as CSV" }]);
   });
 
+  it("hands back a run that named every ask and did not state that no point was to be built: one ask can hold a point to build beside the point set aside", () => {
+    // One review, no comment on the code, two points in its own words: build one, set one aside.
+    const oneAsk: RequestChangesAsks[] = [{ review: 900, asks: [{ id: "review-900", url: REVIEW_URL }] }];
+    const plan = planFor(landed(NOTHING, [spinOff({ from: "review-900" })]), snapshot(oneAsk), kitConfig());
+
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["create-issue", "comment-linking", "add-labels", "mark-ready-for-review"]);
+    handedBack(plan);
+    expect(JSON.stringify(actionsOf(plan))).not.toContain("request-review");
+  });
+
+  it.each([
+    ["false", false],
+    ["text", "true"],
+    ["a number", 1],
+  ])("hands back when the run gave %s for its statement: only true states it", (_, onlySpinOffs) => {
+    handedBack(planFor(landed(NOTHING, EVERY_ASK, { onlySpinOffs }), snapshot(), kitConfig()));
+  });
+
+  it("hands back when the run stated it and some ask is named by no Spin-off: its word alone never skips a Review", () => {
+    handedBack(planFor(landed(NOTHING, [spinOff()], ONLY), snapshot(), kitConfig()));
+  });
+
   it("hands back when another review the run read has an ask no Spin-off names", () => {
     const two: RequestChangesAsks[] = [{ review: 899, asks: [{ id: "review-899", url: "https://github.com/acme/shop/pull/50#pullrequestreview-899" }] }, ...ASKS];
 
-    handedBack(planFor(landed(NOTHING, EVERY_ASK), snapshot(two, { requestChangesRunReviews: [899, 900] }), kitConfig()));
+    handedBack(planFor(landed(NOTHING, EVERY_ASK, ONLY), snapshot(two, { requestChangesRunReviews: [899, 900] }), kitConfig()));
   });
 
   it("hands back when a review the run read is not among those read, as one dismissed since: the Kit can't tell what it asked", () => {
-    handedBack(planFor(landed(NOTHING, EVERY_ASK), snapshot(ASKS, { requestChangesRunReviews: [899, 900] }), kitConfig()));
+    handedBack(planFor(landed(NOTHING, EVERY_ASK, ONLY), snapshot(ASKS, { requestChangesRunReviews: [899, 900] }), kitConfig()));
   });
 
   it("hands back when the latest Verdict is no pass on the head, as an Execution flaw that gave way to the run: its findings are unfixed", () => {
     const flaw = pass({ verdict: "execution-flaw", requestChangesFirst: [900] });
 
-    handedBack(planFor(landed(NOTHING, EVERY_ASK), snapshot(ASKS, { verdicts: [flaw] }), kitConfig()));
+    handedBack(planFor(landed(NOTHING, EVERY_ASK, ONLY), snapshot(ASKS, { verdicts: [flaw] }), kitConfig()));
   });
 
   it("gets a Review, with no Hand-back, when the head moved while it worked, its Spin-offs opened all the same", () => {
-    const plan = planFor(landed(NOTHING, EVERY_ASK), snapshot(ASKS, { headSha: "b".repeat(40) }), kitConfig());
+    const plan = planFor(landed(NOTHING, EVERY_ASK, ONLY), snapshot(ASKS, { headSha: "b".repeat(40) }), kitConfig());
 
     expect(actionsOf(plan).map((action) => action.kind)).toEqual(["create-issue", "create-issue", "comment-linking", "add-labels"]);
     expect(actionsOf(plan).at(-1)).toEqual({ kind: "add-labels", issue: 50, labels: ["agent:review"] });
@@ -319,7 +344,7 @@ describe("A Request-changes run's landing with Spin-offs, read back from the pul
   };
   /** The history once the plan for these changes has landed: its note, then the pull request out of draft if the plan took it out. */
   const landedOn = (changes: Changes): PullRequestHistoryItem[] => {
-    const plan = planFor(landed(changes, EVERY_ASK), readFrom(started, true), kitConfig());
+    const plan = planFor(landed(changes, EVERY_ASK, ONLY), readFrom(started, true), kitConfig());
     const ready = actionsOf(plan).some((action) => action.kind === "mark-ready-for-review");
     return [...started, { kind: "bot-comment", at: at(30), body: note(plan) }, ...(ready ? [{ kind: "ready" as const, at: at(30) }] : [])];
   };
@@ -345,7 +370,7 @@ describe("A Request-changes run's landing with Spin-offs, read back from the pul
     ["pushed, and whose pull request is still a draft with no run in flight", PUSHED, "#50 has no Request-changes run in flight, so the run's branch isn't pushed"],
     ["committed nothing, and whose pull request is back at the Merge gate", NOTHING, "#50 has left draft, so the retry's branch isn't pushed"],
   ])("opens each Spin-off once: the same run, which %s, lands nothing a second time", (_, changes, reason) => {
-    const again = planFor(landed(changes, EVERY_ASK), readFrom(landedOn(changes), changes === PUSHED), kitConfig());
+    const again = planFor(landed(changes, EVERY_ASK, ONLY), readFrom(landedOn(changes), changes === PUSHED), kitConfig());
 
     expect(again).toEqual({ kind: "nothing", reason });
   });

@@ -248,3 +248,34 @@ describe("A Request-changes run's spinOffs (#884)", () => {
     }
   });
 });
+
+describe("A Request-changes run's onlySpinOffs (#884)", () => {
+  const answered = (fields: Record<string, unknown> = {}) =>
+    output({ fix: "Set the export aside, as the Operator asked.", reviewMiss: false, amendsTicket: false, ...fields });
+
+  it("is read as the run's statement that no point was to be built, only when it is true", () => {
+    expect(parseImplementOutput(answered({ onlySpinOffs: true }), "request-changes")).toMatchObject({ ok: true, output: { onlySpinOffs: true } });
+  });
+
+  it.each([
+    ["left out", {}],
+    ["false", { onlySpinOffs: false }],
+    ["text", { onlySpinOffs: "true" }],
+    ["a number", { onlySpinOffs: 1 }],
+  ])("is no statement when %s, and never fails the run", (_, fields) => {
+    const parsed = parseImplementOutput(answered(fields), "request-changes");
+
+    expect(parsed).toMatchObject({ ok: true });
+    expect(parsed.ok && "onlySpinOffs" in parsed.output).toBe(false);
+  });
+
+  it.each([
+    ["a first run", "first"],
+    ["a Retry, a Touch-up or a conflict-only run", "pull-request"],
+  ] as const)("is never read from the output of %s", (_, run) => {
+    const parsed = parseImplementOutput(answered({ onlySpinOffs: true }), run);
+
+    expect(parsed).toMatchObject({ ok: true });
+    expect(parsed.ok && "onlySpinOffs" in parsed.output).toBe(false);
+  });
+});

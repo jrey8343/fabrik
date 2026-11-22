@@ -26,8 +26,8 @@ const ASKS = [
   },
 ];
 
-/** A Request-changes run for review 900 on PR 50, passed on its head, landing with a Spin-off for each of these asks. */
-function landing(from: readonly string[], changes: Extract<LoopEvent, { kind: "implement-run-finished" }>["changes"]): Plan {
+/** A Request-changes run for review 900 on PR 50, passed on its head, landing with a Spin-off for each of these asks, and its statement that no point was to be built when `only`. */
+function landing(from: readonly string[], changes: Extract<LoopEvent, { kind: "implement-run-finished" }>["changes"], only = false): Plan {
   const event: LoopEvent = {
     kind: "implement-run-finished",
     runUrl: RUN,
@@ -39,6 +39,7 @@ function landing(from: readonly string[], changes: Extract<LoopEvent, { kind: "i
       reviewMiss: false,
       amendsTicket: false,
       spinOffs: from.map((id) => ({ title: "Export the waitlist as CSV", body: 'The Operator wrote: "open the CSV export as its own issue".', from: id })),
+      ...(only ? { onlySpinOffs: true } : {}),
     }),
     branch: "fabrik/ticket-7",
     base: "fabrik/ticket-7",
@@ -112,13 +113,18 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Kit-opens-issues release notes, 
 
   it("say when a run that committed nothing returns the pull request to the Merge gate, and when it is handed back, as the plan decides", () => {
     const only = changed("A Request changes of only Spin-offs costs no Review.");
-    const everyAsk = landing(["review-900", "inline-9"], NOTHING);
-    const oneOfTwo = landing(["inline-9"], NOTHING);
+    const everyAsk = landing(["review-900", "inline-9"], NOTHING, true);
+    const oneOfTwo = landing(["inline-9"], NOTHING, true);
+    const notStated = landing(["review-900", "inline-9"], NOTHING);
 
     expect(actionsOf(everyAsk).slice(-2).map((action) => action.kind)).toEqual(["mark-ready-for-review", "request-review"]);
     expect(noteOf(everyAsk)).toContain("is back at the Merge gate at aaaaaaa, where its pass stands. No Review runs, and no retry was used.");
     expect(actionsOf(oneOfTwo)).toContainEqual({ kind: "add-labels", issue: 50, labels: ["ready-for-human"] });
-    expect(only).toContain("the run committed nothing, the head did not move, the latest Verdict is a pass on that head, and every ask of every review the run read is named by a Spin-off");
+    expect(actionsOf(notStated)).toContainEqual({ kind: "add-labels", issue: 50, labels: ["ready-for-human"] });
+    expect(only).toContain(
+      "the run committed nothing, the head did not move, the latest Verdict is a pass on that head, every ask of every review the run read is named by a Spin-off, and the run stated `onlySpinOffs`",
+    );
+    expect(only).toContain("Neither Kit code's check nor the run's word decides this alone.");
     expect(only).toContain("the review's own words when it has any, and each of your comments on the code in it");
     expect(only).toContain("Anything short of that is handed back");
     expect(only).toContain("its Spin-offs opened all the same");
@@ -140,9 +146,10 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Kit-opens-issues release notes, 
     expect(why).toContain("No new label, no Setup step and no new App permission is needed");
   });
 
-  it("say the limits the rule has: an ask that holds both, a run that ends without landing, and a landing that fails part-way", () => {
+  it("say the limits the rule has: a run that states wrongly that no point was to be built, a run that ends without landing, and a landing that fails part-way", () => {
     const limits = notes.split("\n## Known limits\n")[1] ?? "";
-    expect(limits).toContain("- **Kit code goes by asks, not by points.**");
+    expect(limits).toContain("- **A run of only Spin-offs rests on the run's own statement too.**");
+    expect(limits).not.toContain("Once a Spin-off names it, Kit code counts the whole of it as set aside.");
     expect(limits).toContain("- **A run that ends without landing opens no Spin-off.**");
     expect(limits).toContain("- **A landing that fails part-way can open a Spin-off twice.**");
   });
@@ -200,6 +207,17 @@ describe("ADR-0039 and ADR-0010, on a Request changes' Spin-offs (#884)", () => 
     expect(rule("Only the Operator's words set a point aside.")).toContain("an agent that may judge a requested change unrelated may leave unbuilt what the Operator asked for");
   });
 
+  it("says a run of only Spin-offs takes Kit code's check of the asks and the run's own statement, and neither alone", () => {
+    const part = adr.split("A Request changes' Spin-offs are the second part built (#884):")[1]?.split("\n\n")[1] ?? "";
+    const only = part.split("\n").find((line) => line.startsWith("- **A run of only Spin-offs returns the pull request to the Merge gate with no Review.**")) ?? "";
+
+    expect(only).toContain("every ask of every review the run read is named by a Spin-off's `from`, and the run stated `onlySpinOffs`");
+    expect(only).toContain("One ask can hold a point to build beside a point to set aside, which only the run can tell");
+    expect(adr).toContain("- **The run's word alone deciding that its review asked only for Spin-offs.**");
+    expect(adr).toContain("- **Kit code's asks alone deciding it.**");
+    expect(adr).not.toContain("once a Spin-off names that ask it counts as set aside");
+  });
+
   it("no longer says its own part is still to be built", () => {
     expect(adr).toContain("#885");
     expect(adr).not.toContain("A Request changes' Spin-offs come with #884");
@@ -222,7 +240,9 @@ describe("The README's account of a Request changes' Spin-offs (#884)", () => {
   it("amends the Request changes bullet: built however large, but for a point asked for as a Spin-off, and given to later runs", () => {
     expect(requestChanges).toContain("the run builds it however large it is, but for a point you ask, in words, to be its own issue (see **A Spin-off from a Request changes** below)");
     expect(requestChanges).toContain("and the points of them set aside as Spin-offs");
-    expect(requestChanges).toContain("unless the run set aside every ask as a Spin-off, when the PR goes back to the Merge gate (see **A Spin-off from a Request changes** below)");
+    expect(requestChanges).toContain(
+      "unless the run set aside every ask as a Spin-off and stated that no point was to be built, when the PR goes back to the Merge gate (see **A Spin-off from a Request changes** below)",
+    );
   });
 
   it("has a bullet of its own, straight after Request changes, saying what asks for one and what the Kit opens", () => {
@@ -240,6 +260,9 @@ describe("The README's account of a Request changes' Spin-offs (#884)", () => {
 
   it("says when a run that commits nothing goes back to the Merge gate, and that anything short of it is handed back", () => {
     expect(spinOffs).toContain("the run committed nothing, the PR's head did not move, its latest Verdict is a pass on that head, and every ask of every review the run read is named by a Spin-off's `from`");
+    expect(spinOffs).toContain("And the run states, as `onlySpinOffs` in its output, that every point it was given was asked for as its own issue and it built nothing");
+    expect(spinOffs).toContain("A run that commits nothing without stating it is handed back");
+    expect(spinOffs).not.toContain("Kit code counts it as set aside once a Spin-off names it");
     expect(spinOffs).toContain("no Review, no Hand-back and no retry");
     expect(spinOffs).toContain("Anything short of that is handed back");
   });

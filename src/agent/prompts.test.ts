@@ -1625,10 +1625,17 @@ describe("A Request changes' Spin-offs in the Implement prompt (#884)", () => {
     expect(each).toContain("The Kit refuses an id it didn't give you.");
   });
 
-  it("has a review of only Spin-offs commit nothing, return them and say so in fix", async () => {
+  it("has a review of only Spin-offs commit nothing, return them, state onlySpinOffs and say so in fix", async () => {
     const only = await rule("A review of only Spin-offs.");
-    expect(only).toContain("commit nothing, return them all, and say so in your `fix`");
+    expect(only).toContain("commit nothing, return them all, set `onlySpinOffs` to `true`, and say so in your `fix`");
     expect(only).toContain("returns the pull request to the Merge gate as it was, with no Review");
+  });
+
+  it("has the run state onlySpinOffs only when no point at all was to be built, never for an ask that holds a point to build, and says the Kit hands the pull request back otherwise", async () => {
+    const only = await rule("A review of only Spin-offs.");
+    expect(only).toContain("When every point you were asked to build asks for one, so that no point at all was to be built");
+    expect(only).toContain("A review whose one ask holds a point to build and a point to set aside is not such a review: build that point, and leave `onlySpinOffs` out.");
+    expect(only).toContain("A run that commits nothing without stating it is handed back to the Operator, its Spin-offs opened all the same.");
   });
 
   it("gives the run the Spin-offs already opened from earlier Request changes, to build none of and return none of again", async () => {
@@ -1655,6 +1662,18 @@ describe("A Request changes' Spin-offs in the Implement prompt (#884)", () => {
     expect(field).toContain("Leave it out when no point asks for one, and on every other run, where the Kit never reads it.");
     const example: unknown = JSON.parse(/<implement>\n([\s\S]*?)\n<\/implement>/.exec(text)?.[1] ?? "null");
     expect(readRequestChangesRunOutput(example, ["inline-9"])).toMatchObject({ ok: true, output: { spinOffs: [{ from: "inline-9", title: expect.any(String), body: expect.stringContaining('"') }] } });
+  });
+
+  it("documents onlySpinOffs in the output rules, and its example, which built a point, leaves it out", async () => {
+    const text = await prompt("implement");
+    const field = lineStarting(section(text, "Your output"), "- `onlySpinOffs`");
+    expect(field).toContain("is `true`, only on a Request-changes run that committed nothing because no point at all was to be built");
+    expect(field).toContain("Leave it out on a run that had any point to build, and on every other run, where the Kit never reads it.");
+    expect(field).toContain("Without it, the Kit hands a Request-changes run that committed nothing back to the Operator.");
+    const example = JSON.parse(/<implement>\n([\s\S]*?)\n<\/implement>/.exec(text)?.[1] ?? "null") as Record<string, unknown>;
+    expect(example).not.toHaveProperty("onlySpinOffs");
+    const stated = readRequestChangesRunOutput({ ...example, onlySpinOffs: true }, ["inline-9"]);
+    expect(stated.ok && stated.output.onlySpinOffs).toBe(true);
   });
 });
 
