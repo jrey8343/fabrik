@@ -1785,7 +1785,10 @@ export interface FollowUpIssuesSnapshot {
    * closed, lowest number first: each the Operator opened whose `From PR`
    * line names it, as its Open as issue link writes, and each the Fabrik
    * App opened whose Follow-up marker names it. A fault with the title of
-   * one is not opened again.
+   * one is not opened again. `openedBy` tells the two apart for the Kit's
+   * comment at the merge: one the Fabrik App opened, in an earlier plan
+   * applied only in part, is recorded there as the issue the Kit opened for
+   * the fault, and one the Operator opened is named apart.
    */
   readonly ofPullRequest: readonly { readonly number: number; readonly title: string; readonly openedBy: "operator" | "kit" }[];
 }
