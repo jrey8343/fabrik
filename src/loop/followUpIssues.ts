@@ -43,8 +43,8 @@ function followUpIssue(index: number): CreatedIssue {
  *   `caps.follow_up_issues` such issues are open, the ones this plan opens
  *   counted. Each one past that stays an Open as issue link in the comment.
  */
-export function openFaults({ merged }: PullRequestClosed, pullRequest: PullRequestSnapshot, issues: FollowUpIssuesSnapshot | null | undefined, config: KitConfig): Action[] {
-  if (!merged || pullRequest.followUpsOpened || issues === null || issues === undefined) return [];
+export function openFaults({ merged }: PullRequestClosed, pullRequest: PullRequestSnapshot, issues: FollowUpIssuesSnapshot | null, config: KitConfig): Action[] {
+  if (!merged || pullRequest.followUpsOpened || issues === null) return [];
   const faults = pullRequest.faults.filter(({ title }, at, all) => all.findIndex((earlier) => earlier.title.trim() === title.trim()) === at);
   if (faults.length === 0) return [];
   const existing = (fault: Fault) => issues.ofPullRequest.find(({ title }) => title.trim() === issueTitleOf(fault.title.trim()).trim());

@@ -1643,10 +1643,10 @@ export interface Snapshot {
    * Spin-offs (#884): the Operator's Request changes on its pull request
    * that are not dismissed, oldest first, each with its asks, as the push
    * job reads them from GitHub itself. A Spin-off's `from` is checked
-   * against them, never against what the agent job passed out. Absent or
-   * null for any other event, and for a run that returned none.
+   * against them, never against what the agent job passed out. Null for any
+   * other event, and for a run that returned none.
    */
-  readonly requestChangesAsks?: readonly RequestChangesAsks[] | null;
+  readonly requestChangesAsks: readonly RequestChangesAsks[] | null;
   /**
    * Gathered for an agent pull request merging whose passes named a fault
    * and whose faults the Kit has not seen to yet (#885): what tells which of
@@ -1654,7 +1654,7 @@ export interface Snapshot {
    * event, a pull request closed unmerged, a Plain one, one whose passes
    * named no fault, and one already seen to.
    */
-  readonly followUpIssues?: FollowUpIssuesSnapshot | null;
+  readonly followUpIssues: FollowUpIssuesSnapshot | null;
   /**
    * Gathered for an agent pull request closing, merged or not, only: what
    * tells which Roll-ins were left unsent on it, so their issues are

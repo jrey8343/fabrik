@@ -349,7 +349,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   const held = heldOn(snapshot.kitIssues, config);
   // A Request-changes run's Spin-offs are held to the asks the push job read from GitHub itself (#884), never to what
   // the agent job passed out. They are read only for an output that returns Spin-offs.
-  const asks = fixes.review === undefined ? null : (snapshot.requestChangesAsks ?? null);
+  const asks = fixes.review === undefined ? null : snapshot.requestChangesAsks;
   const parsed = parseImplementOutput(
     event.output,
     fixes.review === undefined ? "pull-request" : "request-changes",

@@ -1640,6 +1640,8 @@ type EventPart = Omit<
   | "weeklyIssues"
   | "replay"
   | "namedPullRequests"
+  | "requestChangesAsks"
+  | "followUpIssues"
   | "rollIns"
   | "held"
   | "closedKitIssue"
