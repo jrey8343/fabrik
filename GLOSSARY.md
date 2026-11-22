@@ -151,11 +151,11 @@ The Kit's scheduled check of a Product repo's production errors and default-bran
 _Avoid_: alerting, watcher, monitor agent
 
 **Intake**:
-The rule that gives a new issue `needs-triage`, unless a skill made it or it already has a state, so Triage sees it. A sub-issue with no state gets one quiet line instead, saying which label to add.
+The rule that gives a new issue `needs-triage`, unless a skill made it or it already has a state, so Triage sees it. A sub-issue with no state gets one quiet line instead, saying which label to add. An issue the Kit opens itself for Triage, a Check's issue or a Spin-off, is opened with `needs-triage` already on, so Intake leaves it alone and Triage sees it all the same.
 _Avoid_: inbox, new-issue hook
 
 **Triage**:
-The AFK step that sorts each incoming issue (not ones the Loop's own skills create) into its next state: straight to an Implementer, into design with the Operator, or set aside. An issue it sets aside as a duplicate of one of the Recent issues closes as GitHub's *duplicate*, naming that issue, the original; any other it sets aside closes as *not planned*.
+The AFK step that sorts each incoming issue (not ones the Loop's own skills create) into its next state: straight to an Implementer, into design with the Operator, or set aside. An issue it sets aside as a duplicate of one of the Recent issues closes as GitHub's *duplicate*, naming that issue, the original; any other it sets aside closes as *not planned*. A Spin-off it sets aside only as a duplicate of a named issue, since the Operator asked for it.
 _Avoid_: sorting
 
 **Recent issues**:
@@ -163,7 +163,7 @@ What Triage compares a new issue against for a duplicate: the 50 most recently c
 _Avoid_: comparison set, candidate list
 
 **Design session**:
-A HITL grilling between the Operator and an agent that turns an issue needing design (first time or after a failed review) into one or more ready tickets, charts it as a Map when its destination is too foggy for one session, or ends as not planned when the Operator decides it won't be built: the issue gets `wontfix` and closes as not planned.
+A HITL grilling between the Operator and an agent that turns an issue needing design (first time or after a failed review) into one or more ready tickets, charts it as a Map when its destination is too foggy for one session, or ends as not planned when the Operator decides it won't be built: the issue gets `wontfix` and closes as not planned. Any finish but a Map can open Spin-offs, for work the Operator's answers put outside the session's outcome.
 _Avoid_: redesign, planning meeting
 
 **Round**:
@@ -191,7 +191,7 @@ One child question of a Map, resolved by research, a prototype, a grilling or a 
 _Avoid_: ticket, task
 
 **Operator step**:
-A piece of a Spec only the Operator can do, such as a trust-root edit, a secret, a repo setting or facts fetched from another system, which Tickets can wait on or which can wait on them.
+A piece of a Spec only the Operator can do, such as a trust-root edit, a secret, a repo setting or facts fetched from another system, which Tickets can wait on or which can wait on them. It never asks the Operator to open an issue: work that needs an issue of its own is a Spin-off, which the Kit opens.
 _Avoid_: manual ticket, human task, ready-for-human Ticket, "For the Operator" section
 
 **Operator brief**:
@@ -381,6 +381,10 @@ _Avoid_: change request, revision, feedback
 **Roll-in**:
 The Operator's Request changes that carries another issue's work onto an agent pull request at the Merge gate, so that it is built there and never becomes a Ticket of its own. A Design session can finish by settling one; only the Operator sends it.
 _Avoid_: fold in, absorb, merge into
+
+**Spin-off**:
+Work the Operator's words put outside the piece at hand, which the Kit opens as an issue of its own. A Design session opens one when it finishes, from an answer of the Operator's that states or implies the work is wanted but is not part of the session's outcome, such as "not now"; it opens none for work the Operator did not speak to. The issue enters at Triage, which sets it aside only as a duplicate of a named issue, and becomes a Ticket only if Triage or a Design session makes it one. It is the opposite of a Roll-in, which carries an issue's work onto a pull request so that it never becomes a Ticket of its own.
+_Avoid_: split-off, deferred issue, side issue, new-issue step
 
 **Conflict-only run**:
 An Implementer run, on the Step-up model, that brings an agent pull request up to date with main once a plain rebase by the Kit conflicted too: one at the Merge gate that main moved under and left conflicting, a draft one whose push GitHub never reviewed because it conflicts with main, or a draft one whose Review passed while it conflicts with main, which stays in draft until the pass on its up-to-date head opens the Merge gate. It rebases onto main, resolves the conflicts and changes nothing else. It's neither a Retry nor a Request changes, so it uses no retry and adds no requirement. Each pull request gets one attempt per main head, and none while a Hand-back stands on it. An Execution flaw on its push calls for a Retry and counts like any other.

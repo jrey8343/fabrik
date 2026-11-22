@@ -1094,10 +1094,11 @@ export function fromAuditIn(body: string): number | null {
 }
 
 /**
- * The line an issue opened from an Operator step's Open as issue link ends
- * with (#825), naming the Spec the step was filed under and, in brackets, that
- * Spec's Tickets, matched against a whole line with its outer whitespace
- * trimmed. A Design session on the issue is given that Spec's open Tickets.
+ * The line a Spin-off of a Spec's or a split's finish ends with (#883), as
+ * an issue opened from an Operator step's Open as issue link did before it
+ * (#825), naming the Spec the issue builds on and, in brackets, that Spec's
+ * Tickets, matched against a whole line with its outer whitespace trimmed. A
+ * Design session on the issue is given that Spec's open Tickets.
  */
 export const FOLLOWS_SPEC_LINE = /^Follows #([1-9][0-9]*)(?: \(.*\))?$/;
 
