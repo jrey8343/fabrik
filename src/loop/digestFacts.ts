@@ -13,7 +13,7 @@ import { type ProductChange, productChangeBetween, type VerdictEffect, verdictEf
 import { listedFollowUpsIn } from "./followUps.ts";
 import { conflictAttemptIn, CONFLICT_RUN_MARKER, handBackMarkIn, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, startedReviewsIn, touchUpBodyOnlyIn, touchUpPushIn, UNMARKED_RETRY_PUSH } from "./markers.ts";
 import { MAX_RETRIES, MAX_TOUCH_UPS, retryNumber, touchUpNumber } from "./retry.ts";
-import { isBrokenRun, type Verdict, type VerdictRecord } from "./types.ts";
+import { isBrokenRun, type RequestChangesAsks, type Verdict, type VerdictRecord } from "./types.ts";
 
 /** A pull request's thread, as much of it as the facts are worked out from. */
 export interface DigestThread {
@@ -258,17 +258,40 @@ export function digestFactsOf(thread: DigestThread): DigestFacts {
 function asksIn(requestChanges: readonly ThreadRequestChanges[]): DigestAsk[] {
   return requestChanges
     .filter(({ dismissed, deferred }) => !dismissed && !deferred)
-    .toSorted((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
-    .flatMap(({ review, body, url, lineComments }): DigestAsk[] => [
-      ...(body.trim() === "" ? [] : [{ id: operatorCommentId("review", review), what: "request-changes" as const, url }]),
-      ...lineComments.map((comment) => ({
-        id: operatorCommentId("inline", comment.comment),
-        what: "line-comment" as const,
-        url: comment.url,
-        path: comment.path,
-        line: comment.line,
-      })),
-    ]);
+    .toSorted(oldestFirst)
+    .flatMap(asksOf);
+}
+
+/** One Request changes' asks: the review itself when its own text says something, then each of its line comments. */
+function asksOf({ review, body, url, lineComments }: ThreadRequestChanges): DigestAsk[] {
+  return [
+    ...(body.trim() === "" ? [] : [{ id: operatorCommentId("review", review), what: "request-changes" as const, url }]),
+    ...lineComments.map((comment) => ({
+      id: operatorCommentId("inline", comment.comment),
+      what: "line-comment" as const,
+      url: comment.url,
+      path: comment.path,
+      line: comment.line,
+    })),
+  ];
+}
+
+function oldestFirst(a: ThreadRequestChanges, b: ThreadRequestChanges): number {
+  return a.at < b.at ? -1 : a.at > b.at ? 1 : 0;
+}
+
+/**
+ * The asks of each of the Operator's Request changes that is not dismissed,
+ * oldest first, review by review (#884): what a Request-changes run's
+ * Spin-offs may name in `from`, and what the Kit weighs a run that committed
+ * nothing against. An ask is what it is in a Digest's facts (asksOf), so the
+ * id a Spin-off names is the id the Digest shows it under.
+ */
+export function requestChangesAsksIn(requestChanges: readonly ThreadRequestChanges[]): RequestChangesAsks[] {
+  return requestChanges
+    .filter(({ dismissed }) => !dismissed)
+    .toSorted(oldestFirst)
+    .map((one) => ({ review: one.review, asks: asksOf(one).map(({ id, url }) => ({ id, url })) }));
 }
 
 /** A row that is no Verdict, so it says nothing of the code. */

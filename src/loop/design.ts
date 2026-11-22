@@ -26,7 +26,6 @@ import {
   MAP_LABEL,
   MONITOR_LABEL,
   NEEDS_DESIGN,
-  NEEDS_TRIAGE,
   READY_FOR_AGENT,
   READY_FOR_HUMAN,
   STEP_UP_LABEL,
@@ -51,7 +50,6 @@ import {
   rollInMarker,
   type RollInText,
   SESSION_FINISHED,
-  spinOffMarker,
 } from "./markers.ts";
 import { blockersPhrase, hiddenBlockersPhrase, type IssueRef, issueRefName, refsNamedFrom, sameRepo } from "./blockers.ts";
 import { spelled } from "./readable.ts";
@@ -60,6 +58,7 @@ import { withoutMentions } from "./mentions.ts";
 import { GITHUB_COMMENT_LIMIT, ROUND_LINE_VERSION, roundLineOf, withoutRoundLines } from "./roundLine.ts";
 import type { AgentBrief } from "./triageOutput.ts";
 import { startAgentRun } from "./runs.ts";
+import { openSpinOff, spinOffIssue, spinOffItem } from "./spinOffs.ts";
 import type {
   Action,
   CreatedIssue,
@@ -764,45 +763,29 @@ interface OpenedSpinOffs {
 
 /**
  * Opens each of a finish's Spin-offs as an issue of its own, as the Fabrik
- * App, in the plan that finishes the session `issueNumber` holds. Each enters
- * at Triage: it is opened with `needs-triage`, as a Check's issue is, and no
- * other label, so Triage gives it its category, and its `labeled` event
- * starts the run. Its body opens with the Spin-off marker, which names the
- * session's issue, and, when the finish writes a Spec or a split, ends with
- * the `Follows` line for `follows`, that Spec and its Tickets, so a Design
- * session on the Spin-off is given them. It waits, by native blocked-by
- * edges, on what its `blockedBy` names: a Ticket of the finish by its key,
- * and any other issue, an open Ticket or the one an agent brief rewrites, by
- * its number. It takes none of the superseded issue's own edges, and is no
- * sub-issue: it is not the Spec's work until a Design session says so. The
- * actions go after the finish's own issues, which the edges point at, and
- * the closing comment gives each Spin-off's number, title and `restsOn`
- * line. Nothing here mentions anyone, so a Spin-off notifies nobody.
+ * App, in the plan that finishes the session `issueNumber` holds, each as
+ * every Spin-off is opened (openSpinOff, src/loop/spinOffs.ts): at Triage,
+ * with `needs-triage` and no other label. Its body opens with the Spin-off
+ * marker, which names the session's issue, and, when the finish writes a
+ * Spec or a split, ends with the `Follows` line for `follows`, that Spec and
+ * its Tickets, so a Design session on the Spin-off is given them. It waits,
+ * by native blocked-by edges, on what its `blockedBy` names: a Ticket of the
+ * finish by its key, and any other issue, an open Ticket or the one an agent
+ * brief rewrites, by its number. It takes none of the superseded issue's own
+ * edges, and is no sub-issue: it is not the Spec's work until a Design
+ * session says so. The actions go after the finish's own issues, which the
+ * edges point at, and the closing comment gives each Spin-off's number,
+ * title and `restsOn` line. Nothing here mentions anyone, so a Spin-off
+ * notifies nobody.
  */
 function openSpinOffs(issueNumber: number, spinOffs: readonly SpinOff[] = [], follows: FollowedSpec | null = null): OpenedSpinOffs {
   if (spinOffs.length === 0) return { actions: [], listed: [] };
-  const opened = (i: number): CreatedIssue => ({ created: `spin-off:${i + 1}` });
   const blockerOf = (blocker: string | number): CreatedIssue | OpenTicketRef => (typeof blocker === "number" ? { ticket: blocker } : ticketIssue(blocker));
   return {
-    actions: spinOffs.map(
-      (spinOff, i): Action => ({
-        kind: "create-issue",
-        key: opened(i).created,
-        title: withoutMentions(spinOff.title),
-        body: [spinOffMarker({ from: "design", issue: issueNumber }), withoutMentions(spinOff.body)].join("\n"),
-        labels: [NEEDS_TRIAGE],
-        parent: null,
-        blockedBy: [...new Set(spinOff.blockedBy)].map(blockerOf),
-        ...(follows === null ? {} : { follows }),
-      }),
-    ),
+    actions: spinOffs.map((spinOff, i) => openSpinOff(spinOffIssue(i), { from: "design", issue: issueNumber }, spinOff, [...new Set(spinOff.blockedBy)].map(blockerOf), follows)),
     listed: [
       `\n\nThe Kit opened ${count(spinOffs.length, "Spin-off", "Spin-offs")}, work the Operator's answers put outside this outcome, which Triage sorts next:\n`,
-      ...spinOffs.flatMap((spinOff, i) => [
-        "\n- ",
-        opened(i),
-        ` ${withoutMentions(spinOff.title)}\n  Rests on: ${withoutMentions(spinOff.restsOn)}`,
-      ]),
+      ...spinOffs.flatMap((spinOff, i) => spinOffItem(spinOffIssue(i), spinOff.title, `Rests on: ${withoutMentions(spinOff.restsOn)}`)),
     ],
   };
 }

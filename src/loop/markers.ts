@@ -13,7 +13,7 @@ import type { RequestChangesAnswers } from "./implementOutput.ts";
 import { fableCapsIn } from "./fableCap.ts";
 import { type HandBack, HAND_BACKS } from "./handBacks.ts";
 import type { TriggerLabel } from "./labels.ts";
-import { AGENT_ROLES, type AgentRole, type GateRerunDone, type GateRerunMark, isStepUpReason, type StepUpReason, type Strength, type VerdictRecord } from "./types.ts";
+import { AGENT_ROLES, type AgentRole, type CreatedIssue, type GateRerunDone, type GateRerunMark, isStepUpReason, type StepUpReason, type Strength, type VerdictRecord } from "./types.ts";
 
 /** A Verdict comment's first line, carrying its record as JSON. */
 export const VERDICT_MARKER = /^<!-- fabrik:verdict (\{.*?\}) -->/;
@@ -231,13 +231,14 @@ export function withoutFlakyCheckIssueMarker(body: string): string {
 const SPIN_OFF_MARKER = /^<!-- fabrik:spin-off (\{.*?\}) -->/;
 
 /**
- * Where a Spin-off came from (#883): the issue whose Design session opened it
- * as the session finished.
+ * Where a Spin-off came from: the issue whose Design session opened it as
+ * the session finished (#883), or the pull request and the Operator's
+ * Request changes on it, by GitHub's id for the review, that asked for a
+ * point to be its own issue (#884).
  */
-export interface SpinOffSource {
-  readonly from: "design";
-  readonly issue: number;
-}
+export type SpinOffSource =
+  | { readonly from: "design"; readonly issue: number }
+  | { readonly from: "request-changes"; readonly pullRequest: number; readonly review: number };
 
 /**
  * A Spin-off's first line (#883): it says the issue is a Spin-off, which the
@@ -245,7 +246,8 @@ export interface SpinOffSource {
  * of what marks one: a Spin-off carries no label of its own.
  */
 export function spinOffMarker(source: SpinOffSource): string {
-  return `<!-- fabrik:spin-off ${markerJson({ from: source.from, issue: source.issue })} -->`;
+  const value = source.from === "design" ? { from: source.from, issue: source.issue } : { from: source.from, pullRequest: source.pullRequest, review: source.review };
+  return `<!-- fabrik:spin-off ${markerJson(value)} -->`;
 }
 
 /**
@@ -259,11 +261,62 @@ export function spinOffIn(body: string): SpinOffSource | null {
   const json = SPIN_OFF_MARKER.exec(body)?.[1];
   if (json === undefined) return null;
   try {
-    const { from, issue } = JSON.parse(json) as Record<string, unknown>;
-    return from === "design" && typeof issue === "number" && Number.isSafeInteger(issue) && issue > 0 ? { from, issue } : null;
+    const { from, issue, pullRequest, review } = JSON.parse(json) as Record<string, unknown>;
+    if (from === "design") return isPositiveInteger(issue) ? { from, issue } : null;
+    if (from === "request-changes") return isPositiveInteger(pullRequest) && isPositiveInteger(review) ? { from, pullRequest, review } : null;
+    return null;
   } catch {
     return null;
   }
+}
+
+/** Whether a marker's field is a number GitHub could have given an issue, a pull request or a review. */
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+const SPIN_OFF_OPENED_MARKER = /^<!-- fabrik:spin-off-opened #([1-9][0-9]*) (\{.*\}) -->$/;
+
+/** A Spin-off the Kit opened from a Request changes, as the pull request's thread records it (#884). */
+export interface OpenedSpinOff {
+  /** The issue the Kit opened. */
+  readonly issue: number;
+  /** The id of the Request changes, or of the comment on the code in one, that asked for it: `review-<id>` or `inline-<id>`. */
+  readonly from: string;
+  readonly title: string;
+}
+
+/**
+ * The marker line a Request-changes run's outcome note records one Spin-off
+ * on (#884), among the marker lines the note opens with: the issue the plan
+ * opens for it, written as its `#number` once it exists, what asked for it,
+ * and its title. It is where every later run on the pull request, its
+ * Reviews and its Digest read the Spin-offs from (openedSpinOffsIn).
+ */
+export function openedSpinOffLine(issue: CreatedIssue, { from, title }: Pick<OpenedSpinOff, "from" | "title">): readonly (string | CreatedIssue)[] {
+  return ["<!-- fabrik:spin-off-opened ", issue, ` ${markerJson({ from, title })} -->`];
+}
+
+/**
+ * The Spin-offs a comment records as opened, in the order written, read only
+ * among the marker lines it opens with: the Kit writes those, and an agent's
+ * text further down can't add one. None for any other comment. Only a bot's
+ * comment should be passed in.
+ */
+export function openedSpinOffsIn(body: string): OpenedSpinOff[] {
+  const opened: OpenedSpinOff[] = [];
+  for (const line of body.split("\n")) {
+    if (!line.startsWith("<!-- fabrik:")) break;
+    const [, number, json] = SPIN_OFF_OPENED_MARKER.exec(line) ?? [];
+    if (number === undefined || json === undefined) continue;
+    try {
+      const { from, title } = JSON.parse(json) as Record<string, unknown>;
+      if (typeof from === "string" && typeof title === "string") opened.push({ issue: Number(number), from, title });
+    } catch {
+      // A line that doesn't read records nothing.
+    }
+  }
+  return opened;
 }
 
 const GATE_RERUN_MARKER = /^<!-- fabrik:gate-rerun (\{.*?\}) -->/;

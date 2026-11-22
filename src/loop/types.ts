@@ -1626,6 +1626,15 @@ export interface Snapshot {
    */
   readonly namedPullRequests: readonly NamedPullRequestSnapshot[] | null;
   /**
+   * Gathered for a Request-changes run finishing whose output returns
+   * Spin-offs (#884): the Operator's Request changes on its pull request
+   * that are not dismissed, oldest first, each with its asks, as the push
+   * job reads them from GitHub itself. A Spin-off's `from` is checked
+   * against them, never against what the agent job passed out. Absent or
+   * null for any other event, and for a run that returned none.
+   */
+  readonly requestChangesAsks?: readonly RequestChangesAsks[] | null;
+  /**
    * Gathered for an agent pull request closing, merged or not, only: what
    * tells which Roll-ins were left unsent on it, so their issues are
    * reopened for Triage (src/loop/rollInReopening.ts, #663). Null for any other
@@ -1830,6 +1839,19 @@ export interface HeldTargetSnapshot {
    * it off as it started (#438). Missing when not read.
    */
   readonly labeledAt?: Readonly<Record<string, string>>;
+}
+
+/**
+ * One of the Operator's Request changes on a pull request, with its asks
+ * (#884), as the Digest's facts list them (src/loop/digestFacts.ts): the
+ * review itself when it says something of its own, then each of the
+ * Operator's comments on the code in it, each by Kit code's id for it,
+ * `review-<id>` or `inline-<id>`, with its place on the pull request's page.
+ */
+export interface RequestChangesAsks {
+  /** GitHub's own id for the review. */
+  readonly review: number;
+  readonly asks: readonly { readonly id: string; readonly url: string }[];
 }
 
 /** A PR an Auditor named (src/loop/auditLanding.ts), or the one a Design session's Roll-in names (src/loop/design.ts), as GitHub has it. */

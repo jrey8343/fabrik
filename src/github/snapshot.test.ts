@@ -3524,6 +3524,97 @@ describe("Gathering the pull request a conflict-only run says supersedes its own
   });
 });
 
+describe("Gathering the asks a Request-changes run's Spin-offs may name (#884)", () => {
+  const RUN_URL = "https://github.com/acme/shop/actions/runs/1/attempts/1";
+  const operator = { login: "acme", type: "User" };
+  const review = (id: number, body: string, state = "CHANGES_REQUESTED", user = operator) => ({
+    id,
+    user,
+    body,
+    state,
+    submitted_at: `2026-11-07T05:0${id % 10}:00Z`,
+    html_url: `https://github.com/acme/shop/pull/50#pullrequestreview-${id}`,
+  });
+  const lineComment = (id: number, inReview: number, user = operator) => ({
+    id,
+    user,
+    body: "Open this as its own issue.",
+    path: "src/cart.ts",
+    line: 12,
+    pull_request_review_id: inReview,
+    created_at: "2026-11-07T05:00:00Z",
+    html_url: `https://github.com/acme/shop/pull/50#discussion_r${id}`,
+  });
+
+  /** A GitHub holding Ticket #7 and its agent PR #50, with these reviews and line comments on the PR. */
+  function githubWith(reviews: unknown[], lineComments: unknown[]) {
+    const reads: string[] = [];
+    const issues = issueGitHub({ labels: ["ready-for-agent"] });
+    const pullRequests = pullRequestGitHub({ body: "Saves the cart.\n\nCloses #7", closing: [{ number: 7, labels: ["ready-for-agent"] }] });
+    const github = {
+      async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        return (query.includes("pullRequest(number: $number)") ? pullRequests : issues).graphql(query, variables);
+      },
+      async rest(method: string, path: string): Promise<unknown> {
+        reads.push(`${method} ${path}`);
+        if (method !== "GET") throw new Error(`Unexpected call: ${method} ${path}`);
+        if (path.startsWith("/repos/acme/shop/pulls/50/reviews?")) return reviews;
+        if (path.startsWith("/repos/acme/shop/pulls/50/comments?")) return lineComments;
+        if (path.startsWith("/repos/acme/shop/issues/50/comments?")) return [];
+        throw new Error(`Unexpected call: ${method} ${path}`);
+      },
+    } as unknown as GitHub;
+    return { github, reads };
+  }
+
+  function finished(output: Record<string, unknown>, fixes: Record<string, unknown> = { review: 902 }): LoopEvent {
+    return {
+      kind: "implement-run-finished",
+      runUrl: RUN_URL,
+      issue: 7,
+      output: JSON.stringify({ title: "Rename the total", summary: "Renames the total.", fix: "Renamed it.", reviewMiss: false, amendsTicket: true, ...output }),
+      branch: "fabrik/ticket-7",
+      base: "fabrik/ticket-7",
+      changes: { net: [], commits: [] },
+      fixes: { pullRequest: 50, headSha: "e".repeat(40), runUrl: RUN_URL, ...fixes },
+    };
+  }
+  const spinOffs = [{ title: "Export the waitlist", body: "The Operator asked for it apart.", from: "inline-9" }];
+
+  it("holds each of the Operator's Request changes that isn't dismissed, oldest first: its own words when it has any, then each of their comments on the code in it", async () => {
+    const { github } = githubWith(
+      [review(902, "Rename the total."), review(901, ""), review(903, "Dismissed since.", "DISMISSED"), review(904, "Not the Operator's.", "CHANGES_REQUESTED", { login: "someone", type: "User" })],
+      [lineComment(9, 902), lineComment(8, 901), lineComment(7, 902, { login: "someone", type: "User" })],
+    );
+
+    const snapshot = await gatherSnapshot(github, repo, finished({ spinOffs }), null, APP_LOGIN);
+
+    expect(snapshot.requestChangesAsks).toEqual([
+      { review: 901, asks: [{ id: "inline-8", url: "https://github.com/acme/shop/pull/50#discussion_r8" }] },
+      {
+        review: 902,
+        asks: [
+          { id: "review-902", url: "https://github.com/acme/shop/pull/50#pullrequestreview-902" },
+          { id: "inline-9", url: "https://github.com/acme/shop/pull/50#discussion_r9" },
+        ],
+      },
+    ]);
+  });
+
+  it.each<[string, LoopEvent]>([
+    ["a Request-changes run that returned no Spin-off", finished({})],
+    ["a Request-changes run whose output breaks its contract", finished({ spinOffs, fix: "" })],
+    ["a Retry, whose output carries no Spin-offs", finished({ spinOffs }, {})],
+  ])("reads nothing written on the pull request for %s", async (_, event) => {
+    const { github, reads } = githubWith([review(902, "Rename the total.")], [lineComment(9, 902)]);
+
+    const snapshot = await gatherSnapshot(github, repo, event, null, APP_LOGIN);
+
+    expect(snapshot.requestChangesAsks).toBeNull();
+    expect(reads).toEqual([]);
+  });
+});
+
 describe("Gathering a Design-session turn's starting reply", () => {
   const issueData = {
     repository: {

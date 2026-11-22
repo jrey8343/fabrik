@@ -23,6 +23,7 @@ import { inBlockerOrder, type IssueRef } from "../loop/blockers.ts";
 import { parseAuditOutput } from "../loop/auditOutput.ts";
 import { parseDesignTurnOutput } from "../loop/designOutput.ts";
 import { parseImplementOutput } from "../loop/implementOutput.ts";
+import { requestChangesAsksIn } from "../loop/digestFacts.ts";
 import { digestMarkIn } from "../loop/digestContract.ts";
 import { heldRunsIn, isCarrier } from "../loop/heldRun.ts";
 import { makesUnusable } from "../loop/subscriptions.ts";
@@ -69,6 +70,7 @@ import type {
   LoopEvent,
   MergeableSnapshot,
   NamedPullRequestSnapshot,
+  RequestChangesAsks,
   ParentIssueSnapshot,
   PullRequestSnapshot,
   ReplayIssueSnapshot,
@@ -126,7 +128,7 @@ import {
 } from "./threads.ts";
 import { BLOCKED_BY, blockedByFields, blockersOf, issueRefOf, type RawBlockedBy, type RawBlocker, type RawDependenciesSummary } from "./blockers.ts";
 import { leavingOutHeldLines } from "./heldLines.ts";
-import { operatorsRequestChangesIn, type WrittenReview } from "./writtenOn.ts";
+import { operatorsRequestChangesIn, readWrittenOn, threadRequestChangesIn, type WrittenReview } from "./writtenOn.ts";
 
 const ISSUE_QUERY = `
   query ($owner: String!, $name: String!, $number: Int!) {
@@ -680,9 +682,28 @@ export async function gatherSnapshot(
   // fails safe: it can only move a Fable run to another Subscription, or to Opus, never make one bill.
   const marked = [...fableCapsIn(part?.issue?.body ?? ""), ...(part?.fableCaps ?? [])];
   const fableCaps = { readings: [...marked, ...storeFableCaps], now: event.kind === "scheduled-tick" ? event.now : new Date().toISOString() };
+  // A Request-changes run's Spin-offs name the Operator's asks, which the push job reads itself (#884).
+  const requestChangesAsks = await gatherRequestChangesAsks(github, repo, event, theOperator);
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, requestChangesAsks, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, requestChangesAsks, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps };
+}
+
+/**
+ * For a Request-changes run finishing whose output returns Spin-offs (#884):
+ * the asks of the Operator's Request changes on its pull request, review by
+ * review, read from GitHub as the Digest's asks are (requestChangesAsksIn).
+ * The plan checks each Spin-off's `from` against them, and weighs a run that
+ * committed nothing against them, so neither rests on what the agent job
+ * passed out. Null for any other event, for a run that returned none, and
+ * for one whose output breaks its contract, which lands nothing: nothing is
+ * read of GitHub for those.
+ */
+async function gatherRequestChangesAsks(github: ReadClient, repo: Repo, event: LoopEvent, operator: string): Promise<RequestChangesAsks[] | null> {
+  if (event.kind !== "implement-run-finished" || event.fixes?.review === undefined) return null;
+  const parsed = parseImplementOutput(event.output, "request-changes");
+  if (!parsed.ok || parsed.output.spinOffs === undefined) return null;
+  return requestChangesAsksIn(threadRequestChangesIn(await readWrittenOn(github, repo, event.fixes.pullRequest), operator));
 }
 
 /** A check run in GitHub's REST listing, as the Flaky check sweep reads it. */

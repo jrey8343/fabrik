@@ -138,11 +138,32 @@ export function digestOnPass(event: Passed, pullRequest: PullRequestSnapshot, sn
 }
 
 /** What a pass does about a Digest with none to carry forward: steps 3 and 4 of `digestOnPass`. */
-function digestWrittenOnPass(event: Passed, pullRequest: PullRequestSnapshot, snapshot: Pick<Snapshot, "operator" | "kitIssues">, config: KitConfig): Action[] {
+function digestWrittenOnPass(event: Pick<Passed, "headSha">, pullRequest: PullRequestSnapshot, snapshot: Pick<Snapshot, "operator" | "kitIssues">, config: KitConfig): Action[] {
   if (runsDueAreHeld(snapshot.kitIssues, config)) {
     return [{ kind: "comment", issue: pullRequest.number, body: noDigestLine({ head: event.headSha, how: "no-subscription" }) }, ...gateOpening(pullRequest, snapshot.operator)];
   }
   return [{ kind: "add-labels", issue: pullRequest.number, labels: [DIGEST_LABEL] }];
+}
+
+/**
+ * What returns a pull request to the Merge gate on a pass that stands
+ * (#884), or null when its latest Verdict is no pass on its head: a
+ * Request-changes run that set aside every point of its review as a Spin-off
+ * committed nothing, so the head is the one that pass judged and no Review
+ * is owed. The pull request went to draft for the run, so:
+ * - One whose gate had opened before the Request changes goes out of draft
+ *   with the Operator's review requested, as any gate opening does. The
+ *   Digest written for this head stays as it is.
+ * - One whose gate had yet to open, its Digest being written when the
+ *   Request changes came (ADR-0022), had that attempt dropped. The pass
+ *   still owes its Digest, so it goes on from where a pass with none to
+ *   carry does (`digestWrittenOnPass`), and the gate opens when that
+ *   attempt ends. With the Digest off, the gate opens at once.
+ */
+export function backAtGateOnStandingPass(pullRequest: PullRequestSnapshot, snapshot: Pick<Snapshot, "operator" | "kitIssues">, config: KitConfig): Action[] | null {
+  if (!passedAt(pullRequest, pullRequest.headSha)) return null;
+  if (config.digest.enabled && !pullRequest.leftDraftSinceVerdict) return digestWrittenOnPass(pullRequest, pullRequest, snapshot, config);
+  return gateOpening(pullRequest, snapshot.operator);
 }
 
 /** Out of draft, then the Operator's review requested: the review request is the event's one notification. */
