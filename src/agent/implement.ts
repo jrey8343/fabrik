@@ -113,6 +113,13 @@ export interface PullRequestRunContext {
   readonly pullRequest: number;
   readonly parts: string[];
   readonly operatorComments: GivenOperatorComment[];
+  /**
+   * On a Request-changes run alone (#884): the id of each Request changes the
+   * prompt heads, and of each comment on the code in one, which is all a
+   * Spin-off's `from` may name. The run's output is checked against them
+   * while the agent can still put it right.
+   */
+  readonly asks?: string[];
 }
 
 /**
@@ -236,13 +243,21 @@ export async function requestChangesContext(
   // The Operator's earlier Request changes still amend the Ticket, so the run builds against all of them, each shown once.
   const thisReview = typeof review.id === "number" ? operatorCommentId("review", review.id) : null;
   const requested = Array.isArray(pullRequest.requestedChanges)
-    ? (pullRequest.requestedChanges as { id?: unknown; submittedAt?: unknown; comments?: unknown }[])
+    ? (pullRequest.requestedChanges as { id?: unknown; submittedAt?: unknown; body?: unknown; comments?: unknown }[])
     : [];
   const earlier = requested.filter(({ id }) => id !== thisReview);
   const submittedAt = requested.find(({ id }) => id === thisReview)?.submittedAt;
-  for (const { id, comments: theirs } of earlier) {
+  // What a Spin-off's `from` may name (#884): this review where it says something of its own, each comment on the code
+  // in it, then the same of each earlier Request changes. A review with no words of its own is headed by no id.
+  const asks = [...(thisReview !== null && body !== "" ? [thisReview] : []), ...inReview];
+  for (const { id, body: theirWords, comments: theirs } of earlier) {
     if (typeof id === "string") inReview.add(id);
-    for (const comment of Array.isArray(theirs) ? (theirs as { id?: unknown }[]) : []) if (typeof comment.id === "string") inReview.add(comment.id);
+    if (typeof id === "string" && typeof theirWords === "string" && theirWords.trim() !== "") asks.push(id);
+    for (const comment of Array.isArray(theirs) ? (theirs as { id?: unknown }[]) : []) {
+      if (typeof comment.id !== "string") continue;
+      inReview.add(comment.id);
+      asks.push(comment.id);
+    }
   }
   const others = Array.isArray(pullRequest.operatorComments)
     ? (pullRequest.operatorComments as { id?: unknown }[]).filter(({ id }) => typeof id !== "string" || !inReview.has(id))
@@ -261,6 +276,8 @@ export async function requestChangesContext(
           ]),
       "## The Operator's requested changes",
       ...(typeof submittedAt === "string" ? [`Submitted ${submittedAt}.`] : []),
+      // Headed by its id, as each comment on the code is, so a Spin-off can name the review's own words in `from` (#884).
+      ...(body === "" || thisReview === null ? [] : [`### \`${thisReview}\`: the review's own words`]),
       body === "" ? "(The review has no summary; see its comments below.)" : body,
       ...(inline.length === 0 ? [] : ["## The Operator's comments on the code", ...inline]),
       ...(gaveWay === null
@@ -280,6 +297,7 @@ export async function requestChangesContext(
     ],
     // The earlier reviews are shown under their ids too, so the run may name them as weighed.
     operatorComments: [...givenOperatorComments(pullRequest.operatorComments), ...givenOperatorComments(earlier)],
+    asks,
   };
 }
 
@@ -448,6 +466,12 @@ export interface ImplementInput {
   readonly brief: string | null;
   /** For a Request-changes run told to merge main in (#341), the default branch head it was told to merge; otherwise null. */
   readonly mergeMain: string | null;
+  /**
+   * For a Request-changes run (#884), the ids its Spin-offs may name in
+   * `from`, which its output is checked against; null for every other run,
+   * whose output carries no Spin-offs.
+   */
+  readonly asks: string[] | null;
 }
 
 /** The default branch head a Request-changes run merges in (#341), and the ref it names it by. */
@@ -490,9 +514,9 @@ export async function implementInput(
   if (kept !== null) {
     // A first run that carries on: it opens a new PR, so it owes a first run's output.
     const context = await keptBranchContext(productDir, branch.name, kept.pullRequest, files.defaultBranch || "main");
-    return { branch, parts: [...parts, ...context], kind: "first", operatorComments: null, mergeMain: null, brief: context.join("\n\n") };
+    return { branch, parts: [...parts, ...context], kind: "first", operatorComments: null, mergeMain: null, brief: context.join("\n\n"), asks: null };
   }
-  if (!onPullRequest) return { branch, parts, kind: "first", operatorComments: null, mergeMain: null, brief: null };
+  if (!onPullRequest) return { branch, parts, kind: "first", operatorComments: null, mergeMain: null, brief: null, asks: null };
   const conflict = files.conflict ?? "";
   const merge = conflict === "" && files.review !== "" ? await mainToMerge(productDir, files.defaultBranch || "main") : null;
   const context =
@@ -509,6 +533,7 @@ export async function implementInput(
     operatorComments: context.operatorComments,
     mergeMain: merge?.main ?? null,
     brief: context.parts.join("\n\n"),
+    asks: kind === "request-changes" ? (context.asks ?? []) : null,
   };
 }
 

@@ -481,7 +481,7 @@ describe("A Request-changes run with the Operator's earlier Request changes on i
   it("is told to build any of them the PR doesn't meet yet, and when its own review was submitted", async () => {
     const text = (await context()).parts.join("\n");
 
-    expect(text).toContain("## The Operator's requested changes\nSubmitted 2026-11-07T05:52:00Z.\nRebase for merge conflicts please.");
+    expect(text).toContain("## The Operator's requested changes\nSubmitted 2026-11-07T05:52:00Z.\n### `review-102`: the review's own words\nRebase for merge conflicts please.");
     expect(text).toContain("### `review-101`: Request changes, 2026-11-07T05:14:00Z\nMake the slots 30 minutes.");
     expect(text).toContain("also build each of these the pull request doesn't meet yet");
   });
@@ -503,6 +503,39 @@ describe("A Request-changes run with the Operator's earlier Request changes on i
 
     expect(text).toContain("## The Operator's comments on the pull request\n(The Operator hasn't commented on it beyond the Request changes above.)");
     expect(text).not.toContain("(The Operator hasn't commented on it.)");
+  });
+});
+
+describe("What a Request-changes run may name as a Spin-off's from (#884)", () => {
+  const inline = (id: number, body: string) => ({ id: `inline-${id}`, url: `https://github.com/acme/shop/pull/50#discussion_r${id}`, path: "src/cart.ts", line: 12, body });
+  const earlier = {
+    id: "review-101",
+    url: "https://github.com/acme/shop/pull/50#pullrequestreview-101",
+    submittedAt: "2026-11-07T05:14:00Z",
+    body: "Make the slots 30 minutes.",
+    comments: [inline(5, "And open the CSV export as its own issue.")],
+  };
+  const latest = { ...earlier, id: "review-102", url: "https://github.com/acme/shop/pull/50#pullrequestreview-102", submittedAt: "2026-11-07T05:52:00Z", body: "Rename the total.", comments: [inline(4, "Coupons in a different ticket.")] };
+  const reviewFile = (body: string) => fileOf({ review: { id: 102, state: "CHANGES_REQUESTED", body }, comments: [{ id: 4, path: "src/cart.ts", line: 12, body: "Coupons in a different ticket." }] });
+
+  it("heads its review's own words with the review's id, as its comments on the code are headed by theirs", async () => {
+    const text = (await requestChangesContext(await fileOf({ ...pullRequest, requestedChanges: [latest] }), await reviewFile("Rename the total."))).parts.join("\n");
+
+    expect(text).toContain("## The Operator's requested changes\nSubmitted 2026-11-07T05:52:00Z.\n### `review-102`: the review's own words\nRename the total.\n## The Operator's comments on the code\n### `inline-4`: `src/cart.ts` line 12");
+  });
+
+  it("is the id of its review, of each comment on the code in it, and of each earlier Request changes and its comments", async () => {
+    const { asks } = await requestChangesContext(await fileOf({ ...pullRequest, requestedChanges: [earlier, latest] }), await reviewFile("Rename the total."));
+
+    expect(asks).toEqual(["review-102", "inline-4", "review-101", "inline-5"]);
+  });
+
+  it("leaves out a review that says nothing of its own, which is headed by no id", async () => {
+    const silent = { ...earlier, body: " " };
+    const context = await requestChangesContext(await fileOf({ ...pullRequest, requestedChanges: [silent, { ...latest, body: "" }] }), await reviewFile(""));
+
+    expect(context.asks).toEqual(["inline-4", "inline-5"]);
+    expect(context.parts.join("\n")).toContain("## The Operator's requested changes\nSubmitted 2026-11-07T05:52:00Z.\n(The review has no summary; see its comments below.)");
   });
 });
 
@@ -566,10 +599,18 @@ describe("A Request-changes run on a PR that conflicts with main (#341)", () => 
 
     const { parts, brief } = await input(productDir);
 
-    expect(brief).toContain("## The Operator's requested changes\n\nRebase for merge conflicts please.");
+    expect(brief).toContain("## The Operator's requested changes\n\n### `review-102`: the review's own words\n\nRebase for merge conflicts please.");
     expect(brief).toContain("## Bring main in first");
     expect(parts.join("\n\n").endsWith(brief ?? "(no brief)")).toBe(true);
     expect(brief).not.toContain("## GLOSSARY.md");
+  });
+
+  it("hands on what a Spin-off's from may name, which its output is checked against (#884), and a Retry hands on none", async () => {
+    const { productDir } = await checkout(false);
+
+    expect((await input(productDir)).asks).toEqual(["review-102"]);
+    const retry = await implementInput(productDir, 7, kitConfig(), { spec: await fileOf(null), pullRequest: await fileOf({ ...pullRequest, operatorComments: [] }), review: "" });
+    expect(retry.asks).toBeNull();
   });
 
   it("isn't told to merge when the PR only lags behind main", async () => {

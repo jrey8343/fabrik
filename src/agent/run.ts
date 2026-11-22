@@ -468,6 +468,8 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
   let given: GivenOperatorComment[] | null = null;
   // The main head a Request-changes run was told to merge in (#341), recorded before the agent runs.
   let mergeMain: string | null = null;
+  // The ids a Request-changes run's Spin-offs may name in `from` (#884), which its contract checks them against.
+  let asks: string[] | null = null;
   const extra: string[] = [];
   // The numbers of the open Tickets a Design-session turn was given (#825), which its contract checks numbered blockers against.
   let openTickets: number[] | null = null;
@@ -501,6 +503,7 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     kind = input.kind;
     given = input.operatorComments;
     mergeMain = "mergeMain" in input ? input.mergeMain : null;
+    asks = "asks" in input ? input.asks : null;
     // Kept beside the transcript, before the agent runs, so the judge reads what this run was asked even if it times out (#450).
     if (input.brief !== null) await writeFile(join(outDir, RUN_BRIEF_FILE), `${input.brief}\n`);
   }
@@ -602,8 +605,11 @@ async function runRole<T>(spec: RoleSpec<T>): Promise<void> {
     extra.push(...(await replayReviewContext(productDir, required("FABRIK_SPEC_FILE"), required(BASE_SHA_ENV))));
   }
   // A run on an existing PR owes a fix as well, and a Request-changes run its two answers, which its push job checks too.
+  // A Request-changes run's Spin-offs are held to the ids its prompt headed (#884), which the push job checks against its own read.
   const ownContract = typeof spec.output === "function" ? spec.output(issueNumber, openTickets, isSpinOffIssue(JSON.parse(issueText))) : spec.output;
-  const contract: OutputContract<T> = kind === "first" ? ownContract : ({ read: IMPLEMENT_OUTPUT_READERS[kind] } as unknown as OutputContract<T>);
+  const mayName = asks ?? undefined;
+  const contract: OutputContract<T> =
+    kind === "first" ? ownContract : ({ read: (value: unknown) => IMPLEMENT_OUTPUT_READERS[kind](value, mayName) } as unknown as OutputContract<T>);
   const output =
     "read" in contract
       ? Output.object({ tag: prompt, schema: replySchemaOf(contract.read), maxRetries: 1 })

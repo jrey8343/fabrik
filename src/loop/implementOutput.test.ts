@@ -175,3 +175,76 @@ describe("The merged pull request a conflict-only run says supersedes its PR (#8
     expect(parsed.ok && parsed.output.supersededBy).toBeUndefined();
   });
 });
+
+describe("A Request-changes run's spinOffs (#884)", () => {
+  const answered = (fields: Record<string, unknown> = {}) =>
+    output({ fix: "Moves the waitlist button.", reviewMiss: false, amendsTicket: true, ...fields });
+  const spinOff = (extra: Record<string, unknown> = {}) => ({
+    title: "Export the waitlist as CSV",
+    body: 'The Operator asked, on the waitlist pull request: "open the CSV export as its own issue".',
+    from: "inline-9",
+    ...extra,
+  });
+
+  it("are read from its output, each with its title, its body and the id of what asked for it", () => {
+    const spinOffs = [spinOff(), spinOff({ title: "Text the waitlist", from: "review-900" })];
+
+    expect(parseImplementOutput(answered({ spinOffs }), "request-changes", ["review-900", "inline-9"])).toMatchObject({ ok: true, output: { spinOffs } });
+  });
+
+  it("refuse one whose from names an id the run was not given, naming it", () => {
+    expect(parseImplementOutput(answered({ spinOffs: [spinOff(), spinOff({ from: "conversation-3" })] }), "request-changes", ["review-900", "inline-9"])).toEqual({
+      ok: false,
+      errors: ["spin-off 2 names `conversation-3` in from, which isn't a Request changes, or a comment on the code in one, that this run was given"],
+    });
+  });
+
+  it("take any id where the ids the run was given aren't to hand, as where the prompt's own example is read", () => {
+    expect(parseImplementOutput(answered({ spinOffs: [spinOff({ from: "inline-77" })] }), "request-changes")).toMatchObject({ ok: true, output: { spinOffs: [{ from: "inline-77" }] } });
+  });
+
+  it.each([
+    ["no title", { title: undefined }],
+    ["a blank title", { title: " " }],
+    ["a title of two lines", { title: "Export\nthe waitlist" }],
+    ["a title past GitHub's limit", { title: "x".repeat(257) }],
+    ["no body", { body: undefined }],
+    ["a blank body", { body: "" }],
+    ["no from", { from: undefined }],
+    ["a from that isn't text", { from: 9 }],
+  ])("refuse one with %s, by its place in the list", (_, fields) => {
+    expect(parseImplementOutput(answered({ spinOffs: [spinOff(), spinOff(fields)] }), "request-changes", ["inline-9"])).toEqual({
+      ok: false,
+      errors: ["spin-off 2 needs a title of one non-empty line of at most 256 characters, body text, and from as the id that heads what asked for it"],
+    });
+  });
+
+  it.each([
+    ["text", "inline-9"],
+    ["an object", { title: "Export the waitlist" }],
+  ])("refuse %s in place of the list", (_, spinOffs) => {
+    expect(parseImplementOutput(answered({ spinOffs }), "request-changes", ["inline-9"])).toEqual({
+      ok: false,
+      errors: ["spinOffs must be a list of Spin-offs, each with a title, a body and a from"],
+    });
+  });
+
+  it("read an empty list as none", () => {
+    const parsed = parseImplementOutput(answered({ spinOffs: [] }), "request-changes", ["inline-9"]);
+
+    expect(parsed).toMatchObject({ ok: true });
+    expect(parsed.ok && parsed.output.spinOffs).toBeUndefined();
+  });
+
+  it.each([
+    ["a first run", "first"],
+    ["a Retry, a Touch-up or a conflict-only run", "pull-request"],
+  ] as const)("are never read from the output of %s, whatever it wrote there", (_, run) => {
+    for (const spinOffs of [[spinOff()], [spinOff({ from: "nothing-1" })], "inline-9"]) {
+      const parsed = parseImplementOutput(answered({ spinOffs }), run, ["inline-9"]);
+
+      expect(parsed).toMatchObject({ ok: true });
+      expect(parsed.ok && parsed.output.spinOffs).toBeUndefined();
+    }
+  });
+});
