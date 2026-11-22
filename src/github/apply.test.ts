@@ -5,7 +5,7 @@ import { UI } from "../__fixtures__/uiEvidence.ts";
 import { landingFailureReport, pushLanding } from "../kit/landingFailure.ts";
 import { replayMarksIn } from "../kit/replay.ts";
 import { fableCapMarker, fableCapsIn } from "../loop/fableCap.ts";
-import { gateRerunMarker, gateRerunMarksIn } from "../loop/markers.ts";
+import { gateRerunMarker, gateRerunMarksIn, openedSpinOffsIn, spinOffIn } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { Action, LoopEvent, Plan } from "../loop/types.ts";
 import { applyPlan, implementPushOf, PlanNotApplied } from "./apply.ts";
@@ -1534,5 +1534,66 @@ describe("Applying a Design session's finish that opens Spin-offs (#883)", () =>
         '  Rests on: Round 2, answer 3: "not now"',
       ].join("\n"),
     );
+  });
+});
+
+describe("Applying the landing of a Request-changes run that returned a Spin-off (#884)", () => {
+  const RUN = "https://github.com/acme/shop/actions/runs/1/attempts/1";
+  const HEAD = "a".repeat(40);
+  /** The run for review 900 on PR 50 committed nothing, on a head that moved while it worked, so nothing is pushed and Review is asked for by its label. */
+  const landing = (): Plan =>
+    planFor(
+      {
+        kind: "implement-run-finished",
+        runUrl: RUN,
+        issue: 7,
+        output: JSON.stringify({
+          title: "Rename the total",
+          summary: "Adds the order total.",
+          fix: "Set the export aside.",
+          reviewMiss: false,
+          amendsTicket: false,
+          spinOffs: [{ title: "Export the waitlist as CSV", body: 'The Operator wrote: "open the CSV export as its own issue".', from: "inline-9" }],
+        }),
+        branch: "fabrik/ticket-7",
+        base: "fabrik/ticket-7",
+        changes: { net: [], commits: [] },
+        fixes: { pullRequest: 50, headSha: HEAD, runUrl: RUN, review: 900 },
+      },
+      {
+        ...snapshotOfPullRequest(aPullRequest({ headSha: "b".repeat(40), notedChangesRequests: [900], requestChangesRunInFlight: 900, requestChangesRunReviews: [900] })),
+        issue: anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] }),
+        requestChangesAsks: [{ review: 900, asks: [{ id: "inline-9", url: "https://github.com/acme/shop/pull/50#discussion_r9" }] }],
+      },
+      kitConfig(),
+    );
+
+  it("opens the issue with needs-triage, blocks it by the pull request's Ticket, and posts the run's note with the number GitHub gave it, which reads back", async () => {
+    const github = fakeGitHub();
+
+    await applyPlan(github, repo, landing());
+
+    // The Spin-off is #100, and the Ticket #7's database id is 1007.
+    expect(github.calls.filter((call) => call.method === "POST" && call.path === issues).map((call) => call.body)).toEqual([
+      {
+        title: "Export the waitlist as CSV",
+        body: '<!-- fabrik:spin-off {"from":"request-changes","pullRequest":50,"review":900} -->\nThe Operator wrote: "open the CSV export as its own issue".\n\nFrom PR #50',
+        labels: ["needs-triage"],
+      },
+    ]);
+    expect(github.calls.filter((call) => call.path === `${issues}/100/dependencies/blocked_by`).map((call) => call.body)).toEqual([{ issue_id: 1007 }]);
+    const note = (github.calls.find((call) => call.method === "POST" && call.path === `${issues}/50/comments`)?.body as { body: string }).body;
+    expect(note).toContain("- #100 Export the waitlist as CSV\n  Asked for in [the Operator's comment on the code](https://github.com/acme/shop/pull/50#discussion_r9)");
+    expect(openedSpinOffsIn(note)).toEqual([{ issue: 100, from: "inline-9", title: "Export the waitlist as CSV" }]);
+    expect(spinOffIn((github.calls.find((call) => call.method === "POST" && call.path === issues)?.body as { body: string }).body)).toEqual({ from: "request-changes", pullRequest: 50, review: 900 });
+  });
+
+  it("opens the issue before it posts the note, so a note is never posted for an issue that was not opened", async () => {
+    const github = fakeGitHub();
+
+    await applyPlan(github, repo, landing());
+
+    const order = github.calls.filter((call) => call.method === "POST").map((call) => call.path);
+    expect(order.indexOf(issues)).toBeLessThan(order.indexOf(`${issues}/50/comments`));
   });
 });
