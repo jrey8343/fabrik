@@ -699,7 +699,9 @@ describe("Spin-offs in the Design prompt", () => {
   it("tells a Spin-off from a Ticket: work the session designed fully is a Ticket of its Spec", async () => {
     const which = lineStarting(await spinOffs(), "- **A Spin-off or a Ticket.**");
     expect(which).toContain("Work this session designed fully is a Ticket of its Spec.");
-    expect(which).toContain("A Spin-off is work that still needs sorting or a design of its own.");
+    expect(which).toContain("A Spin-off is work that still needs Triage or a design of its own.");
+    // The glossary lists `sorting` under what to avoid for Triage.
+    expect(which).not.toContain("sorting");
   });
 
   it("checks the open Tickets first, and names the Ticket that already holds the work in the closing comment instead", async () => {

@@ -59,7 +59,7 @@ Other Specs, and the Fast path, hold work an Implementer is building or will bui
 Some work the Operator wants, but not as part of what this session finishes with. A **Spin-off** is work the Operator's answers put outside this session's outcome, which the Kit opens as an issue of its own when the session finishes. Any finish but a Map carries its Spin-offs in `spinOffs`. Triage sorts each one next, so you design none of it here.
 
 - **When to write one.** An answer of the Operator's states or implies that some work is wanted but is not part of this outcome, such as "not now", "later" or "leave that out of this one". Never write one for work the Operator did not speak to, however useful it looks, and never for work the Operator decided against.
-- **A Spin-off or a Ticket.** Work this session designed fully is a Ticket of its Spec. A Spin-off is work that still needs sorting or a design of its own.
+- **A Spin-off or a Ticket.** Work this session designed fully is a Ticket of its Spec. A Spin-off is work that still needs Triage or a design of its own.
 - **Check "The open Tickets" first.** Write no Spin-off for work an open Ticket already holds, and name that Ticket in the closing `comment` instead.
 - **No round asks about one alone.** Ask no question only to confirm a Spin-off the Operator's answer already implies.
 - **Say what it waits on.** A Spin-off that builds on work this session's outcome leaves to be built names that work in its `blockedBy`, so no Implementer builds it on a `main` that lacks it.
