@@ -54,7 +54,7 @@ import type { SentBack } from "../loop/backToDesign.ts";
 import { withoutChangeLines } from "../loop/changeFingerprint.ts";
 import { type DigestFacts, digestFactsOf } from "../loop/digestFacts.ts";
 import { mapOfferOf, type MapOfferOf } from "../loop/mapCap.ts";
-import { flakyCheckIssueOf, followsSpecIn, fromAuditIn, fromPullRequestIn, openedSpinOffsIn, spinOffIn, type SpinOffSource } from "../loop/markers.ts";
+import { flakyCheckIssueOf, followsSpecIn, followUpIssueOf, fromAuditIn, fromPullRequestIn, openedSpinOffsIn, spinOffIn, type SpinOffSource } from "../loop/markers.ts";
 import { withoutRoundLines } from "../loop/roundLine.ts";
 import type { AuditIssueSnapshot, AuditWindow, KitConfig } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
@@ -178,7 +178,9 @@ function pullRequestOf(pullRequests: readonly { number: number; state: "OPEN" | 
  * bot opened, as this job takes any bot for the App (byAppOf), else null.
  * Read the same way, a Spin-off (#883) carries `spinOff`, where it came
  * from, which Triage's prompt and its output contract go by; any other issue
- * has no such field.
+ * has no such field. An issue the Kit opened for a Follow-up that is a fault
+ * (#885) carries `followUp`, the pull request whose pass named the fault,
+ * which Triage's prompt goes by.
  */
 export async function readIssue(
   github: Reader,
@@ -213,6 +215,8 @@ export async function readIssue(
   const { sentBack } = designSessionOf(comments.map(({ author, body }) => ({ body, byApp: byAppOf(author, null) })));
   // Anyone can quote a Spin-off's marker in an issue they open, so it is read only on a bot's (ADR-0037).
   const spinOff = byAppOf(issue.author, null) ? spinOffIn(issue.body) : null;
+  // Likewise the marker of a Follow-up the Kit opened (#885).
+  const followUp = byAppOf(issue.author, null) ? followUpIssueOf(issue.body) : null;
   return {
     issue: {
       number: issue.number,
@@ -223,6 +227,7 @@ export async function readIssue(
       operator,
       comments: authoredComments,
       ...(spinOff === null ? {} : { spinOff }),
+      ...(followUp === null ? {} : { followUp: { pullRequest: followUp } }),
       ...(sentBack === null ? {} : { sentBack: await readSentBack(github, repo, sentBack, operator) }),
     },
     body: issue.body,

@@ -154,6 +154,8 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     shotsMarker: null,
     changedTests: [],
     digests: [],
+    faults: [],
+    followUpsOpened: false,
     ...overrides,
   };
 }
@@ -161,7 +163,7 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
 /** A snapshot of this pull request. */
 export function snapshotOfPullRequest(
   pullRequest: PullRequestSnapshot,
-  overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "conflicts" | "mergeable" | "reviewHasInlineComments" | "rollIns" | "fableCaps">> = {},
+  overrides: Partial<Pick<Snapshot, "operator" | "kitIssues" | "conflicts" | "mergeable" | "reviewHasInlineComments" | "rollIns" | "followUpIssues" | "fableCaps">> = {},
 ): Snapshot {
   return { issue: null, pullRequest, dispatch: null, designQueue: null, spec: null, operator: "operator", kitIssues: [], flakyCheckIssues: [], startingComment: null, reviewHasInlineComments: null, audit: null, retro: null, weeklyIssues: null, replay: null, namedPullRequests: null, rollIns: null, held: null, closedKitIssue: null, closedCarriers: null, weekCarriers: null, openMaps: null, conflicts: null, mergeable: null, triggers: null, readyTickets: null, flakySweep: null, passedHeads: null, closedCheckIssues: null, ...overrides };
 }

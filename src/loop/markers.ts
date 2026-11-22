@@ -319,6 +319,96 @@ export function openedSpinOffsIn(body: string): OpenedSpinOff[] {
   return opened;
 }
 
+const FOLLOW_UP_MARKER = /^<!-- fabrik:follow-up (\{.*?\}) -->/;
+
+/**
+ * The first line of an issue the Kit opened for a Follow-up that is a fault
+ * (#885, ADR-0039): it says the issue is one, and names the pull request
+ * whose pass named the fault. It is the whole of what marks one: such an
+ * issue carries no label of its own.
+ */
+export function followUpMarker(pullRequest: number): string {
+  return `<!-- fabrik:follow-up ${markerJson({ pullRequest })} -->`;
+}
+
+/**
+ * The pull request whose pass named the fault this body's issue was opened
+ * for, or null for any other body. Read as the body's first line only, and
+ * only on an issue the Fabrik App opened, which the caller checks: anyone
+ * can quote a marker in an issue they open (ADR-0037). A Design session's
+ * rewrite carries the line forward (src/loop/design.ts), so the issue still
+ * counts toward `caps.follow_up_issues` while it is open.
+ */
+export function followUpIssueOf(body: string): number | null {
+  const json = FOLLOW_UP_MARKER.exec(body)?.[1];
+  if (json === undefined) return null;
+  try {
+    const { pullRequest } = JSON.parse(json) as Record<string, unknown>;
+    return isPositiveInteger(pullRequest) ? pullRequest : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The first line of the Kit's comment on a merged agent pull request that
+ * says what became of the faults its passes named (#885). Any such comment
+ * says the merge was seen to, so its issues are opened once.
+ */
+export const FOLLOW_UPS_OPENED_MARKER = "<!-- fabrik:follow-ups-opened -->";
+
+const FOLLOW_UP_OPENED_MARKER = /^<!-- fabrik:follow-up-opened #([1-9][0-9]*) (\{.*\}) -->$/;
+const FOLLOW_UP_LEFT_MARKER = /^<!-- fabrik:follow-up-left (\{.*\}) -->$/;
+
+/** What the Kit's comment on a merged pull request records of its faults (#885). */
+export interface FollowUpsOpened {
+  /** Each fault the Kit opened as an issue, with the issue, in the order opened. */
+  readonly opened: readonly { readonly issue: number; readonly title: string }[];
+  /** The title of each fault left an Open as issue link, over `caps.follow_up_issues`. */
+  readonly left: readonly string[];
+}
+
+/**
+ * The marker line that comment records one opened fault on, among the
+ * marker lines it opens with: the issue the plan opens for it, written as
+ * its `#number` once it exists, and its title. It is where the Retro's
+ * evidence and a row's Follow-ups read which issue a fault became.
+ */
+export function followUpOpenedLine(issue: CreatedIssue, title: string): readonly (string | CreatedIssue)[] {
+  return ["<!-- fabrik:follow-up-opened ", issue, ` ${markerJson({ title })} -->`];
+}
+
+/** The marker line that comment records one fault left a link on, over the cap. */
+export function followUpLeftLine(title: string): string {
+  return `<!-- fabrik:follow-up-left ${markerJson({ title })} -->`;
+}
+
+/**
+ * What a comment records of a merged pull request's faults, read only among
+ * the marker lines it opens with, which the Kit writes: null unless its
+ * first line is that comment's mark, so quoting the mark further down counts
+ * for nothing. Pass it only the Fabrik App's comments.
+ */
+export function followUpsOpenedIn(body: string): FollowUpsOpened | null {
+  if (body.split("\n")[0]?.replace(/\r$/, "") !== FOLLOW_UPS_OPENED_MARKER) return null;
+  const opened: { issue: number; title: string }[] = [];
+  const left: string[] = [];
+  for (const line of body.split("\n").map((each) => each.replace(/\r$/, ""))) {
+    if (!line.startsWith("<!-- fabrik:")) break;
+    const [, number, openedJson] = FOLLOW_UP_OPENED_MARKER.exec(line) ?? [];
+    const leftJson = FOLLOW_UP_LEFT_MARKER.exec(line)?.[1];
+    try {
+      const { title } = JSON.parse(openedJson ?? leftJson ?? "{}") as Record<string, unknown>;
+      if (typeof title !== "string") continue;
+      if (number !== undefined) opened.push({ issue: Number(number), title });
+      else if (leftJson !== undefined) left.push(title);
+    } catch {
+      // A line that doesn't read records nothing.
+    }
+  }
+  return { opened, left };
+}
+
 const GATE_RERUN_MARKER = /^<!-- fabrik:gate-rerun (\{.*?\}) -->/;
 const GATE_RERUN_DONE_MARKER = /^<!-- fabrik:gate-rerun-done (\{.*?\}) -->/;
 const GATE_RERUN_DONE: readonly GateRerunDone[] = ["outside", "red-on-main", "red-again", "refused", "no-run"];

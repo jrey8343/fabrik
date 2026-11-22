@@ -35,6 +35,8 @@ import {
   DECISIONS_SO_FAR_HEADING,
   DESIGN_TURN_FAILED_MARKER,
   flakyCheckIssueMarker,
+  followUpIssueOf,
+  followUpMarker,
   flakyCheckIssueOf,
   handBackMarker,
   withoutFlakyCheckIssueMarker,
@@ -1186,16 +1188,34 @@ function keptCheck(issue: Pick<IssueSnapshot, "byApp" | "body">): string | null 
 }
 
 /**
+ * The pull request a Follow-up issue the Kit opened names in its marker
+ * (#885), which a session's rewrite keeps: the issue counts toward
+ * `caps.follow_up_issues` for as long as it is open, whatever its body
+ * becomes. Read as the Kit's other first-line markers are, on an issue the
+ * Fabrik App opened only. Null for any other issue.
+ */
+function keptFollowUp(issue: Pick<IssueSnapshot, "byApp" | "body">): number | null {
+  return issue.byApp ? followUpIssueOf(issue.body) : null;
+}
+
+/**
  * The body a session's rewrite leaves: `rewritten`, opened by the kept
- * check's marker line (#839), which is read only as a body's first line, then
- * the kept Monitor marker's line (#148), and ended with the From audit and
- * escape lines of the issue's old body (src/loop/carriedLines.ts, #150), so
- * whatever reads those lines still finds them. A line the old body quotes as
- * code, as a Monitor issue quotes its Sentry error, is never carried.
+ * check's marker line (#839) or the kept Follow-up marker line (#885), each
+ * of which is read only as a body's first line and which no issue has both
+ * of, then the kept Monitor marker's line (#148), and ended with the From
+ * audit and escape lines of the issue's old body (src/loop/carriedLines.ts,
+ * #150), so whatever reads those lines still finds them. A line the old body
+ * quotes as code, as a Monitor issue quotes its Sentry error, is never
+ * carried.
  */
 function rewrittenBody(rewritten: string, issue: IssueSnapshot, marker: MonitorMarker | null = keptMarker(issue)): string {
   const check = keptCheck(issue);
-  const opening = [...(check === null ? [] : [flakyCheckIssueMarker(check)]), ...(marker === null ? [] : [monitorMarkerLine(marker)])];
+  const followUp = keptFollowUp(issue);
+  const opening = [
+    ...(check === null ? [] : [flakyCheckIssueMarker(check)]),
+    ...(followUp === null ? [] : [followUpMarker(followUp)]),
+    ...(marker === null ? [] : [monitorMarkerLine(marker)]),
+  ];
   return withCarriedLines([...opening, rewritten].join("\n"), issue.body);
 }
 

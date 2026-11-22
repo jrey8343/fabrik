@@ -493,7 +493,8 @@ What Setup and the Visual evidence writer write in `.fabrik/config.json` is prin
     "design_sessions": 2,
     "monitor_issues": 5,
     "maps": 1,
-    "merge_gate": 3
+    "merge_gate": 3,
+    "follow_up_issues": 5
   },
   "monitor": { "errors": null, "red_main": true, "main_checks": [] },
   "audit": { "day": "sunday" },

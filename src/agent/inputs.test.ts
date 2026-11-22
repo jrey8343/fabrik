@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { GitHubError } from "../github/client.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
-import { designRoundMarker, flakyCheckIssueMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, spinOffMarker } from "../loop/markers.ts";
+import { designRoundMarker, flakyCheckIssueMarker, followUpMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, spinOffMarker } from "../loop/markers.ts";
 import { roundLineIn, roundLineOf, withoutRoundLines } from "../loop/roundLine.ts";
 import { planFor } from "../loop/rules.ts";
 import { AGENT_FAILURE_FILE } from "./failure.ts";
@@ -142,6 +142,30 @@ describe("An agent job's inputs", () => {
     const read = await readIssue(graphqlReturning(other), repo, 7, "operator");
 
     expect(read.issue).not.toHaveProperty("spinOff");
+  });
+
+  it("marks a Follow-up the Kit opened, naming the pull request whose pass named the fault (#885)", async () => {
+    const page = issuePage([], null);
+    const body = `${followUpMarker(42)}\n\`badge.ts:14\` reads a stale count.\n\nFrom PR #42`;
+    const followUp = { repository: { issue: { ...page.repository.issue, parent: null, author: { login: "fabrik-app", __typename: "Bot" }, body } } };
+
+    const read = await readIssue(graphqlReturning(followUp), repo, 7, "operator");
+
+    expect(read.issue).toMatchObject({ number: 7, body, followUp: { pullRequest: 42 } });
+    expect(read.issue).not.toHaveProperty("spinOff");
+  });
+
+  it.each([
+    ["a person's issue quoting the Follow-up marker", { login: "someone", __typename: "User" }, `${followUpMarker(42)}\nMine.\n\nFrom PR #42`],
+    ["the Operator's issue opened from an Open as issue link", { login: "operator", __typename: "User" }, "An idea.\n\nFrom PR #42"],
+    ["the Fabrik App's issue that quotes the marker below its first line", { login: "fabrik-app", __typename: "Bot" }, `An error.\n${followUpMarker(42)}`],
+  ])("marks no Follow-up the Kit opened on %s", async (_, author, body) => {
+    const page = issuePage([], null);
+    const other = { repository: { issue: { ...page.repository.issue, parent: null, author, body } } };
+
+    const read = await readIssue(graphqlReturning(other), repo, 7, "operator");
+
+    expect(read.issue).not.toHaveProperty("followUp");
   });
 
   it("reads no other Tickets for an issue with no parent", async () => {

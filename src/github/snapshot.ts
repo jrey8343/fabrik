@@ -46,7 +46,8 @@ import {
   USAGE_CREDITS_LABEL,
   WEEKLY_LIMIT_LABEL,
 } from "../loop/labels.ts";
-import { checkFixMarksIn, escapeMarkerIn, flakyCheckIssueOf, flakyCheckMarksIn, gateRerunMarksIn, operatorMentionMarksIn } from "../loop/markers.ts";
+import { faultsNamedIn } from "../loop/followUps.ts";
+import { checkFixMarksIn, escapeMarkerIn, flakyCheckIssueOf, flakyCheckMarksIn, followUpIssueOf, followUpsOpenedIn, fromPullRequestIn, gateRerunMarksIn, operatorMentionMarksIn } from "../loop/markers.ts";
 import { retroWindowStart } from "../loop/retro.ts";
 import { weekStart } from "../loop/weeklyGate.ts";
 import { MAX_RETRIES } from "../loop/retry.ts";
@@ -78,6 +79,7 @@ import type {
   ResearchDecisionSnapshot,
   RetroSnapshot,
   RolesUnderWay,
+  FollowUpIssuesSnapshot,
   RollInsSnapshot,
   Snapshot,
   SpecSnapshot,
@@ -665,6 +667,12 @@ export async function gatherSnapshot(
     event.kind === "pull-request-closed" && part?.pullRequest?.isAgent === true
       ? await gatherRollIns(github, repo, event.pullRequest, theOperator, appLogin)
       : null;
+  // An agent pull request that merges has each fault its passes named opened as an issue, once and under the cap (#885).
+  const merging = event.kind === "pull-request-closed" && event.merged ? (part?.pullRequest ?? null) : null;
+  const followUpIssues =
+    merging !== null && merging.isAgent && merging.faults.length > 0 && !merging.followUpsOpened
+      ? await gatherFollowUpIssues(github, repo, merging, theOperator, appLogin)
+      : null;
   const retro = event.kind === "scheduled-tick" ? await gatherRetroSlice(github, repo, event.now, theOperator, appLogin, store) : null;
   const replay =
     event.kind === "scheduled-tick" && replayStore !== null
@@ -685,8 +693,8 @@ export async function gatherSnapshot(
   // A Request-changes run's Spin-offs name the Operator's asks, which the push job reads itself (#884).
   const requestChangesAsks = await gatherRequestChangesAsks(github, repo, event, theOperator);
   return part === null
-    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, requestChangesAsks, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps }
-    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, requestChangesAsks, rollIns, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps };
+    ? { issue: null, pullRequest: null, dispatch: null, designQueue: null, spec, operator: theOperator, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, requestChangesAsks, rollIns, followUpIssues, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps }
+    : { ...part, spec, kitIssues, startingComment, reviewHasInlineComments, audit, retro, weeklyIssues, replay, namedPullRequests, requestChangesAsks, rollIns, followUpIssues, held, closedKitIssue, closedCarriers, weekCarriers, openMaps, conflicts, mergeable, triggers, readyTickets, flakyCheckIssues, flakySweep, passedHeads, closedCheckIssues, fableCaps };
 }
 
 /**
@@ -1321,6 +1329,105 @@ async function gatherRollIns(github: ReadClient, repo: Repo, pullRequest: number
         },
       ];
     }),
+  };
+}
+
+// Every open issue, with its body and who opened it: an issue the Kit opened for a Follow-up carries no label, only its marker.
+const OPEN_ISSUES_WITH_BODIES_QUERY = `
+  query ($owner: String!, $name: String!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      issues(states: OPEN, first: 50, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { number title body author { login __typename } }
+      }
+    }
+  }
+`;
+
+// What a pull request is cross-referenced from, each issue with its title, its body and who opened it, open or closed.
+const FOLLOW_UP_CROSS_REFERENCES_QUERY = `
+  query ($owner: String!, $name: String!, $number: Int!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        crossReferences: timelineItems(first: 100, after: $after, itemTypes: [CROSS_REFERENCED_EVENT]) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            __typename
+            ... on CrossReferencedEvent { source { __typename ... on Issue { number title body author { login __typename } repository { nameWithOwner } } } }
+          }
+        }
+      }
+    }
+  }
+`;
+
+/** An issue as the two queries above read it. */
+interface RawFollowUpIssue {
+  number: number;
+  title: string;
+  body: string;
+  author: { login: string; __typename: string } | null;
+}
+
+/** A cross-reference as FOLLOW_UP_CROSS_REFERENCES_QUERY reads it: an issue's source, or a pull request's, of which only the kind is read. */
+interface RawFollowUpCrossReference {
+  __typename: string;
+  source?: { __typename: string; repository?: { nameWithOwner: string } } & Partial<RawFollowUpIssue>;
+}
+
+/**
+ * For an agent pull request merging whose passes named a fault (#885): what
+ * tells which faults to open as issues (src/loop/followUpIssues.ts). Every
+ * open issue of the repo is read, with its body and who opened it: those the
+ * Fabrik App opened (see byAppOf) whose first line is the Follow-up marker
+ * are what `caps.follow_up_issues` counts, whichever pull request each
+ * names. The issues that already hold a Follow-up of this pull request are
+ * read among them, and among the issues GitHub cross-references to the pull
+ * request, which finds a closed one: both the Operator's issue from an Open
+ * as issue link and the Kit's own end with a `From PR` line, which is what
+ * GitHub cross-references. The open ones are read as well as the
+ * cross-references because GitHub writes a cross-reference a moment after
+ * the issue, and a plan applied in part is looked at again at once.
+ */
+async function gatherFollowUpIssues(
+  github: Pick<ReadClient, "graphql">,
+  repo: Repo,
+  pullRequest: PullRequestSnapshot,
+  operator: string,
+  appLogin: string | null,
+): Promise<FollowUpIssuesSnapshot> {
+  const here = `${repo.owner}/${repo.name}`;
+  const [open, references] = await Promise.all([
+    pagesOf<RawFollowUpIssue>(github, OPEN_ISSUES_WITH_BODIES_QUERY, repo, {}, (data) => data.repository.issues),
+    pagesOf<RawFollowUpCrossReference>(
+      github,
+      FOLLOW_UP_CROSS_REFERENCES_QUERY,
+      repo,
+      { number: pullRequest.number },
+      (data) => data.repository.pullRequest?.crossReferences ?? null,
+    ),
+  ]);
+  const referenced = references.flatMap(({ source }) =>
+    source?.__typename === "Issue" &&
+    source.number !== undefined &&
+    source.title !== undefined &&
+    source.body !== undefined &&
+    // GitHub tells repos apart whatever the case of their names.
+    source.repository?.nameWithOwner.toLowerCase() === here.toLowerCase()
+      ? [{ number: source.number, title: source.title, body: source.body, author: source.author ?? null }]
+      : [],
+  );
+  const byKit = ({ author, body }: RawFollowUpIssue) => (byAppOf(author, appLogin) ? followUpIssueOf(body) : null);
+  const holding = new Map<number, FollowUpIssuesSnapshot["ofPullRequest"][number]>();
+  for (const issue of [...open, ...referenced]) {
+    const openedBy = byKit(issue) === pullRequest.number ? "kit" : loginOf(issue.author) === operator && fromPullRequestIn(issue.body) === pullRequest.number ? "operator" : null;
+    if (openedBy !== null) holding.set(issue.number, { number: issue.number, title: issue.title, openedBy });
+  }
+  return {
+    // The pull request's own address, less `/pull/<number>`.
+    repoUrl: pullRequest.url.replace(/\/pull\/[0-9]+$/, ""),
+    open: open.filter((issue) => byKit(issue) !== null).length,
+    ofPullRequest: [...holding.values()].sort((a, b) => a.number - b.number),
   };
 }
 
@@ -2287,6 +2394,9 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     digests: fromBots
       .filter((comment) => digestMarkIn(comment.body) !== null)
       .map(({ id, isMinimized, body, createdAt }) => ({ node: id, minimized: isMinimized, body, postedAt: createdAt })),
+    // Only a bot's pass names a fault, and only a bot's comment says its faults were seen to, as for a Verdict (#885).
+    faults: faultsNamedIn(botComments),
+    followUpsOpened: botComments.some((body) => followUpsOpenedIn(body) !== null),
   };
 }
 

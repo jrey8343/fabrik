@@ -1085,6 +1085,19 @@ export interface PullRequestSnapshot {
    */
   readonly digests: readonly DigestOnThread[];
   /**
+   * Each fault its passes named (#885), oldest pass first, in the order each
+   * named them, one named twice held twice, read from the Fabrik App's
+   * Verdict comments (faultsNamedIn, src/loop/followUps.ts): what the Kit
+   * opens as issues when it merges (src/loop/followUpIssues.ts).
+   */
+  readonly faults: readonly { readonly title: string; readonly body: string }[];
+  /**
+   * Whether the Kit has posted its comment saying what became of those
+   * faults, which it posts once the pull request has merged: with it, a
+   * second look at the same merge opens nothing more.
+   */
+  readonly followUpsOpened: boolean;
+  /**
    * The Kit's list of asks on it now, by id, oldest first: each Request
    * changes of the Operator's a Review is given and each line comment in it,
    * as a Digest's first line records the ones it answered
@@ -1635,6 +1648,14 @@ export interface Snapshot {
    */
   readonly requestChangesAsks?: readonly RequestChangesAsks[] | null;
   /**
+   * Gathered for an agent pull request merging whose passes named a fault
+   * and whose faults the Kit has not seen to yet (#885): what tells which of
+   * them to open as issues (src/loop/followUpIssues.ts). Null for any other
+   * event, a pull request closed unmerged, a Plain one, one whose passes
+   * named no fault, and one already seen to.
+   */
+  readonly followUpIssues?: FollowUpIssuesSnapshot | null;
+  /**
    * Gathered for an agent pull request closing, merged or not, only: what
    * tells which Roll-ins were left unsent on it, so their issues are
    * reopened for Triage (src/loop/rollInReopening.ts, #663). Null for any other
@@ -1725,6 +1746,30 @@ export interface RollInsSnapshot {
    * Roll-in's mark in its closing comment is what counts.
    */
   readonly issues: readonly RollInIssue[];
+}
+
+/**
+ * What the merge of an agent pull request reads of the repo's issues to open
+ * its faults as issues (src/loop/followUpIssues.ts, #885), `pullRequest` in
+ * the same snapshot.
+ */
+export interface FollowUpIssuesSnapshot {
+  /** The Product repo's web address, whose new-issue form a fault left over the cap links. */
+  readonly repoUrl: string;
+  /**
+   * How many open issues in the repo the Fabrik App wrote that carry the
+   * Follow-up marker (followUpIssueOf), whichever pull request each names:
+   * what `caps.follow_up_issues` counts.
+   */
+  readonly open: number;
+  /**
+   * The issues that already hold a Follow-up of this pull request, open or
+   * closed, lowest number first: each the Operator opened whose `From PR`
+   * line names it, as its Open as issue link writes, and each the Fabrik
+   * App opened whose Follow-up marker names it. A fault with the title of
+   * one is not opened again.
+   */
+  readonly ofPullRequest: readonly { readonly number: number; readonly title: string; readonly openedBy: "operator" | "kit" }[];
 }
 
 /** What the stuck-trigger sweep weighs (src/loop/triggerSweep.ts, #419). */

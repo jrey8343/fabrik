@@ -7,6 +7,7 @@ import { fableCapsInForce, onFableLeft } from "./fableCap.ts";
 import { failureNotice } from "./failures.ts";
 import { bringInCheckFix, type CheckFixes, checkConflicts } from "./conflicts.ts";
 import { flakyCheckGate } from "./flakyChecks.ts";
+import { openFaults } from "./followUpIssues.ts";
 import { gateRerunGate, rerunChecksOnLabel } from "./gateRerun.ts";
 import { operatorMentionGate } from "./operatorMention.ts";
 import { applyImplementation, applyRetryImplementation, startImplementer } from "./implement.ts";
@@ -195,11 +196,17 @@ function planOnAnySubscription(event: LoopEvent, snapshot: Snapshot, config: Kit
       return withAgentPullRequest(snapshot, () => ({ kind: "act", actions: [CHECK_DISPATCH] }));
     // One closed unmerged by hand stops its Ticket first, so the Dispatch check
     // doesn't start it again (#428). Merged or closed, whoever closed it, each
-    // Roll-in left unsent on it has its issue reopened for Triage (#663).
+    // Roll-in left unsent on it has its issue reopened for Triage (#663). One
+    // that merged has each fault its passes named opened as an issue (#885).
     case "pull-request-closed":
       return withAgentPullRequest(snapshot, (pullRequest) => ({
         kind: "act",
-        actions: [...stopTicketOf(event, pullRequest, snapshot.operator), ...reopenUnsentRollIns(event, pullRequest, snapshot.rollIns), CHECK_DISPATCH],
+        actions: [
+          ...stopTicketOf(event, pullRequest, snapshot.operator),
+          ...reopenUnsentRollIns(event, pullRequest, snapshot.rollIns),
+          ...openFaults(event, pullRequest, snapshot.followUpIssues, config),
+          CHECK_DISPATCH,
+        ],
       }));
     case "dispatch-check":
       return snapshot.dispatch === null

@@ -286,6 +286,8 @@ function opening(ticket: number, issue: IssueSnapshot, headSha: string): PullReq
     shotsMarker: null,
     changedTests: [],
     digests: [],
+    faults: [],
+    followUpsOpened: false,
   };
 }
 

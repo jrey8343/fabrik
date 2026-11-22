@@ -36,7 +36,7 @@ const DEFAULTS = {
   },
   allowFable: false,
   maxInFlight: 2,
-  caps: { designSessions: 2, monitorIssues: 5, maps: 1, mergeGate: 3 },
+  caps: { designSessions: 2, monitorIssues: 5, maps: 1, mergeGate: 3, followUpIssues: 5 },
   monitor: { errors: null, redMain: true, mainChecks: [] },
   audit: { day: "sunday" },
   retro: { day: "saturday" },
@@ -353,7 +353,7 @@ describe("Kit config", () => {
         step_up: { model: "claude-opus-5-5", effort: "medium" },
       },
       max_in_flight: 2,
-      caps: { design_sessions: 2, monitor_issues: 5, maps: 1, merge_gate: 3 },
+      caps: { design_sessions: 2, monitor_issues: 5, maps: 1, merge_gate: 3, follow_up_issues: 5 },
       monitor: { errors: null, red_main: true, main_checks: [] },
       audit: { day: "sunday" },
       retro: { day: "saturday" },
@@ -478,7 +478,7 @@ describe("Kit config", () => {
   it("gives a Product repo whose config never sets caps the Kit defaults: 2 Design sessions, 5 open Monitor error issues and 1 open Map", () => {
     const result = resolveKitConfig({ config: `{ "max_in_flight": 1, "operator": "jrey8343" }` });
 
-    expect(result.ok && result.config.caps).toEqual({ designSessions: 2, monitorIssues: 5, maps: 1, mergeGate: 3 });
+    expect(result.ok && result.config.caps).toEqual({ designSessions: 2, monitorIssues: 5, maps: 1, mergeGate: 3, followUpIssues: 5 });
   });
 
   it.each([1, 0])("honours lowering caps.design_sessions to %i", (cap) => {
@@ -536,6 +536,21 @@ describe("Kit config", () => {
     const result = resolveKitConfig({ config: `{ "caps": { "merge_gate": ${JSON.stringify(cap)} } }` });
 
     expect(result).toEqual({ ok: false, errors: ["caps.merge_gate must be a whole number of at least 0"] });
+  });
+
+  it.each([2, 0])("honours lowering caps.follow_up_issues to %i, 0 leaving every fault a link (#885)", (cap) => {
+    const result = resolveKitConfig({ config: `{ "caps": { "follow_up_issues": ${cap} } }` });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, caps: { ...DEFAULTS.caps, followUpIssues: cap } } });
+  });
+
+  it.each([6, 20])("refuses raising caps.follow_up_issues to %i, naming the field, the value and the Kit default", (cap) => {
+    const result = resolveKitConfig({ config: `{ "caps": { "follow_up_issues": ${cap} } }` });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [`caps.follow_up_issues is ${cap}, but a cap can only be lowered: the Kit default is 5`],
+    });
   });
 
   it("honours lowering caps.maps to 0, which stops new Maps", () => {
