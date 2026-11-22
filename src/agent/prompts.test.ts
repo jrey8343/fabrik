@@ -27,10 +27,11 @@ import {
   REQUIRED_CHECKS_HEADING,
   SPEC_TICKETS_HEADING,
 } from "./design.ts";
-import { OPERATOR_COMMENTS_HEADING, REQUESTED_CHANGES_HEADING } from "./operatorComments.ts";
+import { OPERATOR_COMMENTS_HEADING, REQUESTED_CHANGES_HEADING, SPIN_OFFS_HEADING } from "./operatorComments.ts";
 import { PROTOTYPE_SECTIONS } from "./prototype.ts";
 import { RESEARCH_ISSUE_HEADING, RESEARCH_SECTIONS } from "./research.ts";
 import { RETRO_ISSUE_HEADING, RETRO_SECTIONS } from "./retro.ts";
+import { reviewPromptFor } from "./review.ts";
 
 const prompt = (role: string) => readFile(join(import.meta.dirname, "..", "..", "prompts", `${role}.md`), "utf8");
 
@@ -1499,6 +1500,128 @@ describe("A Request-changes run's answers in the Implement prompt (#369)", () =>
     expect(judging).toContain("adds to, changes or removes what the Ticket asked for");
     expect(judging).toContain("only for the review this run was started for");
     expect(judging).toContain("only for a rebase, a squash or a retitle answers no to both");
+  });
+});
+
+// A Request changes can ask for a Spin-off (#884): only the Operator's words set a point aside, and no agent judges for them.
+describe("A Request changes' Spin-offs in the Implement prompt (#884)", () => {
+  const run = async () => section(await prompt("implement"), "When the Operator requested changes");
+  const spinOff = async () => part(await run(), "A point the Operator asked to be its own issue");
+  const rule = async (lead: string) => lineStarting(await spinOff(), `- **${lead}**`);
+
+  it("still has the run build every requested change however large, but for a point asked for as a Spin-off", async () => {
+    expect((await run()).split("\n")[1]).toContain(
+      'make those changes, on top of the earlier commits, however large they are. The one exception is a point the Operator asks, in words, to be an issue of its own: "A point the Operator asked to be its own issue" below says what to do with it.',
+    );
+  });
+
+  it("says what asks for one: the Operator's words, in the review or a comment on the code in it, whichever words they are", async () => {
+    const what = await rule("What asks for one.");
+    expect(what).toContain("A point, in the review's own words or in one of its comments on the code, where the Operator says in words that the work is to be its own issue.");
+    for (const words of ['"open this separately"', '"as its own issue"', '"in a different ticket"']) expect(what).toContain(words);
+  });
+
+  it("has the run leave that point unbuilt, return it in spinOffs, and build every other point", async () => {
+    expect(await rule("What to do.")).toContain("Leave that point unbuilt, return it in `spinOffs`, and build every other point as this section says.");
+  });
+
+  it("never has the run set a point aside on its own judgement: one without such words is built, however large or unrelated", async () => {
+    const never = await rule("Never on your own judgement.");
+    expect(never).toContain("A point without such words is built, however large it is and however unrelated it looks.");
+    expect(never).toContain("You recognise the Operator's instruction and never judge for them what belongs apart.");
+    expect(never).toContain("When you can't tell whether the words ask for it, build the point");
+  });
+
+  it("takes one from a Request changes only: an Operator comment asks for none, as it asks for no work", async () => {
+    expect(await rule("Only a Request changes.")).toContain(`A comment under "${OPERATOR_COMMENTS_HEADING}" asks for no Spin-off, as it asks for no work.`);
+  });
+
+  it("has each Spin-off stand alone, quote the Operator's words, and name in from the id that heads what asked for it", async () => {
+    const each = await rule("What each one holds.");
+    expect(each).toContain("a `body` that stands alone and quotes the Operator's words exactly");
+    expect(each).toContain("`from`, the id that heads the review's own words or the comment on the code the point is in, such as `review-5` or `inline-9`, exactly as its heading gives it");
+    expect(each).toContain("The Kit refuses an id it didn't give you.");
+  });
+
+  it("has a review of only Spin-offs commit nothing, return them and say so in fix", async () => {
+    const only = await rule("A review of only Spin-offs.");
+    expect(only).toContain("commit nothing, return them all, and say so in your `fix`");
+    expect(only).toContain("returns the pull request to the Merge gate as it was, with no Review");
+  });
+
+  it("gives the run the Spin-offs already opened from earlier Request changes, to build none of and return none of again", async () => {
+    const earlier = await rule("Earlier Spin-offs.");
+    expect(earlier).toContain(`"${SPIN_OFFS_HEADING}"`);
+    expect(earlier).toContain("Build none of them, and return none of them again.");
+  });
+
+  it("says a point set aside neither amends the Ticket nor is a Review miss, where the two answers are judged and in the part itself", async () => {
+    expect(await rule("Your two answers.")).toContain("A point set aside neither amends the Ticket nor is a Review miss");
+    expect(lineStarting(await run(), "- One review can be both")).toContain("A point set aside as a Spin-off is neither.");
+  });
+
+  it("no longer calls every run that commits nothing a failed attempt: a review of only Spin-offs commits nothing", async () => {
+    const guard = section(await prompt("implement"), "What you must not change");
+    expect(guard).toContain("A run that commits nothing counts as a failed attempt, so commit what you built, unless this prompt tells the run to commit nothing: a body-only Touch-up, and a Request-changes run whose review asked only for Spin-offs.");
+  });
+
+  it("documents spinOffs in the output rules, and its example carries one the Request-changes contract reads", async () => {
+    const text = await prompt("implement");
+    const field = lineStarting(section(text, "Your output"), "- `spinOffs`");
+    expect(field).toContain("only on a Request-changes run");
+    expect(field).toContain("each with a `title` of one line, a `body` and a `from`");
+    expect(field).toContain("Leave it out when no point asks for one, and on every other run, where the Kit never reads it.");
+    const example: unknown = JSON.parse(/<implement>\n([\s\S]*?)\n<\/implement>/.exec(text)?.[1] ?? "null");
+    expect(readRequestChangesRunOutput(example, ["inline-9"])).toMatchObject({ ok: true, output: { spinOffs: [{ from: "inline-9", title: expect.any(String), body: expect.stringContaining('"') }] } });
+  });
+});
+
+describe("The points set aside as Spin-offs in the Review prompt (#884)", () => {
+  const setAside = async () => part(section(await prompt("review"), "The Operator's Request changes"), SPIN_OFFS_HEADING);
+  const rule = async (lead: string) => lineStarting(await setAside(), `- **${lead}**`);
+
+  it("names the section they arrive under: each one's issue, and the Operator's words it came from", async () => {
+    const opening = (await setAside()).split("\n- ")[0] ?? "";
+    expect(opening).toContain(`"${SPIN_OFFS_HEADING}"`);
+    expect(opening).toContain("the issue the Kit opened for it and the Operator's words it came from");
+  });
+
+  it("holds a point properly set aside to be no part of the Ticket as amended, and never a finding for being unbuilt", async () => {
+    const proper = await rule("No part of the Ticket as amended.");
+    expect(proper).toContain("A point properly set aside is no part of the Ticket as amended");
+    expect(proper).toContain("never a finding for being unbuilt");
+  });
+
+  it("holds a point set aside that the Operator's words did not ask to separate to be an unbuilt requested change, an Execution flaw", async () => {
+    const improper = await rule("Only the Operator's words set a point aside.");
+    expect(improper).toContain("Where the words do not ask for the work to be its own issue, the requested change is unbuilt: an `execution-flaw`");
+    expect(improper).toContain("No agent decides for the Operator that a requested change is unrelated.");
+  });
+
+  it("still judges the rest of an ask that holds both a point to build and a point set aside", async () => {
+    expect(await rule("One review can hold both.")).toContain("Everything else it asks still amends the Ticket and is judged as built.");
+  });
+
+  it("reaches a Full Review and a later Review alike, with the Request changes section it sits in", async () => {
+    const template = await prompt("review");
+    for (const text of [reviewPromptFor(template, null), reviewPromptFor(template, { pushedBy: "request-changes-run" })]) expect(text).toContain(`### ${SPIN_OFFS_HEADING}`);
+  });
+});
+
+describe("A Request changes' Spin-off in the Triage prompt (#884)", () => {
+  const spinOff = async () => part(await prompt("triage"), "A Spin-off");
+
+  it("names both of a Spin-off's sources: a Design session's answers, and a point of a Request changes", async () => {
+    const opening = (await spinOff()).split("\n- ")[0] ?? "";
+    expect(opening).toContain("in a Design session, an answer of the Operator's put a piece of work outside what that session finished with");
+    expect(opening).toContain("or, in a Request changes on a pull request, the Operator asked for a point to be an issue of its own");
+    expect(opening).toContain("the issue whose Design session it came from, or the pull request and the review that asked for it");
+  });
+
+  it("says one from a Request changes waits on its pull request's Ticket, which Dispatch holds it for and Triage does not", async () => {
+    expect(lineStarting(await spinOff(), "- **One from a Request changes waits on its pull request's Ticket.**")).toContain(
+      "Sort it now all the same: Dispatch holds it until that Ticket closes as completed.",
+    );
   });
 });
 

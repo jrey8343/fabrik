@@ -456,6 +456,40 @@ describe("The README's account of a Design-session turn", () => {
   });
 });
 
+// A Spin-off of a Request changes carries the `From PR` line of the pull request the Operator asked to keep it apart
+// from (#884), so a Design session on it is never offered that pull request to roll the work back in to.
+describe("The pull request a Request changes' Spin-off was set aside from (#884)", () => {
+  const body = '<!-- fabrik:spin-off {"from":"request-changes","pullRequest":84,"review":900} -->\nExport the waitlist as CSV.\n\nFrom PR #84';
+
+  it("is read as set aside from, when the Spin-off's marker names the pull request its From PR line names", async () => {
+    const read = await readFiledFrom(gitHub({ 84: restPullRequest }), repo, body, { from: "request-changes", pullRequest: 84, review: 900 });
+
+    expect(read).toEqual({ ...atTheMergeGate, setAside: true });
+  });
+
+  it.each([
+    ["an issue that is no Spin-off", null],
+    ["a Design session's Spin-off", { from: "design", issue: 41 } as const],
+    ["a Spin-off set aside from another pull request", { from: "request-changes", pullRequest: 85, review: 900 } as const],
+  ])("is read as any pull request an issue was filed from, for %s", async (_which, spinOff) => {
+    expect(await readFiledFrom(gitHub({ 84: restPullRequest }), repo, body, spinOff)).toEqual(atTheMergeGate);
+  });
+
+  it("is told to the Design session with a Roll-in not on offer, and why, though its branch can still be read", () => {
+    const parts = filedFromContext({ ...atTheMergeGate, setAside: true });
+
+    expect(parts[1]).toBe(
+      "#84: Add a waitlist, from `fabrik/ticket-7` into `main`. It is an open agent pull request, and this issue is a Spin-off: work the Operator asked, in a Request changes on that pull request, to be an issue of its own. So a Roll-in is not on offer.",
+    );
+    expect(parts.join("\n\n")).not.toContain("may be settled");
+    expect(parts.slice(2, 4)).toEqual(WHERE_ITS_BRANCH_IS);
+  });
+
+  it("gives way to where the pull request stands once it has merged or closed", () => {
+    expect(filedFromContext({ ...atTheMergeGate, setAside: true, state: "merged" })[1]).toContain("It has merged, so its work is on the default branch and a Roll-in is not on offer.");
+  });
+});
+
 describe("A prototype turn's prompt, on an issue with a From PR line", () => {
   const REQUEST = JSON.stringify({ route: "/book", variants: 3, brief: "A: a calendar first.\nB: a list of open times.\nC: one big button.", reply: 4321 });
   const config = kitConfig({ ui: UI });

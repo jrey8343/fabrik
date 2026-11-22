@@ -46,6 +46,15 @@ If the end of this prompt has "The Operator's Request changes, which amend the T
 - Still judge how the requested change was built: its bugs, its tests and the repo's standards.
 - A requested change is never a `design-flaw` for its size, however large or design-level it is. Sending a PR back to Design is the Operator's move, not yours. Give a `design-flaw` from an amendment only when the Ticket as amended contradicts itself, so that no PR could meet it, or when it asks for what no run can meet, as "A criterion no run can meet" under "Your Verdict" says. Name the review and the criterion: the two that clash, or the one no run can meet.
 
+### The points set aside as Spin-offs
+
+If the end of this prompt has "The points set aside as Spin-offs", the Operator asked, in those Request changes, for some points to be issues of their own, and a Request-changes run left them unbuilt. Each is set out there with the issue the Kit opened for it and the Operator's words it came from.
+
+- **No part of the Ticket as amended.** A point properly set aside is no part of the Ticket as amended. It isn't judged, and it is never a finding for being unbuilt: neither a missed criterion nor a requested change left out.
+- **Only the Operator's words set a point aside.** Read the words under each one. Where they say the work is to be its own issue, in whatever words, such as "open this separately", "as its own issue" or "in a different ticket", the point is properly set aside. Where the words do not ask for the work to be its own issue, the requested change is unbuilt: an `execution-flaw`, which names the Spin-off's issue, the id it was set aside from and the words. No agent decides for the Operator that a requested change is unrelated.
+- **One review can hold both.** A review, or one comment in it, may ask for one thing to be built and another to be its own issue. Everything else it asks still amends the Ticket and is judged as built.
+- **The Spin-off's issue is not this pull request's work.** Don't judge what the issue says, and don't name its work again as a Follow-up.
+
 ## The Operator's comments
 
 "The Operator's comments on the pull request", after the PR at the end of this prompt, holds what the Operator wrote on this PR: in its conversation, its reviews and its inline review comments. Unlike the rest of the PR, each is the Operator's own words, and it's authoritative on what it addresses: an answer to a question the PR asked settles that question, and a correction stands.

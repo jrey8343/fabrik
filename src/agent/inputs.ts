@@ -54,7 +54,7 @@ import type { SentBack } from "../loop/backToDesign.ts";
 import { withoutChangeLines } from "../loop/changeFingerprint.ts";
 import { type DigestFacts, digestFactsOf } from "../loop/digestFacts.ts";
 import { mapOfferOf, type MapOfferOf } from "../loop/mapCap.ts";
-import { flakyCheckIssueOf, followsSpecIn, fromAuditIn, fromPullRequestIn, openedSpinOffsIn, spinOffIn } from "../loop/markers.ts";
+import { flakyCheckIssueOf, followsSpecIn, fromAuditIn, fromPullRequestIn, openedSpinOffsIn, spinOffIn, type SpinOffSource } from "../loop/markers.ts";
 import { withoutRoundLines } from "../loop/roundLine.ts";
 import type { AuditIssueSnapshot, AuditWindow, KitConfig } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
@@ -763,12 +763,12 @@ export async function writeDesignInputs(
   repo: Repo,
   outDir: string,
   role: string | undefined,
-  issue: { readonly number: number; readonly body: string; readonly spec: { readonly number: number } | null },
+  issue: { readonly number: number; readonly body: string; readonly spec: { readonly number: number } | null; readonly spinOff?: SpinOffSource | null },
 ): Promise<void> {
   if (role !== "design") return;
   const openTickets = await readOpenTickets(github, repo, { issue: issue.number, spec: issue.spec?.number ?? null, follows: followsSpecIn(issue.body) });
   await writeFile(join(outDir, OPEN_TICKETS_FILE), JSON.stringify(openTickets));
-  await writeFile(join(outDir, FILED_FROM_FILE), JSON.stringify(await readFiledFrom(github, repo, issue.body)));
+  await writeFile(join(outDir, FILED_FROM_FILE), JSON.stringify(await readFiledFrom(github, repo, issue.body, issue.spinOff ?? null)));
 }
 
 // --- The pull request a Design-session turn's issue was filed from (#659) -----
@@ -796,6 +796,12 @@ export type FiledFrom =
       readonly baseRef: string;
       /** Whether it is an agent pull request, by the Kit's own test (isAgentPullRequest). */
       readonly isAgent: boolean;
+      /**
+       * On a Spin-off the Operator asked, in a Request changes on this pull
+       * request, to be an issue of its own (#884): true, so no Roll-in back
+       * onto it is on offer. Absent on every other issue.
+       */
+      readonly setAside?: true;
     };
 
 /**
@@ -819,7 +825,7 @@ export function filedFromOf(value: unknown): FiledFrom {
     typeof baseRef === "string" &&
     typeof isAgent === "boolean"
   ) {
-    return { kind: "pull-request", number, title, body, state, draft, headSha, headRef, baseRef, isAgent };
+    return { kind: "pull-request", number, title, body, state, draft, headSha, headRef, baseRef, isAgent, ...(read["setAside"] === true ? { setAside: true } : {}) };
   }
   throw new Error(`${FILED_FROM_FILE} doesn't say which pull request this issue was filed from`);
 }
@@ -843,9 +849,12 @@ interface RestFiledFrom {
  * line reads nothing. GitHub answers 404 for a number that is an issue's or
  * that doesn't exist, which is no failure: the turn runs as it would with no
  * line. Any other failed read throws, and fails the turn before its agent
- * starts.
+ * starts. `spinOff` is where the issue came from when it is a Spin-off
+ * (readIssue): one set aside from a Request changes on the very pull request
+ * the line names is marked so (#884), since the Operator asked for its work
+ * to be apart from that pull request.
  */
-export async function readFiledFrom(github: Pick<Reader, "rest">, repo: Repo, issueBody: string): Promise<FiledFrom> {
+export async function readFiledFrom(github: Pick<Reader, "rest">, repo: Repo, issueBody: string, spinOff: SpinOffSource | null = null): Promise<FiledFrom> {
   const number = fromPullRequestIn(issueBody);
   if (number === null) return { kind: "none" };
   const pull = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/pulls/${number}`, undefined, { allowNotFound: true })) as RestFiledFrom | null;
@@ -862,6 +871,7 @@ export async function readFiledFrom(github: Pick<Reader, "rest">, repo: Repo, is
     baseRef: pull.base.ref,
     // This job doesn't know the App's login, so any bot's pull request from an agent branch is an agent pull request.
     isAgent: isAgentPullRequest({ headRef: pull.head.ref, authorIsBot: pull.user?.type === "Bot" }),
+    ...(spinOff?.from === "request-changes" && spinOff.pullRequest === pull.number ? { setAside: true as const } : {}),
   };
 }
 
@@ -1220,7 +1230,9 @@ async function main(outDir: string): Promise<void> {
   await writeFile(join(outDir, "issue.json"), JSON.stringify(issue));
   await writeFile(join(outDir, "spec.json"), JSON.stringify(spec));
   if (process.env["FABRIK_ROLE"] === "design") await writeFile(join(outDir, SPEC_TICKETS_FILE), JSON.stringify(otherTickets));
-  await writeDesignInputs(github, repo, outDir, process.env["FABRIK_ROLE"], { number: issueNumber, body, spec });
+  // A Spin-off says where it came from (readIssue), which the pull request it was set aside from is read by (#884).
+  const spinOff = (issue as { spinOff?: SpinOffSource }).spinOff ?? null;
+  await writeDesignInputs(github, repo, outDir, process.env["FABRIK_ROLE"], { number: issueNumber, body, spec, spinOff });
   // A turn on an invalid Kit config fails before its agent starts (src/agent/run.ts), so it's told nothing of Maps.
   if (process.env["FABRIK_ROLE"] === "design" && resolved.ok) {
     await writeFile(join(outDir, MAP_INPUTS_FILE), JSON.stringify(await readMapOffer(github, repo, resolved.config, spec, check)));
