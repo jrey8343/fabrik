@@ -402,7 +402,7 @@ The Kit pushes to the Operator's phone only when it is their move, and once a we
 | Digest, no-Digest line | Silent | Both mention nobody. The review request that follows, when the Merge gate opens, is the notification. |
 | A Kit run fails | Push | The failure notice @-mentions the Operator. |
 | The push job or claim job fails | Push | One comment on the run's issue or PR @-mentions the Operator, saying what the Kit was landing, what failed and how to recover. |
-| `needs-info` | Push | Triage's comment @-mentions the issue's author, or the Operator when the Monitor filed it. A Monitor issue in `needs-info`, or one the Operator filed, stays in the Weekly summary's Waiting on you until someone answers. |
+| `needs-info` | Push | Triage's comment @-mentions the issue's author, or the Operator when the Fabrik App opened it, saying whether it is the Monitor's, a Spin-off or a Follow-up issue. A Monitor issue in `needs-info`, or one the Operator filed, stays in the Weekly summary's Waiting on you until someone answers. |
 | `ready-for-human` | Push | Assigns the Operator. |
 | Claude token expired or revoked | Push, once per repo, or once per Subscription with rotation on | The rotation issue assigns the Operator. With rotation on, each Subscription gets its own, naming it: the refused run is re-run on the next free Subscription with no Ticket comment, and the Kit runs nothing on the dead one until the Operator closes its issue. With no Subscription free, runs due are held, not started, until one is. |
 | Sentry token rejected or missing | Push, once per dead token | The Monitor's "Rotate the Sentry token" issue assigns the Operator, once the Monitor has filed an issue for a Sentry group; it closes the issue itself once Sentry reads again. |

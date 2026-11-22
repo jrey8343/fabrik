@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { aReplayIssue, replaySlice } from "../__fixtures__/replay.ts";
 import { aDesignQueueIssue, anIssue, aPullRequest, designQueueSnapshotOf, kitConfig, snapshotOf, snapshotOfPullRequest, tickSnapshot, withoutNotes } from "../__fixtures__/snapshots.ts";
+import { followUpMarker, spinOffMarker } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { LoopEvent } from "./types.ts";
 
@@ -483,6 +484,30 @@ describe("Applying Triage output", () => {
         { kind: "add-labels", issue: 7, labels: ["bug", "needs-info"] },
       ],
     });
+  });
+
+  it.each([
+    ["a Design session's Spin-off", spinOffMarker({ from: "design", issue: 41 }), "The Kit opened this issue as a Spin-off of the Design session on #41, so its question is yours."],
+    [
+      "a Request changes' Spin-off",
+      spinOffMarker({ from: "request-changes", pullRequest: 50, review: 900, ask: "inline-9" }),
+      "The Kit opened this issue as a Spin-off of your Request changes on #50, so its question is yours.",
+    ],
+    ["a Follow-up the Kit opened", followUpMarker(42), "The Kit opened this issue for a fault the Reviewer named on #42, so its question is yours."],
+  ])("asks the Operator on a needs-info issue that is %s, saying what the issue is from its marker: it is not the Monitor's (#882)", (_, marker, opening) => {
+    const issue = anIssue({ number: 7, author: "fabrik-app[bot]", byApp: true, labels: ["needs-triage"], body: `${marker}\nThe waitlist needs an export.` });
+
+    const plan = planFor(triaged({ category: "enhancement", state: "needs-info", comment: "Which format?" }), snapshotOf(issue, { operator: "jrey8343" }), kitConfig());
+
+    expect(plan.kind === "act" ? plan.actions[0] : null).toEqual({ kind: "comment", issue: 7, body: `@jrey8343 ${opening}\n\nWhich format?` });
+  });
+
+  it("takes a marker for nothing on an issue the Fabrik App didn't open: the question goes to its author", () => {
+    const issue = anIssue({ number: 7, author: "kate", labels: ["needs-triage"], body: `${followUpMarker(42)}\nQuoted.` });
+
+    const plan = planFor(triaged({ category: "enhancement", state: "needs-info", comment: "Which format?" }), snapshotOf(issue, { operator: "jrey8343" }), kitConfig());
+
+    expect(plan.kind === "act" ? plan.actions[0] : null).toEqual({ kind: "comment", issue: 7, body: "@kate\n\nWhich format?" });
   });
 
   it("assigns a ready-for-human issue to the Operator, with Triage's comment saying what to do", () => {
