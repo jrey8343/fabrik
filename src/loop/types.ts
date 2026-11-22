@@ -2029,16 +2029,13 @@ export interface OpenTicketRef {
 }
 
 /**
- * An Open as issue link to the repo's new-issue form (#825), prefilled with an
- * Operator step's `newIssue` and a `Follows` line naming the Spec the step is
- * filed under and that Spec's Tickets, each created earlier in the plan or,
- * for the Spec, existing.
+ * The Spec an issue the plan creates builds on, and that Spec's Tickets, for
+ * the `Follows` line its body ends with (followsSpecLine): the Spec created
+ * earlier in the plan or, on a split, existing, and each Ticket created
+ * earlier in the plan.
  */
-export interface OpenAsIssueLink {
-  readonly repoUrl: string;
-  readonly title: string;
-  readonly body: string;
-  readonly follows: CreatedIssue | number;
+export interface FollowedSpec {
+  readonly spec: CreatedIssue | number;
   readonly tickets: readonly CreatedIssue[];
 }
 
@@ -2079,6 +2076,13 @@ export type Action =
       readonly blockedBy: readonly (CreatedIssue | ExistingIssue | OpenTicketRef)[];
       /** Who it is assigned to when it is created; none when left out. */
       readonly assignees?: readonly string[];
+      /**
+       * For a Spin-off of a Spec's or a split's finish (#883): the Spec and
+       * its Tickets, which the body's last line, a `Follows` line, names by
+       * the numbers the plan gave them. The issue is created with that line,
+       * so whatever reads its body first finds it. None when left out.
+       */
+      readonly follows?: FollowedSpec;
     }
   | {
       /** Comments on an issue, then closes it as completed: another issue now carries its work. */
@@ -2107,17 +2111,6 @@ export type Action =
       readonly body: string;
       /** Names the comment for later `comment-linking` actions in the plan, which link to it. */
       readonly key?: string;
-    }
-  | {
-      /**
-       * Rewrites the body of an issue created earlier in the plan with an Open
-       * as issue link in it (#825), once every issue the link's `Follows` line
-       * names exists: an Operator step whose job is to open a new issue.
-       */
-      readonly kind: "link-new-issue";
-      readonly on: CreatedIssue;
-      /** The body's Markdown, with the link written where it stands. */
-      readonly body: readonly (string | OpenAsIssueLink)[];
     }
   | {
       /** Comments on an issue created earlier in the plan (#778). */

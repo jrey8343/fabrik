@@ -1449,33 +1449,90 @@ describe("Applying a Design session's Spec that leans on open Tickets outside it
     ]);
   });
 
-  it("files an Operator step with newIssue with an Open as issue link, prefilled with its body and a Follows line naming the Spec just filed and its Tickets", async () => {
+  it("files an Operator step with its body and steps alone: no Open as issue link, and no edit after it is created (#883)", async () => {
     const github = fakeGitHub();
-    const reminders = {
-      key: "reminders",
-      title: "Open the reminders issue",
-      body: "Reminders are their own piece of work.",
-      blockedBy: ["model"],
-      operator: true,
-      steps: ["Open the issue from the link", "Label it enhancement"],
-      newIssue: { title: "Remind waitlisted patients", body: "Text each waitlisted patient a day before." },
+    const secret = { key: "secret", title: "Add the SMS secret", body: "The reminders need the provider's secret.", blockedBy: ["model"], operator: true, steps: ["Add the secret"] };
+
+    await applyPlan(github, repo, planFor(turnFinished([ticket("model"), secret]), inSession, kitConfig()));
+
+    // The Spec is #100, the model Ticket #101 and the Operator step #102.
+    const filed = github.calls.filter((call) => call.method === "POST" && call.path === issues).map((call) => (call.body as { body: string }).body);
+    expect(filed[2]).toBe("The reminders need the provider's secret.\n\n## Steps\n\n- [ ] Add the secret");
+    expect(filed.join("\n")).not.toContain("Open as issue");
+    expect(github.calls.filter((call) => call.method === "PATCH" && call.path === `${issues}/102`)).toEqual([]);
+  });
+});
+
+describe("Applying a Design session's finish that opens Spin-offs (#883)", () => {
+  const inSession = snapshotOf(anIssue({ number: 7, labels: ["enhancement", "needs-design"] }), { operator: "jrey" });
+  const turnFinished = (output: unknown): LoopEvent => ({ kind: "agent-run-finished", role: "design", issue: 7, output: JSON.stringify(output) });
+  const ticket = (key: string, blockedBy: (string | number)[] = []) => ({ key, title: `Waitlist: ${key}`, body: `The ${key} slice.`, blockedBy });
+  const reminders = { title: "Remind waitlisted patients", body: "Text each waitlisted patient a day before.", restsOn: 'Round 2, answer 3: "not now"', blockedBy: ["ui", 482] };
+  const MARKER = '<!-- fabrik:spin-off {"from":"design","issue":7} -->';
+
+  it("opens a Spec's Spin-off with needs-triage, its body ending with a Follows line naming the Spec and its Tickets by number, blocked by the Ticket's issue, and names it in the closing comment", async () => {
+    const github = fakeGitHub();
+    const secret = { key: "secret", title: "Add the SMS secret", body: "The provider's secret.", blockedBy: [], operator: true, steps: ["Add the secret"] };
+    const spec = {
+      kind: "spec",
+      comment: "Reminders are left for later.",
+      spec: { title: "Spec: Waitlist", body: "## Problem Statement\n\nFully booked days lose patients." },
+      tickets: [ticket("model"), secret, ticket("ui", ["model"])],
+      spinOffs: [reminders],
     };
 
-    await applyPlan(github, repo, planFor(turnFinished([ticket("model"), reminders, ticket("ui", ["model"])]), inSession, kitConfig()));
+    await applyPlan(github, repo, planFor(turnFinished(spec), inSession, kitConfig()));
 
-    // The Spec is #100, the model Ticket #101, the Operator step #102 and the UI Ticket #103.
-    const edit = github.calls.find((call) => call.method === "PATCH" && call.path === `${issues}/102`);
-    const body = (edit?.body as { body: string }).body;
-    expect(body.startsWith("Reminders are their own piece of work.\n\n")).toBe(true);
-    expect(body).toContain("## Steps\n\n- [ ] Open the issue from the link\n- [ ] Label it enhancement");
-    const link = /\[Open as issue\]\((https:\/\/github\.com\/[^)]*)\)/.exec(body)?.[1] ?? "";
-    const url = new URL(link);
-    expect(`${url.origin}${url.pathname}`).toBe("https://github.com/acme/shop/issues/new");
-    expect(url.searchParams.get("title")).toBe("Remind waitlisted patients");
-    expect(url.searchParams.get("body")).toBe("Text each waitlisted patient a day before.\n\nFollows #100 (its Tickets: #101, #103)");
-    // Edited once every Ticket under the Spec exists, so the line names them all.
-    const created = github.calls.filter((call) => call.method === "POST" && call.path === issues).length;
-    expect(created).toBe(4);
-    expect(github.calls.findIndex((call) => call === edit)).toBeGreaterThan(github.calls.findLastIndex((call) => call.method === "POST" && call.path === issues));
+    // The Spec is #100, the model Ticket #101, the Operator step #102, the UI Ticket #103 and the Spin-off #104.
+    const filed = github.calls.filter((call) => call.method === "POST" && call.path === issues);
+    expect(filed).toHaveLength(5);
+    expect(filed[4]?.body).toEqual({
+      title: "Remind waitlisted patients",
+      body: `${MARKER}\nText each waitlisted patient a day before.\n\nFollows #100 (its Tickets: #101, #103)`,
+      labels: ["needs-triage"],
+    });
+    const edges = github.calls.filter((call) => call.path === `${issues}/104/dependencies/blocked_by`).map((call) => call.body);
+    expect(edges).toEqual([{ issue_id: 1103 }, { issue_id: 1482 }]);
+    expect(github.calls.filter((call) => call.path.endsWith("/sub_issues")).map((call) => call.body)).not.toContainEqual({ sub_issue_id: 1104 });
+    const closing = github.calls.find((call) => call.method === "POST" && call.path === `${issues}/7/comments`);
+    expect((closing?.body as { body: string }).body).toContain('\n- #104 Remind waitlisted patients\n  Rests on: Round 2, answer 3: "not now"');
+  });
+
+  it("opens a split's Spin-off following the Spec the Ticket sits under, by that Spec's own number", async () => {
+    const github = fakeGitHub();
+    const underSpec = snapshotOf(anIssue({ number: 7, labels: ["needs-design"], parent: 3 }));
+    const split = { kind: "split", comment: "Split.", tickets: [ticket("model"), ticket("ui", ["model"])], spinOffs: [{ ...reminders, blockedBy: [] }] };
+
+    await applyPlan(github, repo, planFor(turnFinished(split), underSpec, kitConfig()));
+
+    const filed = github.calls.filter((call) => call.method === "POST" && call.path === issues);
+    expect((filed[2]?.body as { body: string }).body).toBe(`${MARKER}\nText each waitlisted patient a day before.\n\nFollows #3 (its Tickets: #100, #101)`);
+  });
+
+  it("opens an agent brief's Spin-off blocked by the issue the brief rewrites, with no Follows line, and names it by number in the closing comment", async () => {
+    const github = fakeGitHub();
+    const brief = { kind: "brief", comment: "Small.", brief: { summary: "Add the waitlist.", acceptanceCriteria: ["A patient can join."] }, spinOffs: [{ ...reminders, blockedBy: [7] }] };
+
+    await applyPlan(github, repo, planFor(turnFinished(brief), inSession, kitConfig()));
+
+    const filed = github.calls.filter((call) => call.method === "POST" && call.path === issues);
+    expect(filed.map((call) => call.body)).toEqual([
+      { title: "Remind waitlisted patients", body: `${MARKER}\nText each waitlisted patient a day before.`, labels: ["needs-triage"] },
+    ]);
+    // The Spin-off is #100, and #7's database id is 1007.
+    expect(github.calls.filter((call) => call.path === `${issues}/100/dependencies/blocked_by`).map((call) => call.body)).toEqual([{ issue_id: 1007 }]);
+    const closing = github.calls.find((call) => call.method === "POST" && call.path === `${issues}/7/comments`);
+    expect((closing?.body as { body: string }).body).toBe(
+      [
+        "**Design session finished.** This issue is now its agent brief, ready for an Implementer.",
+        "",
+        "Small.",
+        "",
+        "The Kit opened 1 Spin-off, work the Operator's answers put outside this outcome, which Triage sorts next:",
+        "",
+        "- #100 Remind waitlisted patients",
+        '  Rests on: Round 2, answer 3: "not now"',
+      ].join("\n"),
+    );
   });
 });

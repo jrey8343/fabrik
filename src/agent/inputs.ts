@@ -54,7 +54,7 @@ import type { SentBack } from "../loop/backToDesign.ts";
 import { withoutChangeLines } from "../loop/changeFingerprint.ts";
 import { type DigestFacts, digestFactsOf } from "../loop/digestFacts.ts";
 import { mapOfferOf, type MapOfferOf } from "../loop/mapCap.ts";
-import { flakyCheckIssueOf, followsSpecIn, fromAuditIn, fromPullRequestIn } from "../loop/markers.ts";
+import { flakyCheckIssueOf, followsSpecIn, fromAuditIn, fromPullRequestIn, spinOffIn } from "../loop/markers.ts";
 import { withoutRoundLines } from "../loop/roundLine.ts";
 import type { AuditIssueSnapshot, AuditWindow, KitConfig } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
@@ -176,6 +176,9 @@ function pullRequestOf(pullRequests: readonly { number: number; state: "OPEN" | 
  * for the step's own reads of its lines (readFiledFrom), and `check` the
  * Required check it is the Check's issue for (#839), read only on an issue a
  * bot opened, as this job takes any bot for the App (byAppOf), else null.
+ * Read the same way, a Spin-off (#883) carries `spinOff`, where it came
+ * from, which Triage's prompt and its output contract go by; any other issue
+ * has no such field.
  */
 export async function readIssue(
   github: Reader,
@@ -208,6 +211,8 @@ export async function readIssue(
   // Only the App's note counts, as in the core's snapshot, so quoting one can't fake a return. This job doesn't know the
   // App's login, so it takes any bot's note for the App's (byAppOf).
   const { sentBack } = designSessionOf(comments.map(({ author, body }) => ({ body, byApp: byAppOf(author, null) })));
+  // Anyone can quote a Spin-off's marker in an issue they open, so it is read only on a bot's (ADR-0037).
+  const spinOff = byAppOf(issue.author, null) ? spinOffIn(issue.body) : null;
   return {
     issue: {
       number: issue.number,
@@ -217,6 +222,7 @@ export async function readIssue(
       labels: issue.labels.nodes,
       operator,
       comments: authoredComments,
+      ...(spinOff === null ? {} : { spinOff }),
       ...(sentBack === null ? {} : { sentBack: await readSentBack(github, repo, sentBack, operator) }),
     },
     body: issue.body,

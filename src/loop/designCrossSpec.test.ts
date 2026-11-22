@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { readDesignTurnOutput } from "./designOutput.ts";
 
 // A Design session that sees the open Tickets under other Specs (#825) may make a Ticket wait on one of them by its
-// number, and an Operator step whose job is to open a new issue gives that issue's title and body as `newIssue`.
+// number. An Operator step whose job was to open a new issue gave that issue as `newIssue`, which went when the
+// Kit began to open a Spin-off itself (#883).
 const ticket = (key: string, blockedBy: (string | number)[] = [], extra: Record<string, unknown> = {}) => ({
   key,
   title: `Waitlist: ${key}`,
@@ -14,10 +15,10 @@ const ticket = (key: string, blockedBy: (string | number)[] = [], extra: Record<
 const operatorStep = (key: string, extra: Record<string, unknown> = {}) => ({
   key,
   title: `Waitlist: ${key}`,
-  body: "The reminders need their own issue.",
+  body: "The reminders need the SMS provider's secret.",
   blockedBy: [],
   operator: true,
-  steps: ["Open the issue from the link above", "Label it enhancement"],
+  steps: ["Add the SMS secret", "Check a test message arrives"],
   ...extra,
 });
 
@@ -74,27 +75,27 @@ describe("A Design output's cross-Spec blockedBy", () => {
   });
 });
 
-describe("A Design output's newIssue on an Operator step", () => {
-  it("takes a title and a body on an Operator step", () => {
-    const result = readDesignTurnOutput(spec([ticket("model"), operatorStep("reminders", { newIssue: { title: "Remind waitlisted patients", body: "Text them a day before." } })]), 7, []);
+describe("A Design output's newIssue, which the Kit no longer takes (#883)", () => {
+  it.each([{ title: "Remind waitlisted patients", body: "Text them a day before." }, { title: "" }, "Remind them", null])(
+    "refuses an Operator step that carries one, naming spinOffs: %j",
+    (newIssue) => {
+      expect(readDesignTurnOutput(spec([ticket("model"), operatorStep("reminders", { newIssue })]), 7, [])).toEqual({
+        ok: false,
+        errors: ['operator step "reminders" has newIssue, which an Operator step no longer carries: write the issue as a Spin-off in spinOffs, and the Kit opens it'],
+      });
+    },
+  );
 
-    expect(result).toMatchObject({
-      ok: true,
-      output: { tickets: [{ key: "model" }, { key: "reminders", operator: true, newIssue: { title: "Remind waitlisted patients", body: "Text them a day before." } }] },
-    });
-  });
-
-  it.each([{ title: "" , body: "x" }, { title: "x" }, "Remind them"])("refuses a newIssue without a title and a body: %j", (newIssue) => {
-    expect(readDesignTurnOutput(spec([operatorStep("reminders", { newIssue })]), 7, [])).toEqual({
-      ok: false,
-      errors: ['operator step "reminders" needs newIssue to have non-empty title and body text, if it has one'],
-    });
-  });
-
-  it("refuses a newIssue on a Ticket, which an Implementer builds", () => {
+  it("refuses a Ticket that carries one, naming spinOffs", () => {
     expect(readDesignTurnOutput(spec([ticket("model", [], { newIssue: { title: "x", body: "y" } })]), 7, [])).toEqual({
       ok: false,
-      errors: ['ticket "model" has newIssue, but only an Operator step asks the Operator to open an issue: mark it "operator": true with its steps'],
+      errors: ['ticket "model" has newIssue, which no Ticket carries: write the issue as a Spin-off in spinOffs, and the Kit opens it'],
     });
+  });
+
+  it("refuses one in a split as in a Spec", () => {
+    const split = { kind: "split", comment: "Split.", tickets: [operatorStep("reminders", { newIssue: { title: "x", body: "y" } })] };
+
+    expect(readDesignTurnOutput(split, 7, [])).toMatchObject({ ok: false, errors: [expect.stringContaining("spinOffs")] });
   });
 });

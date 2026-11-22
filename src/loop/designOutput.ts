@@ -10,7 +10,9 @@
 // build there, which may neither name the session's own issue nor mention
 // anyone, so both sides read the contract against the issue's number.
 // Or, when the destination is too foggy to design in one session, the issue
-// becomes a Map with its first Decisions. Two kinds carry a Prototype (#155)
+// becomes a Map with its first Decisions. Any finish but a Map may carry
+// Spin-offs (#883): work the Operator's answers put outside the outcome, which
+// the Kit opens as issues of their own. Two kinds carry a Prototype (#155)
 // and end nothing: an ordinary turn's `prototype`, the request the Operator
 // approved, and a prototype turn's `prototype-round`, the variants it built.
 import { isRoute } from "../kit/config.ts";
@@ -69,6 +71,7 @@ type DesignTurnOutcome =
       /** What the session decided, for the closing comment. */
       readonly comment: string;
       readonly brief: DesignAgentBrief | OperatorBrief;
+      readonly spinOffs?: readonly SpinOff[];
     }
   | {
       /** The large outcome: a Spec and its Tickets, which supersede the issue. */
@@ -78,6 +81,7 @@ type DesignTurnOutcome =
       readonly spec: { readonly title: string; readonly body: string };
       /** Each Ticket, with the keys of the Tickets that block it. Any order. */
       readonly tickets: readonly SpecTicket[];
+      readonly spinOffs?: readonly SpinOff[];
     }
   | {
       /** A Ticket under a Spec, split into sibling Tickets under that same Spec, which supersede it. */
@@ -86,12 +90,14 @@ type DesignTurnOutcome =
       readonly comment: string;
       /** Each sibling Ticket, with the keys of the Tickets that block it. Any order. */
       readonly tickets: readonly SpecTicket[];
+      readonly spinOffs?: readonly SpinOff[];
     }
   | {
       /** Nothing to build: the Operator decided the issue won't be built, so it closes as not planned. */
       readonly kind: "not-planned";
       /** What the Operator decided and why, for the closing comment. */
       readonly comment: string;
+      readonly spinOffs?: readonly SpinOff[];
     }
   | {
       /**
@@ -107,6 +113,7 @@ type DesignTurnOutcome =
       readonly summary: string;
       /** Each one check a test could make; at least one, and under the summary's two refusals. */
       readonly acceptanceCriteria: readonly string[];
+      readonly spinOffs?: readonly SpinOff[];
     }
   | {
       /** The foggy outcome: the issue is rewritten in place as a Map, with its first Decisions as its sub-issues. */
@@ -252,18 +259,27 @@ export type SpecTicket =
       readonly operator: true;
       /** Each one action the Operator takes; the Kit writes them as a task list. */
       readonly steps: readonly string[];
-      /**
-       * The issue the step asks the Operator to open (#825), which the Kit
-       * gives an Open as issue link, its body ending with a `Follows` line
-       * naming the Spec the step is filed under. Absent on any other step.
-       */
-      readonly newIssue?: NewIssue;
     });
 
-/** An issue an Operator step asks the Operator to open, as the Design session writes it. */
-export interface NewIssue {
+/**
+ * A Spin-off as a Design session writes it (#883): work an answer of the
+ * Operator's put outside the session's outcome, which the Kit opens as an
+ * issue of its own when the session finishes. Any finish but a Map may carry
+ * some, as its `spinOffs`: left out when it carries none.
+ */
+export interface SpinOff {
   readonly title: string;
+  /** Markdown that stands alone, as any issue's body does. */
   readonly body: string;
+  /** One line of Markdown naming the Operator's answer it rests on, which the closing comment gives beside it. */
+  readonly restsOn: string;
+  /**
+   * What it waits on, under the rules of a Ticket's `blockedBy`: the keys of
+   * the Tickets the finish writes, the numbers of open Tickets from "The open
+   * Tickets" and, on an agent brief, the number of the issue the brief
+   * rewrites. May be empty.
+   */
+  readonly blockedBy: readonly (string | number)[];
 }
 
 interface TicketFields {
@@ -377,11 +393,14 @@ function readTickets(value: unknown, errors: string[], outcome: "spec" | "split"
       !item.blockedBy.every((blocker) => isText(blocker) || isIssueNumber(blocker))
     ) {
       errors.push(`ticket ${i + 1} needs non-empty key, title and body text, and a blockedBy list of keys and open Tickets' numbers`);
+    } else if (item.newIssue !== undefined) {
+      // No step asks the Operator to open an issue any more (#883): the Kit opens a Spin-off itself, so the field is refused by name, not ignored.
+      errors.push(
+        `${item.operator === undefined ? "ticket" : "operator step"} ${JSON.stringify(item.key)} has newIssue, which ${item.operator === undefined ? "no Ticket carries" : "an Operator step no longer carries"}: write the issue as a Spin-off in spinOffs, and the Kit opens it`,
+      );
     } else if (item.operator === undefined) {
       const fields = { key: item.key, title: item.title, body: item.body, blockedBy: item.blockedBy as (string | number)[] };
-      if (item.newIssue !== undefined) {
-        errors.push(`ticket ${JSON.stringify(item.key)} has newIssue, but only an Operator step asks the Operator to open an issue: mark it "operator": true with its steps`);
-      } else if (item.keptBranch !== undefined) {
+      if (item.keptBranch !== undefined) {
         // A new Ticket has no Kept branch of its own (#536): only a brief that rewrites a Ticket in place carries one on.
         errors.push(`ticket ${JSON.stringify(item.key)} has keptBranch, but only a brief that rewrites the Ticket in place carries on a Kept branch`);
       } else if (item.stepUp !== undefined && typeof item.stepUp !== "boolean") {
@@ -392,8 +411,6 @@ function readTickets(value: unknown, errors: string[], outcome: "spec" | "split"
       errors.push(
         `operator step ${JSON.stringify(item.key)} needs "operator": true and at least one step, with no empty step`,
       );
-    } else if (item.newIssue !== undefined && !(isObject(item.newIssue) && isText(item.newIssue.title) && isText(item.newIssue.body))) {
-      errors.push(`operator step ${JSON.stringify(item.key)} needs newIssue to have non-empty title and body text, if it has one`);
     } else {
       tickets.push({
         key: item.key,
@@ -402,11 +419,43 @@ function readTickets(value: unknown, errors: string[], outcome: "spec" | "split"
         blockedBy: item.blockedBy as (string | number)[],
         operator: true,
         steps: item.steps,
-        ...(isObject(item.newIssue) ? { newIssue: { title: item.newIssue.title as string, body: item.newIssue.body as string } } : {}),
       });
     }
   });
   return tickets;
+}
+
+/** A finish's Spin-offs (#883), each named by its place in the list; none when the output has no `spinOffs`. */
+function readSpinOffs(value: unknown, errors: string[]): SpinOff[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    errors.push("spinOffs must be a list of Spin-offs, if the output has one");
+    return [];
+  }
+  const spinOffs: SpinOff[] = [];
+  value.forEach((item, i) => {
+    if (
+      !isObject(item) ||
+      !isText(item.title) ||
+      !isText(item.body) ||
+      !isLine(item.restsOn) ||
+      !Array.isArray(item.blockedBy) ||
+      !item.blockedBy.every((blocker) => isText(blocker) || isIssueNumber(blocker))
+    ) {
+      errors.push(`spin-off ${i + 1} needs non-empty title and body text, restsOn as one non-empty line, and a blockedBy list of Tickets' keys and open Tickets' numbers`);
+    } else {
+      spinOffs.push({ title: item.title, body: item.body, restsOn: item.restsOn, blockedBy: item.blockedBy as (string | number)[] });
+    }
+  });
+  return spinOffs;
+}
+
+/** The kinds that carry no Spin-off: those that finish nothing, and a Map, whose open questions are its Decisions. */
+const FINISHES_NOTHING_OR_MAP: readonly unknown[] = ["round", "map", "prototype", "prototype-round"];
+
+/** A finish with its Spin-offs, when it has some. */
+function withSpinOffs<T extends object>(output: T, spinOffs: readonly SpinOff[]): T & { readonly spinOffs?: readonly SpinOff[] } {
+  return spinOffs.length === 0 ? output : { ...output, spinOffs };
 }
 
 function readDecisions(value: unknown, errors: string[]): MapDecision[] {
@@ -541,6 +590,35 @@ function checkBlockers(items: readonly Blocked[], errors: string[], noun: "ticke
 }
 
 /**
+ * Each Spin-off's blockers (#883), under the rules of a Ticket's: a key must
+ * be one of `tickets`, those the finish writes, Operator steps among them,
+ * and a number one of `openTickets`, when they are known, or `rewritten`, the
+ * issue an agent brief rewrites, which stays open as a Ticket and is never
+ * among "The open Tickets" its own turn was given. Nothing waits on a
+ * Spin-off, so its blockers can't loop.
+ */
+function checkSpinOffBlockers(
+  spinOffs: readonly SpinOff[],
+  tickets: readonly Blocked[],
+  errors: string[],
+  openTickets: readonly number[] | null,
+  rewritten: number | null = null,
+): void {
+  const keys = new Set(tickets.map(({ key }) => key));
+  spinOffs.forEach(({ blockedBy }, i) => {
+    for (const blocker of blockedBy) {
+      if (typeof blocker === "number") {
+        if (openTickets !== null && blocker !== rewritten && !openTickets.includes(blocker)) {
+          errors.push(`spin-off ${i + 1} is blocked by #${blocker}, which isn't one of "The open Tickets" this turn was given`);
+        }
+      } else if (!keys.has(blocker)) {
+        errors.push(`spin-off ${i + 1} is blocked by ${JSON.stringify(blocker)}, which isn't a ticket here`);
+      }
+    }
+  });
+}
+
+/**
  * The Tickets or Decisions with every blocker before the ones it blocks,
  * otherwise in the order given; null if the blockers form a cycle.
  */
@@ -577,6 +655,10 @@ function withConsidered(result: DesignTurnOutputResult, value: unknown): DesignT
 function readTurn(value: unknown, issue: number | null, openTickets: readonly number[] | null = null): DesignTurnOutputResult {
   if (!isObject(value)) return { ok: false, errors: ["Design-session output must be a JSON object"] };
   const errors: string[] = [];
+  // Unknown fields are otherwise ignored, so a Spin-off where the Kit opens none is refused by name (#883): an empty list is none.
+  if (FINISHES_NOTHING_OR_MAP.includes(value.kind) && value.spinOffs !== undefined && !(Array.isArray(value.spinOffs) && value.spinOffs.length === 0)) {
+    errors.push(`a ${value.kind as string} takes no spinOffs: the Kit opens a Spin-off only when the session finishes, and never on a Map`);
+  }
   switch (value.kind) {
     case "round": {
       if (!isText(value.intro)) errors.push("a round needs non-empty intro text");
@@ -587,27 +669,41 @@ function readTurn(value: unknown, issue: number | null, openTickets: readonly nu
     case "brief": {
       if (!isText(value.comment)) errors.push("a brief needs non-empty comment text");
       const brief = readBrief(value.brief, errors);
+      const spinOffs = readSpinOffs(value.spinOffs, errors);
+      // An agent brief leaves the issue an open Ticket, which a Spin-off may wait on; an Operator brief leaves none.
+      if (errors.length === 0 && brief !== null) checkSpinOffBlockers(spinOffs, [], errors, openTickets, "operator" in brief ? null : issue);
       if (errors.length > 0 || brief === null) return { ok: false, errors };
-      return { ok: true, output: { kind: "brief", comment: value.comment as string, brief } };
+      return { ok: true, output: withSpinOffs({ kind: "brief", comment: value.comment as string, brief }, spinOffs) };
     }
     case "spec": {
       if (!isText(value.comment)) errors.push("a spec needs non-empty comment text");
       const spec = readSpec(value.spec, errors);
       const tickets = readTickets(value.tickets, errors, "spec");
-      if (errors.length === 0) checkBlockers(tickets, errors, "ticket", openTickets);
+      const spinOffs = readSpinOffs(value.spinOffs, errors);
+      if (errors.length === 0) {
+        checkBlockers(tickets, errors, "ticket", openTickets);
+        checkSpinOffBlockers(spinOffs, tickets, errors, openTickets);
+      }
       if (errors.length > 0 || spec === null) return { ok: false, errors };
-      return { ok: true, output: { kind: "spec", comment: value.comment as string, spec, tickets } };
+      return { ok: true, output: withSpinOffs({ kind: "spec", comment: value.comment as string, spec, tickets }, spinOffs) };
     }
     case "split": {
       if (!isText(value.comment)) errors.push("a split needs non-empty comment text");
       const tickets = readTickets(value.tickets, errors, "split");
-      if (errors.length === 0) checkBlockers(tickets, errors, "ticket", openTickets);
+      const spinOffs = readSpinOffs(value.spinOffs, errors);
+      if (errors.length === 0) {
+        checkBlockers(tickets, errors, "ticket", openTickets);
+        checkSpinOffBlockers(spinOffs, tickets, errors, openTickets);
+      }
       if (errors.length > 0) return { ok: false, errors };
-      return { ok: true, output: { kind: "split", comment: value.comment as string, tickets } };
+      return { ok: true, output: withSpinOffs({ kind: "split", comment: value.comment as string, tickets }, spinOffs) };
     }
     case "not-planned": {
-      if (!isText(value.comment)) return { ok: false, errors: ["not-planned needs non-empty comment text"] };
-      return { ok: true, output: { kind: "not-planned", comment: value.comment } };
+      if (!isText(value.comment)) errors.push("not-planned needs non-empty comment text");
+      const spinOffs = readSpinOffs(value.spinOffs, errors);
+      if (errors.length === 0) checkSpinOffBlockers(spinOffs, [], errors, openTickets);
+      if (errors.length > 0) return { ok: false, errors };
+      return { ok: true, output: withSpinOffs({ kind: "not-planned", comment: value.comment as string }, spinOffs) };
     }
     case "roll-in": {
       const { pullRequest, summary, acceptanceCriteria } = value;
@@ -616,11 +712,13 @@ function readTurn(value: unknown, issue: number | null, openTickets: readonly nu
       if (!isText(summary) || !isSteps(acceptanceCriteria)) {
         errors.push("a roll-in needs a summary and at least one acceptance criterion, with no empty criterion");
       }
+      const spinOffs = readSpinOffs(value.spinOffs, errors);
       if (errors.length > 0) return { ok: false, errors };
       const text = { summary: summary as string, acceptanceCriteria: acceptanceCriteria as string[] };
+      checkSpinOffBlockers(spinOffs, [], errors, openTickets);
       refuseRollInText(text, issue, errors);
       if (errors.length > 0) return { ok: false, errors };
-      return { ok: true, output: { kind: "roll-in", pullRequest: pullRequest as number, ...text } };
+      return { ok: true, output: withSpinOffs({ kind: "roll-in", pullRequest: pullRequest as number, ...text }, spinOffs) };
     }
     case "map": {
       if (!isText(value.comment)) errors.push("a map needs non-empty comment text");

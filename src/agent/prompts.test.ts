@@ -616,19 +616,15 @@ describe("The open Tickets in the Design prompt", () => {
     expect(follows).toContain("means the issue builds on the Spec #n. Its open Tickets are in the list, and you read them before you design");
   });
 
-  it("documents a numbered blockedBy and an Operator step's newIssue in the output rules", async () => {
+  it("documents a numbered blockedBy in the output rules", async () => {
     const output = section(await prompt("design"), "Your output");
     const blockedBy = lineStarting(output, "- Each Ticket's `key`");
     expect(blockedBy).toContain(`A Ticket's \`blockedBy\` may also hold the number of an open Ticket in "${OPEN_TICKETS_HEADING}", such as \`482\``);
     expect(blockedBy).toContain("A number not in that list is refused.");
     expect(blockedBy).toContain("don't write issue numbers, `Parent` or `Blocked by` sections into any body");
-    const newIssue = lineStarting(output, "- An Operator step whose job is to open a new issue");
-    expect(newIssue).toContain("carries `newIssue`, the issue's `title` and `body`, never a free-text step that spells the issue out");
-    expect(newIssue).toContain("The new issue goes through Intake and Triage as normal.");
-    expect(newIssue).toContain("The step's `steps` still say what else the Operator does, such as which labels to add.");
   });
 
-  it("shows a numbered blockedBy and a newIssue in a Spec example the Kit reads", async () => {
+  it("shows a numbered blockedBy in a Spec example the Kit reads", async () => {
     const text = await prompt("design");
     const example: unknown = JSON.parse(/To finish with a Spec and its Tickets:\n\n<design>\n([\s\S]*?)\n<\/design>/.exec(text)?.[1] ?? "null");
 
@@ -636,7 +632,77 @@ describe("The open Tickets in the Design prompt", () => {
     expect(read).toMatchObject({ ok: true, output: { kind: "spec" } });
     const tickets = read.ok && read.output.kind === "spec" ? read.output.tickets : [];
     expect(tickets.some((ticket) => ticket.blockedBy.includes(482))).toBe(true);
-    expect(tickets.some((ticket) => ticket.operator === true && ticket.newIssue !== undefined)).toBe(true);
+  });
+});
+
+// A Design session's Spin-offs (#883): only the prompt says when to write one, and the Kit opens each from the output.
+describe("Spin-offs in the Design prompt", () => {
+  const spinOffs = async () => section(await prompt("design"), "Spin-offs");
+
+  it("says what a Spin-off is, which finishes carry one, and that Triage sorts it next", async () => {
+    const opening = (await spinOffs()).split("\n- ")[0] ?? "";
+    expect(opening).toContain("A **Spin-off** is work the Operator's answers put outside this session's outcome, which the Kit opens as an issue of its own when the session finishes");
+    expect(opening).toContain("Any finish but a Map carries its Spin-offs in `spinOffs`");
+    expect(opening).toContain("Triage sorts each one next");
+  });
+
+  it("writes one only on an answer of the Operator's that states or implies it, never for work the Operator did not speak to", async () => {
+    const when = lineStarting(await spinOffs(), "- **When to write one.**");
+    expect(when).toContain("An answer of the Operator's states or implies that some work is wanted but is not part of this outcome");
+    expect(when).toContain('such as "not now", "later" or "leave that out of this one"');
+    expect(when).toContain("Never write one for work the Operator did not speak to");
+  });
+
+  it("tells a Spin-off from a Ticket: work the session designed fully is a Ticket of its Spec", async () => {
+    const which = lineStarting(await spinOffs(), "- **A Spin-off or a Ticket.**");
+    expect(which).toContain("Work this session designed fully is a Ticket of its Spec.");
+    expect(which).toContain("A Spin-off is work that still needs sorting or a design of its own.");
+  });
+
+  it("checks the open Tickets first, and names the Ticket that already holds the work in the closing comment instead", async () => {
+    const check = lineStarting(await spinOffs(), `- **Check "${OPEN_TICKETS_HEADING}" first.**`);
+    expect(check).toContain("Write no Spin-off for work an open Ticket already holds");
+    expect(check).toContain("name that Ticket in the closing `comment` instead");
+  });
+
+  it("asks no question only to confirm a Spin-off the Operator's answer already implies", async () => {
+    const alone = lineStarting(await spinOffs(), "- **No round asks about one alone.**");
+    expect(alone).toContain("Ask no question only to confirm a Spin-off the Operator's answer already implies.");
+  });
+
+  it("leaves the list of Spin-offs and their links to the Kit, which adds them to the closing comment", async () => {
+    const kit = lineStarting(await spinOffs(), "- **Write neither the list nor the links.**");
+    expect(kit).toContain("The Kit adds them to the closing comment: each Spin-off's number, its title and its `restsOn` line.");
+  });
+
+  it("documents spinOffs in the output rules: where it goes, each field, and that newIssue is gone", async () => {
+    const rule = lineStarting(section(await prompt("design"), "Your output"), "- `spinOffs`");
+    expect(rule).toContain("may go on any finish but a Map: an agent brief, an Operator brief, a Spec, a split, a Roll-in and not planned");
+    expect(rule).toContain("A round and a Map take none, and the Kit refuses one there.");
+    expect(rule).toContain("Each Spin-off has a `title`, a `body` that stands alone, as any issue's does, a `restsOn` and a `blockedBy`.");
+    expect(rule).toContain("`restsOn` is one line of Markdown naming the Operator's answer the Spin-off rests on, and is never empty.");
+    expect(rule).toContain(
+      `\`blockedBy\` names what the Spin-off waits on: the keys of the Tickets a Spec or a split writes, the number of an open Ticket in "${OPEN_TICKETS_HEADING}" and, on an agent brief, this issue's own number, which the brief rewrites.`,
+    );
+    expect(rule).toContain("It may be empty, and it follows the rules a Ticket's `blockedBy` does.");
+    expect(rule).toContain("No Operator step asks the Operator to open an issue: `newIssue` is refused.");
+  });
+
+  it("says nothing more of an Open as issue link or of newIssue anywhere else", async () => {
+    const text = await prompt("design");
+    expect(text).not.toContain("Open as issue");
+    expect(text.split("`newIssue`")).toHaveLength(2);
+  });
+
+  it("shows Spin-offs in a Spec example the Kit reads, one waiting on a Ticket of that Spec", async () => {
+    const text = await prompt("design");
+    const example: unknown = JSON.parse(/To finish with a Spec and its Tickets:\n\n<design>\n([\s\S]*?)\n<\/design>/.exec(text)?.[1] ?? "null");
+
+    const read = readDesignTurnOutput(example, EXAMPLE_ISSUE, [482]);
+    const spinOffsRead = read.ok && read.output.kind === "spec" ? (read.output.spinOffs ?? []) : [];
+    expect(spinOffsRead).toHaveLength(1);
+    expect(spinOffsRead[0]?.blockedBy).toEqual(["ui"]);
+    expect(read.ok && read.output.kind === "spec" ? read.output.tickets.map((ticket) => ticket.key) : []).toContain("ui");
   });
 });
 
@@ -1130,6 +1196,33 @@ describe("The Triage agent's prompt", () => {
   it("keeps its example output, which the Kit still reads", async () => {
     const example: unknown = JSON.parse(/<triage>\n([\s\S]*?)\n<\/triage>/.exec(await prompt("triage"))?.[1] ?? "null");
     expect(readTriageOutput(example)).toMatchObject({ ok: true, output: { state: "needs-design" } });
+  });
+
+  // A Spin-off exists because the Operator asked for it (#883), so Triage sorts it and never sets it aside on its own judgement.
+  describe("on a Spin-off", () => {
+    const spinOff = async () => part(await prompt("triage"), "A Spin-off");
+
+    it("says how the input marks one, and that it exists because the Operator asked for it", async () => {
+      const opening = (await spinOff()).split("\n- ")[0] ?? "";
+      expect(opening).toContain("`spinOff`");
+      expect(opening).toContain("`fabrik:spin-off` marker");
+      expect(opening).toContain("A Spin-off exists because the Operator asked for it");
+    });
+
+    it("sorts it to the Fast path, a Design session or ready-for-human", async () => {
+      const sort = lineStarting(await spinOff(), "- **Sort it as wanted work.**");
+      expect(sort).toContain("the Fast path (`ready-for-agent`) when all six tests pass, a Design session (`needs-design`) on any doubt, or `ready-for-human` when the work needs the Operator's own hands");
+    });
+
+    it("sets it aside only as a duplicate of a named issue, which the Kit holds it to", async () => {
+      const aside = lineStarting(await spinOff(), "- **Set it aside only as a duplicate of a named issue.**");
+      expect(aside).toContain("`wontfix` on a Spin-off always names the original in `duplicateOf`");
+      expect(aside).toContain("The Kit refuses a `wontfix` on a Spin-off with no `duplicateOf`.");
+    });
+
+    it("says so again in the output rule for duplicateOf", async () => {
+      expect(lineStarting(section(await prompt("triage"), "Your output"), "- `duplicateOf`")).toContain("A `wontfix` on a Spin-off always carries it.");
+    });
   });
 });
 

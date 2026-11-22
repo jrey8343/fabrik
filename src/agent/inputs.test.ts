@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { GitHubError } from "../github/client.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
-import { designRoundMarker, flakyCheckIssueMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER } from "../loop/markers.ts";
+import { designRoundMarker, flakyCheckIssueMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, spinOffMarker } from "../loop/markers.ts";
 import { roundLineIn, roundLineOf, withoutRoundLines } from "../loop/roundLine.ts";
 import { planFor } from "../loop/rules.ts";
 import { AGENT_FAILURE_FILE } from "./failure.ts";
@@ -119,6 +119,29 @@ describe("An agent job's inputs", () => {
 
     expect(read.check).toBe(check);
     expect((read.issue as { author: unknown }).author).toEqual({ login: author.login });
+  });
+
+  it("marks a Spin-off the Fabrik App opened, naming the issue whose Design session it came from (#883)", async () => {
+    const page = issuePage([], null);
+    const body = `${spinOffMarker({ from: "design", issue: 41 })}\nText each waitlisted patient a day before.`;
+    const spinOff = { repository: { issue: { ...page.repository.issue, parent: null, author: { login: "fabrik-app", __typename: "Bot" }, body } } };
+
+    const read = await readIssue(graphqlReturning(spinOff), repo, 7, "operator");
+
+    expect(read.issue).toMatchObject({ number: 7, body, spinOff: { from: "design", issue: 41 } });
+  });
+
+  it.each([
+    ["a person's issue quoting a Spin-off's marker", { login: "someone", __typename: "User" }, `${spinOffMarker({ from: "design", issue: 41 })}\nMine.`],
+    ["the Fabrik App's issue that is no Spin-off", { login: "fabrik-app", __typename: "Bot" }, "The Monitor saw an error."],
+    ["the Fabrik App's issue that quotes the marker below its first line", { login: "fabrik-app", __typename: "Bot" }, `An error.\n${spinOffMarker({ from: "design", issue: 41 })}`],
+  ])("marks no Spin-off on %s", async (_, author, body) => {
+    const page = issuePage([], null);
+    const other = { repository: { issue: { ...page.repository.issue, parent: null, author, body } } };
+
+    const read = await readIssue(graphqlReturning(other), repo, 7, "operator");
+
+    expect(read.issue).not.toHaveProperty("spinOff");
   });
 
   it("reads no other Tickets for an issue with no parent", async () => {

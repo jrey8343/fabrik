@@ -526,6 +526,51 @@ describe("Applying Triage output", () => {
   });
 });
 
+// A Spin-off exists because the Operator asked for it (#883): the push job tells one by the Fabrik App's marker.
+describe("Applying Triage output on a Spin-off", () => {
+  const triaged = (output: unknown) => ({ kind: "agent-run-finished", role: "triage", issue: 104, output: JSON.stringify(output) }) as const;
+  const body = '<!-- fabrik:spin-off {"from":"design","issue":7} -->\nText each waitlisted patient a day before.';
+  const spinOff = anIssue({ number: 104, labels: ["needs-triage"], author: "fabrik-app[bot]", byApp: true, body });
+  const wontfix = { category: "enhancement", state: "wontfix", comment: "Not worth building." };
+
+  it("refuses a wontfix that names no original, so the issue the Operator asked for stays open", () => {
+    expect(planFor(triaged(wontfix), snapshotOf(spinOff), kitConfig())).toEqual({
+      kind: "fail",
+      failure: "infrastructure",
+      reason:
+        "Triage on #104 emitted output that breaks its contract: a wontfix on a Spin-off needs duplicateOf: the Operator asked for this issue, so Triage sets it aside only as a duplicate of a named issue",
+    });
+  });
+
+  it("closes one as a duplicate of the issue the wontfix names", () => {
+    const plan = planFor(triaged({ ...wontfix, comment: "The same reminders as the open one.", duplicateOf: 98 }), snapshotOf(spinOff), kitConfig());
+
+    expect(plan.kind === "act" ? plan.actions.at(-1) : plan).toEqual({ kind: "close", issue: 104, reason: "duplicate" });
+  });
+
+  it("sorts one to a Design session as it would any issue", () => {
+    const plan = planFor(triaged({ category: "enhancement", state: "needs-design", comment: "Needs a design pass." }), snapshotOf(spinOff), kitConfig());
+
+    expect(plan.kind === "act" ? plan.actions : plan).toContainEqual({ kind: "add-labels", issue: 104, labels: ["enhancement", "needs-design"] });
+  });
+
+  it("reads the marker only on an issue the Fabrik App opened: one quoting it is set aside like any other", () => {
+    const quoted = anIssue({ number: 104, labels: ["needs-triage"], author: "kate", byApp: false, body });
+
+    const plan = planFor(triaged(wontfix), snapshotOf(quoted), kitConfig());
+
+    expect(plan.kind === "act" ? plan.actions.at(-1) : plan).toEqual({ kind: "close", issue: 104, reason: "not_planned" });
+  });
+
+  it("reads the marker only as the body's first line", () => {
+    const later = anIssue({ number: 104, labels: ["needs-triage"], author: "fabrik-app[bot]", byApp: true, body: `The Monitor saw an error.\n${body}` });
+
+    const plan = planFor(triaged(wontfix), snapshotOf(later), kitConfig());
+
+    expect(plan.kind === "act" ? plan.actions.at(-1) : plan).toEqual({ kind: "close", issue: 104, reason: "not_planned" });
+  });
+});
+
 describe("A reply on a needs-info issue", () => {
   const commented = (commenter: string, commenterIsBot: boolean) =>
     ({ kind: "issue-comment-created", issue: 7, commenter, commenterIsBot, body: "yes", comment: 9001 }) as const;

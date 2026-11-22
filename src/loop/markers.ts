@@ -228,6 +228,44 @@ export function withoutFlakyCheckIssueMarker(body: string): string {
   return flakyCheckIssueOf(body) === null ? body : body.replace(/^.*(?:\r?\n|$)/, "");
 }
 
+const SPIN_OFF_MARKER = /^<!-- fabrik:spin-off (\{.*?\}) -->/;
+
+/**
+ * Where a Spin-off came from (#883): the issue whose Design session opened it
+ * as the session finished.
+ */
+export interface SpinOffSource {
+  readonly from: "design";
+  readonly issue: number;
+}
+
+/**
+ * A Spin-off's first line (#883): it says the issue is a Spin-off, which the
+ * Kit opened on the Operator's word, and where it came from. It is the whole
+ * of what marks one: a Spin-off carries no label of its own.
+ */
+export function spinOffMarker(source: SpinOffSource): string {
+  return `<!-- fabrik:spin-off ${markerJson({ from: source.from, issue: source.issue })} -->`;
+}
+
+/**
+ * Where the Spin-off whose body this is came from, or null for any other
+ * body. Read as the body's first line only, and only on an issue the Fabrik
+ * App opened, which the caller checks: anyone can quote a marker in an issue
+ * they open (ADR-0037). A Design session that rewrites the issue drops the
+ * line, as Triage, its one reader, has sorted the issue by then.
+ */
+export function spinOffIn(body: string): SpinOffSource | null {
+  const json = SPIN_OFF_MARKER.exec(body)?.[1];
+  if (json === undefined) return null;
+  try {
+    const { from, issue } = JSON.parse(json) as Record<string, unknown>;
+    return from === "design" && typeof issue === "number" && Number.isSafeInteger(issue) && issue > 0 ? { from, issue } : null;
+  } catch {
+    return null;
+  }
+}
+
 const GATE_RERUN_MARKER = /^<!-- fabrik:gate-rerun (\{.*?\}) -->/;
 const GATE_RERUN_DONE_MARKER = /^<!-- fabrik:gate-rerun-done (\{.*?\}) -->/;
 const GATE_RERUN_DONE: readonly GateRerunDone[] = ["outside", "red-on-main", "red-again", "refused", "no-run"];

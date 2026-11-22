@@ -30,7 +30,7 @@ import {
   REVIEW_LABEL,
   WONTFIX,
 } from "./labels.ts";
-import { flakyCheckIssueOf } from "./markers.ts";
+import { flakyCheckIssueOf, spinOffIn } from "./markers.ts";
 import { requestChanges, sendBackToDesign } from "./mergeGate.ts";
 import { acknowledgeComment } from "./acknowledge.ts";
 import { closeSpecAfter } from "./specClosing.ts";
@@ -515,9 +515,14 @@ function replyOnNeedsInfo(
   };
 }
 
-/** Triage's sorting lands as its comment, then needs-triage swapped for a category and a state. */
+/**
+ * Triage's sorting lands as its comment, then needs-triage swapped for a
+ * category and a state. On a Spin-off (#883), an issue the Fabrik App opened
+ * whose body opens with the Spin-off marker, the contract refuses a `wontfix`
+ * that names no original, so nothing sets aside what the Operator asked for.
+ */
 function applyTriage(issueNumber: number, text: string, issue: IssueSnapshot, operator: string): Plan {
-  const parsed = parseTriageOutput(text, issueNumber);
+  const parsed = parseTriageOutput(text, issueNumber, issue.byApp && spinOffIn(issue.body) !== null);
   if (!parsed.ok) {
     return {
       kind: "fail",

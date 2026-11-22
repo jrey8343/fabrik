@@ -56,8 +56,11 @@ function isText(value: unknown): value is string {
 /**
  * Checks an already-parsed value against the contract, naming every problem.
  * Given the triaged issue's number, it also refuses a duplicateOf naming that issue.
+ * When the issue is a `spinOff` (#883), which the Kit opened on the Operator's
+ * word, it also refuses a `wontfix` that names no original: Triage sets a
+ * Spin-off aside only as a duplicate of a named issue.
  */
-export function readTriageOutput(value: unknown, issue?: number): TriageOutputResult {
+export function readTriageOutput(value: unknown, issue?: number, spinOff = false): TriageOutputResult {
   if (!isObject(value)) return { ok: false, errors: ["Triage output must be a JSON object"] };
   const errors: string[] = [];
   const { category, state, comment, brief, duplicateOf } = value;
@@ -95,6 +98,8 @@ export function readTriageOutput(value: unknown, issue?: number): TriageOutputRe
     } else if (duplicate === issue) {
       errors.push(`duplicateOf can't name #${issue}, the issue being triaged`);
     }
+  } else if (spinOff && state === WONTFIX) {
+    errors.push("a wontfix on a Spin-off needs duplicateOf: the Operator asked for this issue, so Triage sets it aside only as a duplicate of a named issue");
   }
 
   if (errors.length > 0) return { ok: false, errors };
@@ -110,13 +115,13 @@ export function readTriageOutput(value: unknown, issue?: number): TriageOutputRe
   };
 }
 
-/** Parses the text an agent emitted, then checks it, for the triaged issue when given. */
-export function parseTriageOutput(text: string, issue?: number): TriageOutputResult {
+/** Parses the text an agent emitted, then checks it, for the triaged issue when given, as a Spin-off when it is one. */
+export function parseTriageOutput(text: string, issue?: number, spinOff = false): TriageOutputResult {
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch (error) {
     return { ok: false, errors: [`Triage output is not valid JSON: ${(error as Error).message}`] };
   }
-  return readTriageOutput(value, issue);
+  return readTriageOutput(value, issue, spinOff);
 }
