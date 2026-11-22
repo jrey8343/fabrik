@@ -165,10 +165,62 @@ describe("A fault that is already an issue when its pull request merges (#885)",
   });
 
   it("is not opened again when the Kit opened it in a plan that was only partly applied, and takes no room under the cap twice", () => {
-    const plan = closing(merged, pullRequest(TWO_PASSES), issues({ open: 4, ofPullRequest: [{ number: 101, title: A.title, openedBy: "kit" }] }));
+    const plan = closing(merged, pullRequest(TWO_PASSES), issues({ open: 4, ofPullRequest: [{ number: 95, title: A.title, openedBy: "kit" }] }));
 
     expect(opened(plan).map(({ title }) => title)).toEqual([B.title]);
-    expect(followUpsOpenedIn(commentsOf(plan)[0] ?? "")).toEqual({ opened: [{ issue: 101, title: B.title }], left: [C.title] });
+    expect(followUpsOpenedIn(commentsOf(plan)[0] ?? "")?.left).toEqual([C.title]);
+  });
+
+  it("is recorded as the issue the Kit opened for the fault when the Kit opened it in such a plan, as if this plan had: the comment is the one record of it", () => {
+    const plan = closing(merged, pullRequest(TWO_PASSES), issues({ open: 1, ofPullRequest: [{ number: 95, title: B.title, openedBy: "kit" }] }));
+
+    expect(commentsOf(plan)).toEqual([
+      [
+        "<!-- fabrik:follow-ups-opened -->",
+        `<!-- fabrik:follow-up-opened #101 {"title":"${A.title}"} -->`,
+        `<!-- fabrik:follow-up-opened #95 {"title":"${B.title}"} -->`,
+        `<!-- fabrik:follow-up-opened #102 {"title":"${C.title}"} -->`,
+        "This pull request merged, so the Kit opened each of these faults its passes named as an issue, which enters at Triage (ADR-0039):",
+        "",
+        `- #101 ${A.title}`,
+        `- #95 ${B.title}`,
+        `- #102 ${C.title}`,
+      ].join("\n"),
+    ]);
+    expect(followUpsOpenedIn(commentsOf(plan)[0] ?? "")).toEqual({
+      opened: [
+        { issue: 101, title: A.title },
+        { issue: 95, title: B.title },
+        { issue: 102, title: C.title },
+      ],
+      left: [],
+    });
+  });
+
+  it("records every fault when the earlier plan opened them all and failed before its comment: a plain comment, and nothing opened", () => {
+    const plan = closing(merged, pullRequest([aPassNaming("a", A)]), issues({ open: 1, ofPullRequest: [{ number: 95, title: A.title, openedBy: "kit" }] }));
+
+    expect(actionsOf(plan)).toEqual([
+      {
+        kind: "comment",
+        issue: 42,
+        body: [
+          "<!-- fabrik:follow-ups-opened -->",
+          `<!-- fabrik:follow-up-opened #95 {"title":"${A.title}"} -->`,
+          "This pull request merged, so the Kit opened each of these faults its passes named as an issue, which enters at Triage (ADR-0039):",
+          "",
+          `- #95 ${A.title}`,
+        ].join("\n"),
+      },
+      { kind: "check-dispatch" },
+    ]);
+  });
+
+  it("stays under Already an issue, with no record of an issue the Kit opened, when the Operator opened it", () => {
+    const plan = closing(merged, pullRequest([aPassNaming("a", A, B)]), issues({ ofPullRequest: [{ number: 90, title: B.title, openedBy: "operator" }] }));
+
+    expect(followUpsOpenedIn(commentsOf(plan)[0] ?? "")).toEqual({ opened: [{ issue: 101, title: A.title }], left: [] });
+    expect(commentsOf(plan)[0]).toContain(`Already an issue when this pull request merged, so the Kit opened none for it:\n\n- #90 ${B.title}`);
   });
 
   it("leaves one comment and opens nothing when every fault is one", () => {

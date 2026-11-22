@@ -36,9 +36,13 @@ function followUpIssue(index: number): CreatedIssue {
  *   (`pullRequest.faults`), less one whose trimmed title repeats an earlier
  *   one's.
  * - **Already an issue.** One whose title an issue of this pull request
- *   already has (`issues.ofPullRequest`) is left out: the Operator opened it
- *   from its link, or an earlier plan that was only partly applied opened
- *   it.
+ *   already has (`issues.ofPullRequest`) is not opened again. When the
+ *   Operator opened that issue from its link, the comment names it apart.
+ *   When the Fabrik App did, in an earlier plan for this merge that was
+ *   only partly applied, the comment records it as the issue the Kit
+ *   opened for the fault, as if this plan had: that plan left no comment,
+ *   and the comment is where the Retro's evidence and a row read which
+ *   issue a fault became.
  * - **The cap.** The rest open in order while fewer than
  *   `caps.follow_up_issues` such issues are open, the ones this plan opens
  *   counted. Each one past that stays an Open as issue link in the comment.
@@ -48,24 +52,31 @@ export function openFaults({ merged }: PullRequestClosed, pullRequest: PullReque
   const faults = pullRequest.faults.filter(({ title }, at, all) => all.findIndex((earlier) => earlier.title.trim() === title.trim()) === at);
   if (faults.length === 0) return [];
   const existing = (fault: Fault) => issues.ofPullRequest.find(({ title }) => title.trim() === issueTitleOf(fault.title.trim()).trim());
-  const already = faults.flatMap((fault) => {
-    const issue = existing(fault);
-    return issue === undefined ? [] : [{ fault, issue: issue.number }];
-  });
   const fresh = faults.filter((fault) => existing(fault) === undefined);
   const room = Math.max(0, config.caps.followUpIssues - issues.open);
   const [opening, left] = [fresh.slice(0, room), fresh.slice(room)];
+  // Each fault the Kit opened an issue for, in the order named: the issue this plan opens, or the one an earlier plan of the Kit's did.
+  const opened = faults.flatMap((fault): OpenedFault[] => {
+    const issue = existing(fault);
+    if (issue?.openedBy === "kit") return [{ fault, issue: issue.number }];
+    const at = opening.indexOf(fault);
+    return at === -1 ? [] : [{ fault, issue: followUpIssue(at) }];
+  });
+  const already = faults.flatMap((fault) => {
+    const issue = existing(fault);
+    return issue?.openedBy === "operator" ? [{ fault, issue: issue.number }] : [];
+  });
   const { number } = pullRequest;
   return [
     ...opening.map((fault, at) => openFault(followUpIssue(at), fault, number)),
     linkedComment(number, [
       FOLLOW_UPS_OPENED_MARKER,
-      ...opening.flatMap(({ title }, at): Linked => ["\n", ...followUpOpenedLine(followUpIssue(at), title)]),
+      ...opened.flatMap(({ fault, issue }): Linked => ["\n", ...followUpOpenedLine(issue, fault.title)]),
       ...left.map(({ title }) => `\n${followUpLeftLine(title)}`),
       "\n",
       ...joinLinked(
         [
-          ...(opening.length === 0 ? [] : [openedPart(opening)]),
+          ...(opened.length === 0 ? [] : [openedPart(opened)]),
           ...(left.length === 0 ? [] : [leftPart(left, issues, number, config.caps.followUpIssues)]),
           ...(already.length === 0 ? [] : [alreadyPart(already)]),
         ],
@@ -73,6 +84,12 @@ export function openFaults({ merged }: PullRequestClosed, pullRequest: PullReque
       ),
     ]),
   ];
+}
+
+/** A fault with the issue the Kit opened for it: one this plan creates, or the number of one already there. */
+interface OpenedFault {
+  readonly fault: Fault;
+  readonly issue: CreatedIssue | number;
 }
 
 /**
@@ -97,11 +114,11 @@ function openFault(issue: CreatedIssue, { title, body }: Fault, pullRequest: num
   };
 }
 
-/** The comment's part naming each issue the plan opens. */
-function openedPart(opening: readonly Fault[]): Linked {
+/** The comment's part naming each issue the Kit opened for a fault, in this plan or an earlier one. */
+function openedPart(opened: readonly OpenedFault[]): Linked {
   return [
     `This pull request merged, so the Kit opened each of these faults its passes named as an issue, which enters at Triage (ADR-0039):\n`,
-    ...opening.flatMap(({ title }, at): Linked => ["\n- ", followUpIssue(at), ` ${withoutMentions(title)}`]),
+    ...opened.flatMap(({ fault, issue }): Linked => (typeof issue === "number" ? [`\n- #${issue} ${withoutMentions(fault.title)}`] : ["\n- ", issue, ` ${withoutMentions(fault.title)}`])),
   ];
 }
 

@@ -34,6 +34,13 @@ const commentOf = (plan: Plan): string =>
     ? ""
     : plan.actions.flatMap((action) => (action.kind === "comment" ? [action.body] : action.kind === "comment-linking" ? [action.body.map((part) => (typeof part === "string" ? part : "#101")).join("")] : [])).join("\n");
 
+/** A rule of ADR-0039's part on a Follow-up that is a fault, by its lead. */
+const rule = (lead: string) => {
+  const file = readdirSync(`${KIT}/docs/adr`).find((name) => name.startsWith("0039-")) ?? "";
+  const part = read(`docs/adr/${file}`).split("\nA Follow-up that is a fault is the third part built (#885):\n")[1]?.split("\n\nThis reverses")[0] ?? "";
+  return part.split("\n").find((line) => line.startsWith(`- **${lead}**`)) ?? "";
+};
+
 describe.skipIf(RELEASED_NOTES.has(NOTES))("The Kit-opens-issues release notes, on a Follow-up that is a fault (#885)", () => {
   const notes = read(NOTES);
   const changed = (lead: string) => notes.split("\n").find((line) => line.startsWith(`- **${lead}**`)) ?? "";
@@ -76,6 +83,21 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Kit-opens-issues release notes, 
     expect(once).toContain(`\`${FOLLOW_UPS_OPENED_MARKER}\``);
     expect(once).toContain("each issue it opened, each fault left over the cap with its Open as issue link, and each fault that was an issue already");
     expect(once).toContain("opens nothing more");
+  });
+
+  it("say a look after one that failed part-way records the issues the Fabrik App already opened, as the plan writes them", () => {
+    const again = planFor(
+      { kind: "pull-request-closed", pullRequest: 42, merged: true, closedByBot: false },
+      snapshotOfPullRequest(aPullRequest({ number: 42, open: false, draft: false, faults: [FAULT] }), {
+        followUpIssues: { repoUrl: "https://github.com/acme/shop", open: 1, ofPullRequest: [{ number: 95, title: FAULT.title, openedBy: "kit" }] },
+      }),
+      kitConfig(),
+    );
+
+    expect(openedBy(again)).toEqual([]);
+    expect(commentOf(again).split("\n")[1]).toBe(`<!-- fabrik:follow-up-opened #95 {"title":"${FAULT.title}"} -->`);
+    expect(changed("One comment, once.")).toContain("the next look leaves out each fault the Fabrik App already opened for that pull request, and its comment records each as the issue the Kit opened");
+    expect(rule("Once.")).toContain("and records it in its comment as the issue the Kit opened");
   });
 
   it("say the cap as the Kit config has it: its default, that it can only be lowered, what it counts, and that 0 opens none", () => {
@@ -153,7 +175,6 @@ describe("ADR-0039, on a Follow-up that is a fault (#885)", () => {
   const file = readdirSync(`${KIT}/docs/adr`).find((name) => name.startsWith("0039-")) ?? "";
   const adr = file === "" ? "" : read(`docs/adr/${file}`);
   const part = adr.split("\nA Follow-up that is a fault is the third part built (#885):\n")[1]?.split("\n\nThis reverses")[0] ?? "";
-  const rule = (lead: string) => part.split("\n").find((line) => line.startsWith(`- **${lead}**`)) ?? "";
 
   it("adds the Follow-up part as the third built, and leaves the parts before it as they were", () => {
     expect(adr).toContain("A Design session's Spin-offs are the first part built (#883):");

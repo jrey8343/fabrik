@@ -391,11 +391,13 @@ export interface FollowUpsOpened {
 /**
  * The marker line that comment records one opened fault on, among the
  * marker lines it opens with: the issue the plan opens for it, written as
- * its `#number` once it exists, and its title. It is where the Retro's
+ * its `#number` once it exists, or the number of the issue an earlier plan
+ * of the Kit's opened for it, and its title. It is where the Retro's
  * evidence and a row's Follow-ups read which issue a fault became.
  */
-export function followUpOpenedLine(issue: CreatedIssue, title: string): readonly (string | CreatedIssue)[] {
-  return ["<!-- fabrik:follow-up-opened ", issue, ` ${markerJson({ title })} -->`];
+export function followUpOpenedLine(issue: CreatedIssue | number, title: string): readonly (string | CreatedIssue)[] {
+  const end = ` ${markerJson({ title })} -->`;
+  return typeof issue === "number" ? [`<!-- fabrik:follow-up-opened #${issue}${end}`] : ["<!-- fabrik:follow-up-opened ", issue, end];
 }
 
 /** The marker line that comment records one fault left a link on, over the cap. */
