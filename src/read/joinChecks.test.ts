@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { workKeyOf } from "../kit/standing.ts";
+import { handBackMarker } from "../loop/markers.ts";
 import type { CommentFacts } from "../kit/weeklySummary.ts";
-import { aCheckIssue, aGateRerunAsk, aGateRerunDone, aLabelAdded, anOpenIssue, anOpenPullRequest, anOperatorMention, aPassNaming, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
+import { aCheckIssue, aComment, aGateRerunAsk, aGateRerunDone, aLabelAdded, anOpenIssue, anOpenPullRequest, anOperatorMention, aPassNaming, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
 import type { Facts } from "./gather.ts";
 import { joinChecks } from "./joinChecks.ts";
 import type { HeadCheck, RequiredChecksRead } from "./requiredChecks.ts";
@@ -362,6 +363,60 @@ describe("the join of kept rows with a Required checks read", () => {
 
       expect(joined.map(({ standing }) => [standing.name, standing.since])).toEqual([["yours-to-merge", "2026-11-06T20:00:00Z"]]);
       expect(joined).toEqual(rule);
+    });
+  });
+
+  describe("a Pairing session's pull request beside a Ticket whose agent PR is not handed to the Operator stands by itself, and settles so (#851)", () => {
+    const agentHead = head("1");
+    const pairHead = head("2");
+    const factsWith = (ticket: Parameters<typeof anOpenIssue>[0], agentPullRequest: Parameters<typeof anOpenPullRequest>[0]) =>
+      homeFactsOf({
+        github: factsOf({
+          openIssues: [anOpenIssue({ number: 8, ...ticket })],
+          openPullRequests: [anOpenPullRequest({ number: 50, ticket: 8, draft: false, headSha: agentHead, ...agentPullRequest })],
+          plainPullRequests: [aPlainPullRequest({ number: 74, author: "operator", headRef: "fabrik/pair-8", closes: [8], headSha: pairHead })],
+        }),
+      });
+    const atGate = factsWith({ labels: ["ready-for-agent"] }, { comments: [aVerdictComment("pass", agentHead, "2026-11-11T20:00:00Z")] });
+    const handedOver = factsWith({ labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-11T09:00:00Z")] }, { draft: true });
+    const handBack = aComment(["@operator The Review run on #50 failed: it crashed.", handBackMarker({ kind: "infrastructure-failure", role: "review", failure: "crash" })].join("\n"), "2026-11-11T09:00:00Z");
+    const handedBack = factsWith({ labels: ["ready-for-agent"] }, { comments: [handBack] });
+    const passed = [check("test", "passed", "2026-11-12T09:00:00Z"), check("lint", "passed", "2026-11-12T09:40:00Z")];
+    const running = [check("test", "running", "2026-11-12T09:41:00Z"), check("lint", "passed", "2026-11-12T09:40:00Z")];
+    const failing = [check("test", "failing", "2026-11-12T09:42:00Z"), check("lint", "passed", "2026-11-12T09:40:00Z")];
+    const reads = { passed, running, failing };
+    const readOf = (agent: keyof typeof reads, pairing: keyof typeof reads) => aChecksRead({ [agentHead]: reads[agent], [pairHead]: reads[pairing] });
+    const named = (rows: readonly Row[]) =>
+      byWork(rows).map(({ standing }) => [standing.issue, standing.pullRequest, standing.work, standing.name, standing.detail.head, "check" in standing.detail ? standing.detail.check : null]);
+
+    it.each([
+      ["passed", "running", [[8, 50, "ticket", "yours-to-merge", agentHead, null], [8, 74, "plain", "waiting-on-checks", pairHead, "test"]]],
+      ["passed", "failing", [[8, 50, "ticket", "yours-to-merge", agentHead, null], [8, 74, "plain", "check-failing", pairHead, "test"]]],
+      ["failing", "running", [[8, 50, "ticket", "check-failing", agentHead, "test"], [8, 74, "plain", "waiting-on-checks", pairHead, "test"]]],
+    ] as const)("the agent head %s and the Pairing head %s, kept from any read, settle as the rule gives them", (agent, pairing, rows) => {
+      for (const earlier of [null, readOf("passed", "passed"), readOf("failing", "failing"), readOf("running", "running")]) {
+        const { joined, rule } = joinedAndRule(atGate, earlier, readOf(agent, pairing));
+
+        expect(named(rule)).toEqual(rows);
+        expect(byWork(joined)).toEqual(byWork(rule));
+      }
+    });
+
+    it.each([
+      ["a `ready-for-human` issue", handedOver],
+      ["a hand-back on its agent PR", handedBack],
+    ])("joins the row of %s, carrying the Pairing session's number, and settles it as the rule does (#611)", (_what, facts) => {
+      for (const [earlier, later] of [
+        [null, readOf("passed", "running")],
+        [readOf("passed", "running"), readOf("passed", "passed")],
+        [readOf("passed", "passed"), readOf("passed", "failing")],
+      ] as const) {
+        const { joined, rule } = joinedAndRule(facts, earlier, later);
+
+        expect(rule.map(({ standing }) => [standing.issue, standing.pullRequest])).toEqual([[8, 74]]);
+        expect(joined).toEqual(rule);
+      }
+      expect(rowsOf(facts, null, readOf("passed", "running"), null, NOW).map(({ standing }) => [standing.name, standing.detail.pullRequest])).toEqual([["yours-to-do", "waiting-on-checks"]]);
     });
   });
 

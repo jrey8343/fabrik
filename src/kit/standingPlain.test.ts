@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { aLabelAdded, anOpenIssue, anOpenPullRequest, aPlainPullRequest, factsOf, standingFactsOf } from "../read/builders.ts";
+import { aComment, aLabelAdded, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aVerdictComment, factsOf, standingFactsOf } from "../read/builders.ts";
+import { handBackMarker } from "../loop/markers.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { type Standing, standingsOf, type StandingFacts } from "./standing.ts";
 import type { GitHubFacts, RepoKitFacts, RequiredChecksFact } from "./weeklySummary.ts";
@@ -230,6 +231,79 @@ describe("a Plain pull request's Standing", () => {
       expect(standings.filter(({ issue, pullRequest }) => issue === 12 || pullRequest === 80)).toEqual([
         expect.objectContaining({ issue: 12, pullRequest: 80, work: "ready-for-human", name: "yours-to-do", detail: { handBack: null, role: null, failure: null, label: null, pullRequest: "draft", head: HEAD } }),
       ]);
+    });
+
+    it("is the issue's own Standing, carrying the pull request's number, when a hand-back on the issue's agent PR gives it to the Operator", () => {
+      const handBack = aComment(["@operator The Review run on #50 failed: it crashed.", handBackMarker({ kind: "infrastructure-failure", role: "review", failure: "crash" })].join("\n"), "2026-11-07T09:00:00Z");
+      const standings = standingsIn({
+        openIssues: [anOpenIssue({ number: 12, labels: ["ready-for-agent"] })],
+        openPullRequests: [anOpenPullRequest({ number: 50, ticket: 12, draft: false, comments: [handBack] })],
+        plainPullRequests: [pairing({ draft: true })],
+      });
+      expect(standings).toEqual([
+        expect.objectContaining({ issue: 12, pullRequest: 80, work: "ticket", name: "yours-to-do", detail: expect.objectContaining({ handBack: "infrastructure-failure", role: "review", pullRequest: "draft", head: HEAD }) }),
+      ]);
+    });
+
+    it("stands by itself, carrying issue 12, beside the agent PR of a blocked ready-for-human issue, which is nobody's move", () => {
+      const blocked = anOpenIssue({ number: 12, labels: ["ready-for-human"], labelEvents: [aLabelAdded("ready-for-human", "2026-11-05T20:00:00Z")], blockers: [{ repo: "owner/product", number: 3 }], hiddenBlockers: 1 });
+      const standings = standingsIn({ openIssues: [blocked], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 12, draft: true })], plainPullRequests: [pairing({ draft: true })] });
+      expect(standings.map(({ issue, pullRequest, name }) => [issue, pullRequest, name]).toSorted(([, a], [, b]) => Number(a) - Number(b))).toEqual([
+        [12, 50, "blocked"],
+        [12, 80, "draft"],
+      ]);
+    });
+
+    describe("stands by itself beside a Ticket whose agent PR is not handed to the Operator (#851)", () => {
+      const AGENT_HEAD = "a".repeat(40);
+      const PAIR_HEAD = "b".repeat(40);
+      const RUNNING: RequiredChecksFact = [
+        { name: "test", is: "running" },
+        { name: "lint", is: "passed" },
+      ];
+      const FAILING: RequiredChecksFact = [
+        { name: "test", is: "failing" },
+        { name: "lint", is: "passed" },
+      ];
+      const besideReviewerPass = (agent: RequiredChecksFact, paired: RequiredChecksFact) =>
+        standingsIn(
+          {
+            openIssues: [anOpenIssue({ number: 8, labels: ["ready-for-agent"] })],
+            openPullRequests: [anOpenPullRequest({ number: 50, ticket: 8, draft: false, headSha: AGENT_HEAD, comments: [aVerdictComment("pass", AGENT_HEAD, "2026-11-08T12:00:00Z")] })],
+            plainPullRequests: [pairing({ number: 74, headRef: "fabrik/pair-8", closes: [8], headSha: PAIR_HEAD })],
+          },
+          kitWith({ [AGENT_HEAD]: agent, [PAIR_HEAD]: paired }),
+        )
+          .toSorted((a, b) => (a.pullRequest ?? 0) - (b.pullRequest ?? 0))
+          .map(({ issue, pullRequest, work, place, name, detail }) => ({ issue, pullRequest, work, place, name, detail }));
+
+      it("stands by itself, carrying issue 8, while agent PR 50 passed at the Merge gate is yours to merge, each named for its own head's checks", () => {
+        expect(besideReviewerPass(PASSED, RUNNING)).toEqual([
+          { issue: 8, pullRequest: 50, work: "ticket", place: "merge-gate", name: "yours-to-merge", detail: { plain: null, passedHead: AGENT_HEAD, head: AGENT_HEAD } },
+          { issue: 8, pullRequest: 74, work: "plain", place: null, name: "waiting-on-checks", detail: { plain: "pairing", check: "test", checksUnread: false, head: PAIR_HEAD } },
+        ]);
+      });
+
+      it("is named for its own failing check while agent PR 50 is yours to merge", () => {
+        expect(besideReviewerPass(PASSED, FAILING)).toEqual([
+          { issue: 8, pullRequest: 50, work: "ticket", place: "merge-gate", name: "yours-to-merge", detail: { plain: null, passedHead: AGENT_HEAD, head: AGENT_HEAD } },
+          { issue: 8, pullRequest: 74, work: "plain", place: null, name: "check-failing", detail: { plain: "pairing", check: "test", checkIs: "failing", head: PAIR_HEAD } },
+        ]);
+      });
+
+      it("waits on its own running check while agent PR 50 is named for its own failing one: no row names one head's check over the other's pull request", () => {
+        expect(besideReviewerPass(FAILING, RUNNING)).toEqual([
+          {
+            issue: 8,
+            pullRequest: 50,
+            work: "ticket",
+            place: "merge-gate",
+            name: "check-failing",
+            detail: { plain: null, check: "test", checkIs: "failing", passedAt: "2026-11-08T12:00:00Z", passedHead: AGENT_HEAD, head: AGENT_HEAD },
+          },
+          { issue: 8, pullRequest: 74, work: "plain", place: null, name: "waiting-on-checks", detail: { plain: "pairing", check: "test", checksUnread: false, head: PAIR_HEAD } },
+        ]);
+      });
     });
 
     it("joins issue 12 when its body closes another issue first", () => {
