@@ -18,19 +18,33 @@ import type { Row } from "./rows.ts";
  */
 const NOT_ON_AN_EARLIER_ROW = { shots: null } as const satisfies Partial<Row>;
 
+/** A Follow-up as a row kept it: with no kind on a row kept before a Follow-up had one (#885). */
+type KeptFollowUp = Omit<Row["followUps"][number], "kind"> & Partial<Pick<Row["followUps"][number], "kind">>;
+
 /** A row as a reader may have kept it at any release since v3.1.0: its Standings of any schema, and none of the fields a row has gained since unless its release had them. */
-type KeptRow = Omit<Row, "standing" | "plainPullRequest" | keyof typeof NOT_ON_AN_EARLIER_ROW> &
+type KeptRow = Omit<Row, "standing" | "plainPullRequest" | "followUps" | keyof typeof NOT_ON_AN_EARLIER_ROW> &
   Partial<Pick<Row, keyof typeof NOT_ON_AN_EARLIER_ROW>> & {
     readonly standing: unknown;
     readonly plainPullRequest: (Omit<NonNullable<Row["plainPullRequest"]>, "own"> & { readonly own: unknown }) | null;
+    readonly followUps?: readonly KeptFollowUp[];
   };
+
+/**
+ * A kept row's Follow-ups as this release has them: one kept before a
+ * Follow-up had a kind is an idea, as every Follow-up was then a link the
+ * Operator opened or left (#885). The list itself when each has its kind.
+ */
+function followUpsOf(kept: readonly KeptFollowUp[]): Row["followUps"] {
+  return kept.every((followUp) => "kind" in followUp) ? (kept as Row["followUps"]) : kept.map((followUp) => ({ ...followUp, kind: followUp.kind ?? "idea" }));
+}
 
 /**
  * A row a reader kept, as a row of this release: each Standing it holds read
  * at the current schema (readStanding), its own and, on a Pairing session's
  * row, the issue's own under `plainPullRequest.own`; and each field a row has
  * gained since it was kept read as a row with none of it, so one kept before
- * v4.1.0 has `shots` null. Every other field is as it was kept, and a row of
+ * v4.1.0 has `shots` null, and one kept before a Follow-up had a kind has
+ * each of its Follow-ups an idea. Every other field is as it was kept, and a row of
  * this release comes back as it is. Null for anything that isn't a row, and
  * for a row holding a Standing that doesn't read, a newer Kit's among them
  * (newerStandingSchemaOf). Beyond its Standings' schemas it checks nothing of
@@ -44,8 +58,10 @@ export function readRow(kept: unknown): Row | null {
   const own = keptOwn === null ? null : readStanding(keptOwn);
   if (standing === null || (keptOwn !== null && own === null)) return null;
   const plainPullRequest = (own === keptOwn ? row.plainPullRequest : { ...row.plainPullRequest, own }) as Row["plainPullRequest"];
-  const asKept = standing === row.standing && plainPullRequest === row.plainPullRequest && Object.keys(NOT_ON_AN_EARLIER_ROW).every((field) => field in row);
-  return asKept ? (kept as Row) : { ...NOT_ON_AN_EARLIER_ROW, ...row, standing, plainPullRequest };
+  const followUps = Array.isArray(row.followUps) ? followUpsOf(row.followUps) : undefined;
+  const asKept =
+    standing === row.standing && plainPullRequest === row.plainPullRequest && followUps === row.followUps && Object.keys(NOT_ON_AN_EARLIER_ROW).every((field) => field in row);
+  return asKept ? (kept as Row) : ({ ...NOT_ON_AN_EARLIER_ROW, ...row, standing, plainPullRequest, ...(followUps === undefined ? {} : { followUps }) } as Row);
 }
 
 /**

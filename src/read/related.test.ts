@@ -252,8 +252,8 @@ describe("the Follow-ups", () => {
 
   it("of a pass on the pull request's head are both given, with title and body, in the Verdict's order, none filed", () => {
     expect(pullRequestRow(withComments(verdictListing("pass", HEAD, "2026-11-08T12:00:00Z")))?.followUps).toEqual([
-      { title: "Cache the prices", body: "The prices are read on every request.\n\n- once per page", filedAs: null },
-      { title: "Tidy the cart", body: "", filedAs: null },
+      { title: "Cache the prices", body: "The prices are read on every request.\n\n- once per page", kind: "idea", filedAs: null },
+      { title: "Tidy the cart", body: "", kind: "idea", filedAs: null },
     ]);
   });
 

@@ -92,6 +92,29 @@ export interface ClosedIssueCommentsQueryResult {
   repository: Record<string, { number: number; comments: { nodes: { url: string; body: string; createdAt: string; author: { login: string; __typename: string } | null }[] } } | null>;
 }
 
+/** How many of a merged pull request's latest comments are read for its Follow-ups: its last pass and the Kit's comment at the merge are among them. */
+const MERGED_COMMENTS = 50;
+
+/**
+ * The latest comments of these merged pull requests, by number, each with
+ * who wrote it (#885): one query however many they are, each pull request
+ * under an alias of its own, and a connection inside no other.
+ */
+export function mergedCommentsQuery(numbers: readonly number[]): string {
+  return `
+  query ($owner: String!, $name: String!) {
+    repository(owner: $owner, name: $name) {
+      ${numbers.map((number) => `pullRequest${number}: pullRequest(number: ${number}) { number comments(last: ${MERGED_COMMENTS}) { nodes { body author ${ACTOR} } } }`).join("\n      ")}
+    }
+  }
+`;
+}
+
+/** What mergedCommentsQuery reads: each pull request by its alias, null for a number GitHub has no pull request of. */
+export interface MergedCommentsQueryResult {
+  repository: Record<string, { number: number; comments: { nodes: { body: string; author: { login: string; __typename: string } | null }[] } } | null>;
+}
+
 /** Every open pull request, agent and Plain, as the Weekly summary reads them, with each one's body, cross-references and whether the issues it closes are open. */
 export const OPEN_PULL_REQUESTS_QUERY = `
   query ($owner: String!, $name: String!, $after: String) {

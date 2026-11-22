@@ -1583,7 +1583,18 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   // The gather and the rows
 
   // With a Roll-in owed on pull request 50: the cross-reference from its closed issue, and that issue's comments.
-  Facts: { ...A_REPO_WITH_AN_OWED_ROLL_IN, issueBodies: [{ issue: 7, body: "From PR #50" }] } satisfies Facts,
+  Facts: {
+    ...A_REPO_WITH_AN_OWED_ROLL_IN,
+    issueBodies: [{ issue: 7, body: "From PR #50" }],
+    // What a merged pull request's comments say of its Follow-ups (#885): its last pass's, and the fault the Kit opened as issue 101.
+    mergedFollowUps: [
+      {
+        pullRequest: 48,
+        named: [{ title: "The saved-basket test is skipped", body: "`src/basket/save.test.ts:3` is `it.skip`.", kind: "fault" }],
+        opened: [{ issue: 101, title: "The saved-basket test is skipped" }],
+      },
+    ],
+  } satisfies Facts,
   RepoRead: {
     repo: "owner/product",
     product: true,
@@ -1606,7 +1617,11 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     ],
     mentions: [{ issue: 40, title: "The cart is slow" }],
     relatedTo: 51,
-    followUps: [{ title: "Cache the prices", body: "The prices are read on every request.", filedAs: 30 }],
+    // An idea the Operator opened from its link, and a fault, whose issue is the one the Kit opens when the pull request merges (#885).
+    followUps: [
+      { title: "Cache the prices", body: "The prices are read on every request.", kind: "idea", filedAs: 30 },
+      { title: "The saved-basket test is skipped", body: "`src/basket/save.test.ts:3` is `it.skip`.", kind: "fault", filedAs: null },
+    ],
     ticketClosed: null,
     plainPullRequest: null,
     evidence: {

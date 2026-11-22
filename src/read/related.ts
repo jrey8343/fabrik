@@ -1,11 +1,14 @@
 // What a row carries beside an agent pull request (#619): the issues that
 // could still be rolled in to it, its candidates, and each Roll-in owed on it
 // (#664, ./owedRollIn.ts); the open issues that only mention it; and the
-// Follow-ups its pass named. Each is said by the Kit's own readers, never
+// Follow-ups its pass named, each a fault or an idea, on a merged pull
+// request's row too, where a fault's issue is the one the Kit opened at the
+// merge (#885). Each is said by the Kit's own readers, never
 // guessed: a candidate's `From PR` line by the reader of that line, an owed
 // Roll-in by the Loop's owed rule, a Follow-up by the reader of a Verdict's
 // Follow-ups. Decided in #530 and #574. Pure, no I/O: worked out from a
 // gather's facts (./gather.ts).
+import { verdictsIn } from "../github/threads.ts";
 import { verdictsOn } from "../kit/retroEvidence.ts";
 import type { OpenIssueFacts, OpenPullRequestFacts } from "../kit/weeklySummary.ts";
 import { followUpsIn } from "../loop/followUps.ts";
@@ -22,9 +25,10 @@ import {
   REPLAY_LABEL,
   RETRO_LABEL,
 } from "../loop/labels.ts";
-import { fromPullRequestIn, type RollInText } from "../loop/markers.ts";
+import { followUpsOpenedIn, fromPullRequestIn, type RollInText } from "../loop/markers.ts";
 import { namesIssue } from "../loop/owedRollIn.ts";
-import type { Facts } from "./gather.ts";
+import type { FollowUp } from "../loop/verdict.ts";
+import type { Facts, MergedFollowUpsFacts } from "./gather.ts";
 import { owedOn } from "./owedRollIn.ts";
 
 /** An issue related to an open agent pull request: one that could still be rolled in to it, or one whose Roll-in the Operator settled and has not sent. */
@@ -149,26 +153,64 @@ export function mentionsOf(facts: Facts, pullRequest: number): { readonly issue:
   return mentions;
 }
 
+/** A Follow-up as a row carries it: its title, its body, its kind, and the issue it was filed as, whoever opened that, or null. */
+export type RowFollowUp = FollowUp & { readonly filedAs: number | null };
+
 /**
  * The Follow-ups the pass on open agent pull request `pullRequest`'s head
- * named, in the Verdict's order, each with its title, its body and the
- * number of the related issue, a candidate or an owed Roll-in's, that has
- * exactly its title, compared as the Retro's evidence compares a filed
- * Follow-up's, else null. None when the latest Verdict on its head is not a
- * pass, or it has none there. A Verdict is read from a bot's comment alone,
- * so quoting one fakes nothing.
+ * named, in the Verdict's order, each with its title, its body, its kind
+ * (#885) and the number of the related issue, a candidate or an owed
+ * Roll-in's, that has exactly its title, compared as the Retro's evidence
+ * compares a filed Follow-up's, else null. None when the latest Verdict on
+ * its head is not a pass, or it has none there. A Verdict is read from a
+ * bot's comment alone, so quoting one fakes nothing.
+ *
+ * On a merged agent pull request the gather read the comments of (those
+ * merged in the last 24 hours), the Follow-ups its last Verdict named, when
+ * that is a pass (mergedFollowUpsOf). `filedAs` is then the issue the Kit
+ * opened for it at the merge, as the Kit's comment there records it, by the
+ * same comparison of titles; else the open issue the Operator opened whose
+ * `From PR` line names the pull request and whose title is its own; else
+ * null. None on any other pull request.
  */
-export function followUpsOf(facts: Facts, pullRequest: number): { readonly title: string; readonly body: string; readonly filedAs: number | null }[] {
+export function followUpsOf(facts: Facts, pullRequest: number): RowFollowUp[] {
   const open = facts.github.openPullRequests.find(({ number }) => number === pullRequest);
-  if (open === undefined) return [];
+  if (open === undefined) return mergedFollowUps(facts, pullRequest);
   const onHead = open.comments.filter((comment) => verdictsOn([comment]).some(({ record }) => record.headSha === open.headSha)).at(-1);
   if (onHead === undefined || verdictsOn([onHead]).at(-1)?.record.verdict !== "pass") return [];
   const related = relatedOf(facts, pullRequest);
-  return followUpsIn(onHead.body).map(({ title, body }) => ({
+  return followUpsIn(onHead.body).map(({ title, body, kind }) => ({
     title,
     body,
+    kind,
     filedAs: related.find((issue) => issue.title.trim() === title.trim())?.issue ?? null,
   }));
+}
+
+/** A merged pull request's Follow-ups, from what the gather read of its comments: none in facts kept from a release that read none. */
+function mergedFollowUps({ github, operator, issueBodies, mergedFollowUps: read }: Facts, pullRequest: number): RowFollowUp[] {
+  const merged = (read as Facts["mergedFollowUps"] | undefined)?.find((each) => each.pullRequest === pullRequest);
+  if (merged === undefined) return [];
+  const byOperator = github.openIssues.filter(({ number, author }) => author === operator && fromPullRequestIn(issueBodies.find(({ issue }) => issue === number)?.body ?? "") === pullRequest);
+  return merged.named.map(({ title, body, kind }) => {
+    const sameTitle = (other: { readonly title: string }) => other.title.trim() === title.trim();
+    return { title, body, kind, filedAs: (kind === "fault" ? merged.opened.find(sameTitle)?.issue : undefined) ?? byOperator.find(sameTitle)?.number ?? null };
+  });
+}
+
+/**
+ * What the comments of merged agent pull request `pullRequest` say of its
+ * Follow-ups (#885), as the facts keep it: those its last Verdict named,
+ * when that is a pass, each with its kind, and each fault the Kit opened as
+ * an issue at the merge, as its comment there records. Null when it named
+ * none. Read from a bot's comments alone, as a Verdict is.
+ */
+export function mergedFollowUpsOf(pullRequest: number, comments: readonly { readonly body: string; readonly byBot: boolean }[]): MergedFollowUpsFacts | null {
+  const byBots = comments.filter(({ byBot }) => byBot).map(({ body }) => body);
+  const last = byBots.findLast((body) => verdictsIn([body]).length > 0);
+  const named = last === undefined || verdictsIn([last])[0]?.verdict !== "pass" ? [] : followUpsIn(last);
+  if (named.length === 0) return null;
+  return { pullRequest, named, opened: byBots.flatMap((body) => followUpsOpenedIn(body)?.opened ?? []) };
 }
 
 /** The open agent pull request issue `issue` could be rolled in to, or null. */

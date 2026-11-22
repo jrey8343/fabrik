@@ -549,6 +549,7 @@ export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts
     crossReferences: [],
     closedIssueComments: [],
     ticketStates: [],
+    mergedFollowUps: [],
     evidenceMarkers: [],
     shotsMarkers: [],
     ...overrides,

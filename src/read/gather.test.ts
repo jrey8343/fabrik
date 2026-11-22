@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient, type Repo } from "../github/client.ts";
 import { wordStanding } from "../kit/standingWording.ts";
 import { endedHeldLine } from "../loop/heldLine.ts";
-import { trialProblemLine } from "../loop/markers.ts";
+import { followUpsSection, type NamedFollowUp } from "../loop/followUps.ts";
+import { FOLLOW_UPS_OPENED_MARKER, trialProblemLine, verdictMarker } from "../loop/markers.ts";
 import { aDigestComment, aRollInComment } from "./builders.ts";
 import { type Facts, gatherRepo } from "./gather.ts";
-import { closedIssueCommentsQuery, MERGED_PULL_REQUESTS_QUERY } from "./homeQueries.ts";
+import { closedIssueCommentsQuery, MERGED_PULL_REQUESTS_QUERY, mergedCommentsQuery } from "./homeQueries.ts";
 import { threeDeepConnectionsIn } from "./queryShape.ts";
 import { promoteListOf } from "./promoteList.ts";
 import { rowsOf } from "./rows.ts";
@@ -102,6 +103,15 @@ function repoWith(raw: RawRepo): { client: ReadClient; calls: Calls } {
       if (query.includes("labels: $labels")) return answer({ repository: { owner: { login: "jrey8343" }, issues: { nodes: [] } } });
       if (query.includes("issues(labels: [$label], states: [OPEN, CLOSED]")) return answer({ repository: { defaultBranchRef: null, issues: { nodes: labelled(variables["label"]) } } });
       if (query.includes("issues(states: OPEN")) return answer({ repository: { issues: page(asked(issues)) } });
+      // Merged pull requests by number, each under an alias of its own, for their comments: what the repo holds of each, with none unless a test gives some.
+      const mergedByNumber = [...query.matchAll(/(\w+): pullRequest\(number: (\d+)\)/g)];
+      if (mergedByNumber.length > 0) {
+        const held = ([, alias = "", number]: RegExpMatchArray) => {
+          const merged = (raw.mergedPullRequests ?? []).find((pullRequest) => pullRequest["number"] === Number(number));
+          return [alias, merged === undefined ? null : { number: Number(number), comments: merged["comments"] ?? { nodes: [] } }];
+        };
+        return answer({ repository: Object.fromEntries(mergedByNumber.map(held)) });
+      }
       // Issues by number, each under an alias of its own: what the repo holds of it, or null for one it has none of.
       const byNumber = [...query.matchAll(/(\w+): issue\(number: (\d+)\)/g)];
       if (byNumber.length > 0) {
@@ -441,6 +451,76 @@ describe("a gather shaped for Home", () => {
         { number: 50, title: "Build the thing", ticket: 7, mergeCommit: "c".repeat(40), mergedAt: "2026-11-09T10:00:00Z" },
         { number: 53, title: "Build the thing", ticket: null, mergeCommit: null, mergedAt: "2026-11-09T11:30:00Z" },
       ]);
+    });
+
+    describe("what the comments of each agent pull request merged in the last 24 hours say of its Follow-ups (#885)", () => {
+      const BADGE = { kind: "fault", title: "The badge miscounts", body: "`badge.ts:14` reads a stale count." } as const;
+      const MONEY = { kind: "idea", title: "Extract the money type", body: "The cart and the till both round." } as const;
+      /** A comment on a merged pull request, as mergedCommentsQuery reads it: the Fabrik App's unless a test says who wrote it. */
+      const said = (body: string, author: Record<string, unknown> = APP) => ({ body, author });
+      const aPass = (...followUps: NamedFollowUp[]) =>
+        said([verdictMarker({ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD }), "Verdict: pass", ...followUpsSection(followUps, "https://github.com/jrey8343/shop", 50)].join("\n"));
+      const seenTo = said([FOLLOW_UPS_OPENED_MARKER, '<!-- fabrik:follow-up-opened #101 {"title":"The badge miscounts"} -->', "This pull request merged, so the Kit opened…"].join("\n"));
+
+      it("are held for each whose last pass named one: the Follow-ups it named, each with its kind, and each fault the Kit opened as an issue", async () => {
+        const facts = await factsOf({
+          mergedPullRequests: [
+            aRawMergedPullRequest({ number: 50, mergedAt: "2026-11-09T10:00:00Z", comments: { nodes: [aPass(BADGE, MONEY), seenTo] } }),
+            aRawMergedPullRequest({ number: 53, mergedAt: "2026-11-09T11:30:00Z", comments: { nodes: [aPass()] } }),
+            aRawMergedPullRequest({ number: 54, mergedAt: "2026-11-09T11:40:00Z" }),
+          ],
+        });
+
+        expect(facts.mergedFollowUps).toEqual([{ pullRequest: 50, named: [BADGE, MONEY], opened: [{ issue: 101, title: "The badge miscounts" }] }]);
+      });
+
+      it("are read from a bot's comments alone, so nobody names a Follow-up or an opened issue by quoting one", async () => {
+        const facts = await factsOf({
+          mergedPullRequests: [aRawMergedPullRequest({ comments: { nodes: [aPass(BADGE), said(seenTo.body, OPERATOR)] } }), aRawMergedPullRequest({ number: 53, comments: { nodes: [said(aPass(MONEY).body, OPERATOR)] } })],
+        });
+
+        expect(facts.mergedFollowUps).toEqual([{ pullRequest: 50, named: [BADGE], opened: [] }]);
+      });
+
+      it("are asked for in one query, by number, the latest 50 comments of each, only of the agent pull requests merged in the last 24 hours", async () => {
+        const { client, calls } = repoWith({
+          files: { [CALLER_PATH]: CALLER },
+          mergedPullRequests: [
+            aRawMergedPullRequest({ number: 50, mergedAt: "2026-11-09T10:00:00Z" }),
+            aRawMergedPullRequest({ number: 51, mergedAt: "2026-11-08T11:00:00Z" }),
+            aRawMergedPullRequest({ number: 52, mergedAt: "2026-11-09T11:00:00Z", headRefName: "fix-typo", author: OPERATOR }),
+            aRawMergedPullRequest({ number: 53, mergedAt: "2026-11-09T11:30:00Z" }),
+          ],
+        });
+
+        await gatherRepo(client, "jrey8343/shop", NOW);
+
+        const byNumber = calls.queries.filter((query) => /pullRequest\(number: \d+\)/.test(query));
+        expect(byNumber).toEqual([mergedCommentsQuery([50, 53])]);
+        expect(byNumber[0]).toMatch(/pullRequest50: pullRequest\(number: 50\) \{ number comments\(last: 50\) \{ nodes \{ body author \{ login __typename \} \} \} \}/);
+        expect(threeDeepConnectionsIn(byNumber[0] ?? "")).toEqual([]);
+      });
+
+      it("are none, and no query is made for them, in a repo where no agent pull request merged in the last 24 hours", async () => {
+        const { client, calls } = repoWith({ files: { [CALLER_PATH]: CALLER }, mergedPullRequests: [aRawMergedPullRequest({ number: 51, mergedAt: "2026-11-08T11:00:00Z" })] });
+
+        const read = await gatherRepo(client, "jrey8343/shop", NOW);
+
+        expect(read.product && read.facts?.mergedFollowUps).toEqual([]);
+        expect(calls.queries.filter((query) => /pullRequest\(number: \d+\)/.test(query))).toEqual([]);
+      });
+
+      it("give the merged pull request's row its Follow-ups, the fault's filedAs naming the issue the Kit opened", async () => {
+        const facts = await factsOf({
+          files: { [CALLER_PATH]: CALLER, [CONFIG_PATH]: JSON.stringify({ production: { url: "https://shop.example", environment: "production" } }) },
+          mergedPullRequests: [aRawMergedPullRequest({ number: 50, mergedAt: "2026-11-09T10:00:00Z", comments: { nodes: [aPass(BADGE, MONEY), seenTo] } })],
+        });
+
+        expect(rowsOf(facts, null, null, null, NOW).find(({ standing }) => standing.pullRequest === 50)?.followUps).toEqual([
+          { ...BADGE, filedAs: 101 },
+          { ...MONEY, filedAs: null },
+        ]);
+      });
     });
 
     it("give a row at Production to an agent pull request merged in the last 24 hours, in a repo declaring production, and none to a merged Plain pull request (#634)", async () => {
