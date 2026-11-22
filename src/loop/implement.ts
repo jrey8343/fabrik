@@ -461,6 +461,9 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
     return { kind: "fail", failure: "infrastructure", reason: `The snapshot is missing the Spin-offs already opened from #${pullRequest.number}, which the run's Spin-offs are held against` };
   }
   const setAside = setAsideAsSpinOffs(spinOffs, pullRequest, issueNumber, asks ?? [], spinOffIssues ?? []);
+  if ("unread" in setAside) {
+    return { kind: "fail", failure: "infrastructure", reason: `The asks read of the Request changes on #${pullRequest.number} hold no \`${setAside.unread}\`, which a Spin-off of the run names in from` };
+  }
   // Merging main in or rebasing onto it, to fix a conflict, is a change even with none of the run's own.
   if (changes.net.length === 0 && changes.updatedFromMain !== true && mainMerge === undefined) {
     // A Request-changes run's empty diff is no Verdict, so it never costs a Retry (#388).
@@ -731,45 +734,54 @@ interface SetAside {
  *   or its push was refused, which takes its note back out of the thread.
  *   The note still names it, by the number it has, so later runs are given
  *   it.
+ *
+ * The contract has already refused a `from` that names none of `asks`
+ * (readRequestChangesRunOutput). Should one get here all the same, nothing
+ * is added to the plan and `unread` names it, so the landing fails as any
+ * other whose snapshot lacks what it needs, and no issue is opened under a
+ * review nobody read.
  */
-function setAsideAsSpinOffs(
+export function setAsideAsSpinOffs(
   returned: readonly RequestedSpinOff[],
   pullRequest: PullRequestSnapshot,
   ticket: number,
   asks: readonly RequestChangesAsks[],
   opened: readonly OpenedSpinOff[],
-): SetAside {
+): SetAside | { readonly unread: string } {
   const same = (spinOff: RequestedSpinOff) => (one: OpenedSpinOff) => one.from === spinOff.from && one.title.trim() === withoutMentions(spinOff.title).trim();
   const spinOffs = returned.filter((spinOff) => !pullRequest.openedSpinOffs.some(same(spinOff)));
   if (spinOffs.length === 0) return { actions: [], markers: [], listed: [], everyAsk: false };
-  // Each one's issue: the number of the one that is there already, or the one this plan creates, keyed by its place among those returned.
-  const issues = spinOffs.map((spinOff, i) => opened.find(same(spinOff))?.issue ?? spinOffIssue(i));
-  // The contract has already refused a `from` that names none of these asks.
-  const askedIn = (from: string) => asks.flatMap(({ review, asks: theirs }) => theirs.filter(({ id }) => id === from).map(({ url }) => ({ review, url })))[0];
-  const one = spinOffs.length === 1;
-  const named = new Set(spinOffs.map(({ from }) => from));
+  const askNamed = (from: string) => asks.flatMap(({ review, asks: theirs }) => theirs.filter(({ id }) => id === from).map(({ url }) => ({ review, url })))[0];
+  const unread = spinOffs.find(({ from }) => askNamed(from) === undefined);
+  if (unread !== undefined) return { unread: unread.from };
+  // Each with the ask it names, and its issue: the number of the one that is there already, or the one this plan creates, keyed by its place among those returned.
+  const each = spinOffs.flatMap((spinOff, i) => {
+    const ask = askNamed(spinOff.from);
+    return ask === undefined ? [] : [{ spinOff, ask, issue: opened.find(same(spinOff))?.issue ?? spinOffIssue(i) }];
+  });
+  const one = each.length === 1;
+  const named = new Set(each.map(({ spinOff }) => spinOff.from));
   const read = pullRequest.requestChangesRunReviews.map((review) => asks.find((one) => one.review === review)?.asks ?? []);
   return {
     everyAsk: read.length > 0 && read.every((theirs) => theirs.length > 0 && theirs.every(({ id }) => named.has(id))),
-    actions: spinOffs.flatMap((spinOff, i) => {
-      const issue = issues[i];
-      return issue === undefined || typeof issue === "number"
+    actions: each.flatMap(({ spinOff, ask, issue }) =>
+      typeof issue === "number"
         ? []
         : [
             openSpinOff(
               issue,
-              { from: "request-changes", pullRequest: pullRequest.number, review: askedIn(spinOff.from)?.review ?? 0, ask: spinOff.from },
+              { from: "request-changes", pullRequest: pullRequest.number, review: ask.review, ask: spinOff.from },
               { ...spinOff, lines: [fromPullRequestLine(pullRequest.number)] },
               [{ ticket }],
             ),
-          ];
-    }),
-    markers: spinOffs.map((spinOff, i) => openedSpinOffLine(issues[i] ?? spinOffIssue(i), { from: spinOff.from, title: withoutMentions(spinOff.title) })),
+          ],
+    ),
+    markers: each.map(({ spinOff, issue }) => openedSpinOffLine(issue, { from: spinOff.from, title: withoutMentions(spinOff.title) })),
     listed: [
       [
-        `\nThe Kit opened ${one ? "1 Spin-off" : `${spinOffs.length} Spin-offs`}, work the Operator's Request changes asked to be ${one ? "an issue of its own" : "issues of their own"}, which Triage sorts next. ${one ? "It waits" : "Each waits"} on #${ticket}, this pull request's Ticket.\n`,
-        ...spinOffs.flatMap((spinOff, i) =>
-          spinOffItem(issues[i] ?? spinOffIssue(i), spinOff.title, `Asked for in [the Operator's ${spinOff.from.startsWith("inline-") ? "comment on the code" : "Request changes"}](${askedIn(spinOff.from)?.url ?? pullRequest.url})`),
+        `\nThe Kit opened ${one ? "1 Spin-off" : `${each.length} Spin-offs`}, work the Operator's Request changes asked to be ${one ? "an issue of its own" : "issues of their own"}, which Triage sorts next. ${one ? "It waits" : "Each waits"} on #${ticket}, this pull request's Ticket.\n`,
+        ...each.flatMap(({ spinOff, ask, issue }) =>
+          spinOffItem(issue, spinOff.title, `Asked for in [the Operator's ${spinOff.from.startsWith("inline-") ? "comment on the code" : "Request changes"}](${ask.url})`),
         ),
       ],
     ],

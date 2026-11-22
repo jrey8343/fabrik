@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { anIssue, aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import { leftDraftSinceVerdictIn, notDismissedIn, type PullRequestHistoryItem, pushedSinceVerdictIn, requestChangesRunIn, requestChangesSinceRunIn, verdictsIn } from "../github/threads.ts";
 import { type OpenedSpinOff, openedSpinOffsIn, pushedHeadIn, requestChangesAnswersIn, requestChangesRunStartedMarker, stepUpReasonIn, verdictMarker } from "./markers.ts";
+import { setAsideAsSpinOffs } from "./implement.ts";
 import { runInFlight } from "./retry.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan, PullRequestSnapshot, RequestChangesAsks, Snapshot, VerdictRecord } from "./types.ts";
@@ -400,6 +401,15 @@ describe("A Spin-off the Kit already opened from the pull request (#884)", () =>
       failure: "infrastructure",
       reason: "The snapshot is missing the Spin-offs already opened from #50, which the run's Spin-offs are held against",
     });
+  });
+});
+
+describe("A Spin-off that names an ask the push job's read doesn't hold (#884)", () => {
+  // The contract refuses such a `from` before a plan is made, so this is read where the plan's part is built.
+  it("is opened under no made-up review: nothing is added to the plan, and the ask that wasn't read is named", () => {
+    const unread = { title: "Export the waitlist as CSV", body: "The Operator asked for it apart.", from: "inline-10" };
+
+    expect(setAsideAsSpinOffs([unread], aPullRequest(), 7, ASKS, [])).toEqual({ unread: "inline-10" });
   });
 });
 
