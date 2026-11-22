@@ -502,24 +502,24 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       // Each Spin-off's issue, before the note that names it by its number (#884).
       ...setAside.actions,
       noteOf(pullRequest.number, [
-          // Marks the push as the run's outcome, so Reviews give Verdicts again, and the next one is marked as from a Request-changes run if it was one.
-          // A Touch-up's says which it is (#750).
-          requestChanges ? REQUEST_CHANGES_RUN_MARKER : fixes.touchUp !== undefined ? touchUpPushMarker(fixes.touchUp) : RETRY_PUSH_MARKER,
-          ...(recorded === null ? [] : [recorded.marker]),
-          ...setAside.markers,
-          ...stepUpReasonLine(fixes),
-          ...pushedHead(changes),
-          requestChanges
-            ? `The Implementer pushed the Operator's requested changes to \`${branch}\`${mainMerge === undefined ? "" : `, which no longer conflicts with \`main\` at ${mainMerge.main.slice(0, 7)}`}; Review runs again on it.`
-            : fixes.touchUp !== undefined
-              ? `The Implementer pushed ${fixRunName("touch-up", fixes.touchUp)} to \`${branch}\`, fixing the Execution flaw's findings without using a Retry; Review runs again on it.`
-              : `${UNMARKED_RETRY_PUSH}\`${branch}\`; Review runs again on it.`,
-          "",
-          ...(recorded === null ? [] : [...recorded.lines, ""]),
-          // Present: the on-a-PR contract above requires it.
-          withoutMentions(parsed.output.fix ?? ""),
-          ...setAside.listed,
-          ...consideredSection(parsed.output.operatorCommentsConsidered ?? [], fixes.operatorComments),
+        // Marks the push as the run's outcome, so Reviews give Verdicts again, and the next one is marked as from a Request-changes run if it was one.
+        // A Touch-up's says which it is (#750).
+        requestChanges ? REQUEST_CHANGES_RUN_MARKER : fixes.touchUp !== undefined ? touchUpPushMarker(fixes.touchUp) : RETRY_PUSH_MARKER,
+        ...(recorded === null ? [] : [recorded.marker]),
+        ...setAside.markers,
+        ...stepUpReasonLine(fixes),
+        ...pushedHead(changes),
+        requestChanges
+          ? `The Implementer pushed the Operator's requested changes to \`${branch}\`${mainMerge === undefined ? "" : `, which no longer conflicts with \`main\` at ${mainMerge.main.slice(0, 7)}`}; Review runs again on it.`
+          : fixes.touchUp !== undefined
+            ? `The Implementer pushed ${fixRunName("touch-up", fixes.touchUp)} to \`${branch}\`, fixing the Execution flaw's findings without using a Retry; Review runs again on it.`
+            : `${UNMARKED_RETRY_PUSH}\`${branch}\`; Review runs again on it.`,
+        "",
+        ...(recorded === null ? [] : [...recorded.lines, ""]),
+        // Present: the on-a-PR contract above requires it.
+        withoutMentions(parsed.output.fix ?? ""),
+        ...setAside.listed,
+        ...consideredSection(parsed.output.operatorCommentsConsidered ?? [], fixes.operatorComments),
       ]),
       { kind: "push-branch", branch },
       ...previewToLink(section, config, branch, pullRequest.number),
@@ -633,7 +633,7 @@ function requestChangesRunEmpty(
         REQUEST_CHANGES_RUN_EMPTY_MARKER,
         ...(recorded === null ? [] : [recorded.marker]),
         ...setAside.markers,
-        `${committedNothing}: it set aside every point of the Operator's Request changes as a Spin-off, so nothing was to be built. ${
+        `${committedNothing}: every ask of the Operator's Request changes, the review's own words and each comment on the code in it, was set aside as a Spin-off, so nothing was to be built. ${
           opens
             ? `#${number} is back at the Merge gate at ${head}, where its pass stands. No Review runs, and no retry was used.`
             : `Its pass on ${head} stands, so no Review runs and no retry was used. The Merge gate opens once its Digest is written.`

@@ -162,7 +162,7 @@ function digestWrittenOnPass(event: Pick<Passed, "headSha">, pullRequest: PullRe
  */
 export function backAtGateOnStandingPass(pullRequest: PullRequestSnapshot, snapshot: Pick<Snapshot, "operator" | "kitIssues">, config: KitConfig): Action[] | null {
   if (!passedAt(pullRequest, pullRequest.headSha)) return null;
-  if (config.digest.enabled && !pullRequest.leftDraftSinceVerdict) return digestWrittenOnPass(pullRequest, pullRequest, snapshot, config);
+  if (config.digest.enabled && !pullRequest.leftDraftSinceVerdict) return digestWrittenOnPass({ headSha: pullRequest.headSha }, pullRequest, snapshot, config);
   return gateOpening(pullRequest, snapshot.operator);
 }
 

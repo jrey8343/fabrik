@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import { leftDraftSinceVerdictIn, notDismissedIn, type PullRequestHistoryItem, pushedSinceVerdictIn, requestChangesRunIn, requestChangesSinceRunIn, verdictsIn } from "../github/threads.ts";
-import { openedSpinOffsIn, requestChangesRunStartedMarker, verdictMarker } from "./markers.ts";
+import { openedSpinOffsIn, pushedHeadIn, requestChangesAnswersIn, requestChangesRunStartedMarker, stepUpReasonIn, verdictMarker } from "./markers.ts";
 import { runInFlight } from "./retry.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan, PullRequestSnapshot, RequestChangesAsks, Snapshot, VerdictRecord } from "./types.ts";
@@ -146,6 +146,18 @@ describe("The plan landing a Request-changes run that returned a Spin-off (#884)
     expect(openedSpinOffsIn(lines.join("\n"))).toEqual([{ issue: 57, from: "inline-9", title: "Export the waitlist as CSV" }]);
   });
 
+  it("leaves every other marker line of the note where its reader looks: the answers, the Step-up reason and the pushed head", () => {
+    const pushedHead = "c".repeat(40);
+    const event = landed({ ...PUSHED, pushedHead }, EVERY_ASK);
+    if (event.kind !== "implement-run-finished" || event.fixes === undefined) throw new Error("expected a Request-changes run");
+    const posted = note(planFor({ ...event, fixes: { ...event.fixes, stepUpReason: "request-changes" } }, snapshot(), kitConfig()));
+
+    expect(requestChangesAnswersIn(posted)).toEqual({ review: 900, reviewMiss: false, amendsTicket: true });
+    expect(stepUpReasonIn(posted)).toBe("request-changes");
+    expect(pushedHeadIn(posted)).toBe(pushedHead);
+    expect(openedSpinOffsIn(posted)).toHaveLength(2);
+  });
+
   it("notifies nobody: neither the issue nor the note mentions anyone, whatever the run wrote", () => {
     const plan = planFor(landed(PUSHED, [spinOff({ title: "Ask @operator about exports", body: "@operator wrote: open this separately." })]), snapshot(), kitConfig());
 
@@ -207,7 +219,7 @@ describe("A Request-changes run that committed nothing and returned a Spin-off f
 
     expect(lines[0]).toBe("<!-- fabrik:request-changes-run-empty -->");
     expect(lines[4]).toBe(
-      "The Request-changes run on #50 committed nothing to `fabrik/ticket-7` on top of aaaaaaa: it set aside every point of the Operator's Request changes as a Spin-off, so nothing was to be built. #50 is back at the Merge gate at aaaaaaa, where its pass stands. No Review runs, and no retry was used.",
+      "The Request-changes run on #50 committed nothing to `fabrik/ticket-7` on top of aaaaaaa: every ask of the Operator's Request changes, the review's own words and each comment on the code in it, was set aside as a Spin-off, so nothing was to be built. #50 is back at the Merge gate at aaaaaaa, where its pass stands. No Review runs, and no retry was used.",
     );
     expect(lines).toContain("Renamed the total, and set the CSV export aside as the Operator asked.");
     expect(lines).toContain("- #57 Text the waitlist");
