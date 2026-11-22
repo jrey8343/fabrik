@@ -15,11 +15,12 @@
 import { verdictsIn } from "../github/threads.ts";
 import { withoutChangeLines } from "../loop/changeFingerprint.ts";
 import type { RequestChangesAnswers } from "../loop/implementOutput.ts";
-import { DISPATCH_LABEL, READY_FOR_HUMAN, REVIEW_LABEL } from "../loop/labels.ts";
+import { DISPATCH_LABEL, NEEDS_DESIGN, READY_FOR_HUMAN, REVIEW_LABEL, STATE_LABELS, type StateLabel } from "../loop/labels.ts";
 import { followUpsIn } from "../loop/followUps.ts";
-import { escapeMarkerIn, fromPullRequestIn, fromRetroIn, requestChangesAnswersIn } from "../loop/markers.ts";
+import { escapeMarkerIn, type FollowUpsOpened, followUpsOpenedIn, fromPullRequestIn, fromRetroIn, requestChangesAnswersIn } from "../loop/markers.ts";
 import { retrosIn, retroWindowStart } from "../loop/retro.ts";
 import { type RetroEvidence, type RetroIssueSnapshot, STRENGTHS, type Strength, type Verdict, type VerdictRecord } from "../loop/types.ts";
+import type { FollowUpKind } from "../loop/verdict.ts";
 import { rubricId } from "./rubrics.ts";
 import { isLive, recordPathOf, type RunRecord, runKey } from "./runRecord.ts";
 import { inSample, type ScoreFile } from "./scorer.ts";
@@ -200,6 +201,23 @@ export interface FollowUpIssueFacts {
   /** Who opened it: only the Operator's issues count. */
   readonly author: string;
   readonly body: string;
+}
+
+/**
+ * An issue the Kit opened for a Follow-up that is a fault (#885), as GitHub
+ * has it now: what the Retro's evidence says became of it.
+ */
+export interface KitFollowUpIssueFacts {
+  readonly number: number;
+  readonly state: "open" | "closed";
+  /** How it closed, as GitHub records it; null while it is open, and for one closed with no reason. */
+  readonly closedAs: "completed" | "not_planned" | "duplicate" | null;
+  /** Its labels now. */
+  readonly labels: readonly string[];
+  /** Its label timeline: one that went to a Design session carried `needs-design`. */
+  readonly labelEvents: readonly LabelEvent[];
+  /** Who closed it last, a bot's login ending `[bot]`; null while it is open, or when GitHub names nobody. */
+  readonly closedBy: string | null;
 }
 
 /** What the metrics read of one Product repo on GitHub. */
@@ -548,6 +566,13 @@ export function verdictsOn(comments: readonly CommentFacts[]): PostedVerdict[] {
        * GitHub no longer has is left out, and its PRs carry its number alone.
        */
       readonly tickets: readonly TicketTextFacts[];
+      /**
+       * The issues evidenceFollowUpIssuesOf names, each as GitHub has it now, as
+       * the evidence job read them (#885): the facts hold only the comment that
+       * says which issue a fault became. One GitHub no longer has is left out,
+       * and its fault names the issue with a state nobody could read.
+       */
+      readonly followUpIssues: readonly KitFollowUpIssueFacts[];
     }
     
     /** A Ticket's title and body, as GitHub has them now. */
@@ -685,16 +710,44 @@ export function verdictsOn(comments: readonly CommentFacts[]): PostedVerdict[] {
           readonly inline: readonly InlineCommentFacts[];
       };
   
-  /** A Follow-up a pass Verdict named: work outside its Ticket's scope, left for the Operator to open as an issue or ignore. */
+  /**
+   * A Follow-up a pass Verdict named: work outside its Ticket's scope. A fault
+   * the Kit opens as an issue when the pull request merges, under
+   * `caps.follow_up_issues`; an idea is left for the Operator to open from its
+   * link or ignore (#885, ADR-0039).
+   */
   export interface FollowUpEvidence {
     /** `#<pr>`: the PR whose pass named it. */
     readonly ref: string;
     readonly pullRequest: number;
+    /** A fault or an idea; one named before a Follow-up had a kind is an idea. */
+    readonly kind: FollowUpKind;
     readonly title: string;
     readonly body: string;
     /** The issue the Operator opened it as through its Open as issue link, still titled as the link prefilled it, or null. */
     readonly openedAs: number | null;
+    /** On a fault the Kit opened as an issue at the merge: that issue, and what became of it. Null on an idea, and on a fault the Kit opened no issue for. */
+    readonly kitOpened: KitOpenedEvidence | null;
+    /** Whether it is a fault the merge left an Open as issue link, over `caps.follow_up_issues`. */
+    readonly overCap: boolean;
   }
+
+  /**
+   * The issue the Kit opened for a fault, and what became of it: while open,
+   * its state label, null with none; once closed, how, and who closed it, the
+   * Operator, Triage (the Kit, on an issue that never went to a Design
+   * session) or anyone else, the Kit after a Design session among them. Its
+   * state is `unknown` when the evidence job could not read the issue.
+   */
+  export type KitOpenedEvidence = {
+    /** `#<issue>`: the issue, which a finding can cite. */
+    readonly ref: string;
+    readonly issue: number;
+  } & (
+    | { readonly state: "open"; readonly stateLabel: StateLabel | null }
+    | { readonly state: "closed"; readonly closedAs: "completed" | "not_planned" | "duplicate" | null; readonly closedBy: "operator" | "triage" | "other" }
+    | { readonly state: "unknown" }
+  );
   
   /** A run a Scorer failed: its score file, and the run as the store holds it. */
   export interface LowScoreEvidence {
@@ -845,7 +898,7 @@ export function verdictsOn(comments: readonly CommentFacts[]): PostedVerdict[] {
    * number alone, so the evidence job reads each one's title and body and
    * gives them to evidenceBundle as `tickets`.
    */
-  export function evidenceTicketsOf(input: Omit<RetroEvidenceInput, "tickets">): number[] {
+  export function evidenceTicketsOf(input: Omit<RetroEvidenceInput, "tickets" | "followUpIssues">): number[] {
     const window = windowOf(input);
     const metrics = metricsOf(input);
     // Which PRs they are needs no transcript.
@@ -917,7 +970,11 @@ export function verdictsOn(comments: readonly CommentFacts[]): PostedVerdict[] {
         ]),
       ]),
       ...bundle.feedback.map(({ ref }) => pullRequest(ref)),
-      ...bundle.followUps.flatMap((followUp) => [pullRequest(followUp.ref), ...(followUp.openedAs === null ? [] : [issue(followUp.openedAs)])]),
+      ...bundle.followUps.flatMap((followUp) => [
+        pullRequest(followUp.ref),
+        ...(followUp.openedAs === null ? [] : [issue(followUp.openedAs)]),
+        ...(followUp.kitOpened === null ? [] : [issue(followUp.kitOpened.issue)]),
+      ]),
       ...bundle.lowScores.flatMap((low) => [{ ref: low.ref, kind: "score" as const }, ...(low.run === null ? [] : [record(low.run)])]),
       ...bundle.sample.flatMap((sampled) => [
         pullRequest(sampled.ref),
@@ -1129,19 +1186,67 @@ function pushesOf(commits: readonly CommitFacts[], operator: string): OperatorFe
   });
 }
 
-/** The Follow-ups the Fabrik App's pass Verdicts listed on each agent PR merged in the window, read back from the Verdict comments. */
-function followUpsOf(window: Window, { facts, operator }: RetroEvidenceInput): FollowUpEvidence[] {
-  return mergedIn(window, facts).flatMap(({ number, comments }) =>
-    comments
+/**
+ * The Follow-ups the Fabrik App's pass Verdicts listed on each agent PR
+ * merged in the window, read back from the Verdict comments, each with its
+ * kind. A fault carries what the merge did with it (#885), read from the
+ * Kit's comment on the merged pull request, a bot's alone: the issue the Kit
+ * opened, with what became of it, or that it stayed a link over the cap.
+ */
+function followUpsOf(window: Window, { facts, operator, followUpIssues }: RetroEvidenceInput): FollowUpEvidence[] {
+  return mergedIn(window, facts).flatMap(({ number, comments }) => {
+    const atMerge = faultsSeenToOn(comments);
+    return comments
       .filter((comment) => verdictsOn([comment]).some(({ record }) => record.verdict === "pass"))
       .flatMap((comment) => followUpsIn(comment.body))
-      .map(({ title, body }) => {
+      .map(({ kind, title, body }): FollowUpEvidence => {
         const opened = facts.followUpIssues.find(
           (issue) => issue.author === operator && fromPullRequestIn(issue.body) === number && issue.title.trim() === title.trim(),
         );
-        return { ref: `#${number}`, pullRequest: number, title, body, openedAs: opened?.number ?? null };
-      }),
-  );
+        const sameTitle = (other: string) => other.trim() === title.trim();
+        const issue = kind === "fault" ? atMerge.opened.find((each) => sameTitle(each.title))?.issue : undefined;
+        return {
+          ref: `#${number}`,
+          pullRequest: number,
+          kind,
+          title,
+          body,
+          openedAs: opened?.number ?? null,
+          kitOpened: issue === undefined ? null : kitOpenedOf(issue, followUpIssues, operator),
+          overCap: kind === "fault" && atMerge.left.some(sameTitle),
+        };
+      });
+  });
+}
+
+/** What the Kit's comment on a merged pull request records of its faults: every such comment's, a bot's alone, so quoting one records nothing. */
+function faultsSeenToOn(comments: readonly CommentFacts[]): FollowUpsOpened {
+  const seenTo = comments.flatMap((comment) => {
+    const recorded = comment.byBot ? followUpsOpenedIn(comment.body) : null;
+    return recorded === null ? [] : [recorded];
+  });
+  return { opened: seenTo.flatMap(({ opened }) => opened), left: seenTo.flatMap(({ left }) => left) };
+}
+
+/** The issue the Kit opened for a fault, with what became of it, as the evidence job read it. */
+function kitOpenedOf(issue: number, read: readonly KitFollowUpIssueFacts[], operator: string): KitOpenedEvidence {
+  const named = { ref: `#${issue}`, issue };
+  const facts = read.find(({ number }) => number === issue);
+  if (facts === undefined) return { ...named, state: "unknown" };
+  if (facts.state === "open") return { ...named, state: "open", stateLabel: STATE_LABELS.find((label) => facts.labels.includes(label)) ?? null };
+  const wentToDesign = facts.labelEvents.some(({ label, action }) => label === NEEDS_DESIGN && action === "labeled");
+  const closedBy = facts.closedBy === operator ? "operator" : facts.closedBy?.endsWith("[bot]") === true && !wentToDesign ? "triage" : "other";
+  return { ...named, state: "closed", closedAs: facts.closedAs, closedBy };
+}
+
+/**
+ * The issues the Kit opened for the faults of the agent PRs merged in the
+ * Retro's window (#885), each once: the facts hold the comment that says
+ * which issue each fault became, so the evidence job reads each one as it is
+ * now and gives them to evidenceBundle as `followUpIssues`.
+ */
+export function evidenceFollowUpIssuesOf(input: Omit<RetroEvidenceInput, "tickets" | "followUpIssues">): number[] {
+  return [...new Set(mergedIn(windowOf(input), input.facts).flatMap(({ comments }) => faultsSeenToOn(comments).opened.map(({ issue }) => issue)))];
 }
 
 /**

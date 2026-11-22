@@ -1,9 +1,10 @@
 // Small builders for the Retro evidence bundle's tests, beside the Kit's
 // record and GitHub-facts builders (src/read/builders.ts) that the bundle's
 // tests build its facts with: say only what a test cares about.
-import type { CommentFacts, RetroEvidenceInput, RetroIssueFacts } from "../kit/retroEvidence.ts";
+import type { CommentFacts, KitFollowUpIssueFacts, RetroEvidenceInput, RetroIssueFacts } from "../kit/retroEvidence.ts";
 import { type RunRecord, runStoreName } from "../kit/runRecord.ts";
 import { followUpsSection } from "../loop/followUps.ts";
+import { FOLLOW_UPS_OPENED_MARKER, followUpLeftLine, followUpOpenedLine } from "../loop/markers.ts";
 import { verdictActions } from "../loop/review.ts";
 import type { Verdict } from "../loop/types.ts";
 import type { NamedFollowUp } from "../loop/followUps.ts";
@@ -27,6 +28,7 @@ export function aRetroEvidenceInput(overrides: Partial<RetroEvidenceInput> = {})
     retros: [aPastRetro({ body: retroBody("2026-10-31T00:00:00.000Z") }), theRetroBeingFilled("2026-11-07T00:00:00.000Z")],
     fromRetroIssues: [],
     tickets: [],
+    followUpIssues: [],
     ...overrides,
   };
 }
@@ -63,6 +65,31 @@ export function aVerdictWithFollowUps(
   const comment = actions.find((action) => action.kind === "comment");
   if (comment === undefined) throw new Error("A Verdict always posts its comment");
   return aComment(comment.body, at, overrides);
+}
+
+/**
+ * The Fabrik App's comment on a merged pull request at `at`, as the Kit
+ * posts it once (src/loop/followUpIssues.ts, #885): its marker lines record
+ * each fault it opened, with the issue, and each it left a link over the cap.
+ */
+export function aFaultsComment(
+  opened: readonly (readonly [issue: number, title: string])[],
+  left: readonly string[],
+  at: string,
+  overrides: Partial<CommentFacts> = {},
+): CommentFacts {
+  const lines = [
+    FOLLOW_UPS_OPENED_MARKER,
+    ...opened.map(([issue, title]) => followUpOpenedLine({ created: "opened" }, title).map((part) => (typeof part === "string" ? part : `#${issue}`)).join("")),
+    ...left.map(followUpLeftLine),
+    "This pull request merged, so the Kit opened each of these faults its passes named as an issue, which enters at Triage (ADR-0039):",
+  ];
+  return aComment(lines.join("\n"), at, overrides);
+}
+
+/** Issue 101, which the Kit opened for a fault, as the evidence job reads it now: open and waiting for an Implementer, unless a test says what became of it. */
+export function aKitFollowUpIssue(overrides: Partial<KitFollowUpIssueFacts> = {}): KitFollowUpIssueFacts {
+  return { number: 101, state: "open", closedAs: null, labels: ["bug", "ready-for-agent"], labelEvents: [], closedBy: null, ...overrides };
 }
 
 /** aRunRecord(overrides), its transcript in the store at the path its run's name gives. */

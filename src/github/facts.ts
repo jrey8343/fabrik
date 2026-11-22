@@ -8,7 +8,7 @@
 // blockers still block it by the one blocker rule (src/github/blockers.ts), as
 // every reader of the open issues maps them through it.
 import { fabrikRefsIn } from "../kit/caller.ts";
-import type { FromRetroIssueFacts, RetroIssueFacts, TicketTextFacts } from "../kit/retroEvidence.ts";
+import type { FromRetroIssueFacts, KitFollowUpIssueFacts, RetroIssueFacts, TicketTextFacts } from "../kit/retroEvidence.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import type {
   AgentPullRequestFacts,
@@ -372,6 +372,59 @@ export async function gatherTickets(github: Pick<ReadClient, "rest">, repo: Repo
     }),
   );
   return tickets.filter((ticket) => ticket !== null);
+}
+
+/** How the facts name each reason GitHub closes an issue with. */
+const CLOSED_AS = { COMPLETED: "completed", NOT_PLANNED: "not_planned", DUPLICATE: "duplicate" } as const;
+
+/** An issue as gatherKitFollowUpIssues reads it. */
+interface RawKitFollowUpIssue {
+  number: number;
+  state: "OPEN" | "CLOSED";
+  stateReason: "COMPLETED" | "NOT_PLANNED" | "DUPLICATE" | "REOPENED" | null;
+  labels: { nodes: { name: string }[] };
+  timelineItems: { nodes: RawLabelEvent[] };
+  /** Its last closing, whose `actor` an event of another kind lacks. */
+  closed: { nodes: { actor?: RawActor | null }[] };
+}
+
+/**
+ * Each of these issues as GitHub has it now, in the order given, each once:
+ * its state, how it closed and who closed it last, its labels and its label
+ * timeline. What a Retro's evidence says became of each issue the Kit opened
+ * for a fault (evidenceFollowUpIssuesOf, src/kit/retroEvidence.ts, #885).
+ * One query however many they are, each issue under an alias of its own,
+ * and none for no issue. One GitHub no longer has is left out.
+ */
+export async function gatherKitFollowUpIssues(github: Pick<ReadClient, "graphql">, repo: Repo, numbers: readonly number[]): Promise<KitFollowUpIssueFacts[]> {
+  const asked = [...new Set(numbers)];
+  if (asked.length === 0) return [];
+  const issue = (number: number): string =>
+    `issue${number}: issue(number: ${number}) { number state stateReason labels(first: 50) { nodes { name } } ${LABEL_EVENTS} closed: timelineItems(last: 1, itemTypes: [CLOSED_EVENT]) { nodes { ... on ClosedEvent { actor ${ACTOR} } } } }`;
+  const query = `
+  query ($owner: String!, $name: String!) {
+    repository(owner: $owner, name: $name) {
+      ${asked.map(issue).join("\n      ")}
+    }
+  }
+`;
+  const data = await github.graphql<{ repository: Record<string, RawKitFollowUpIssue | null> }>(query, { owner: repo.owner, name: repo.name });
+  return asked.flatMap((number) => {
+    const read = data.repository[`issue${number}`];
+    if (read === null || read === undefined) return [];
+    const open = read.state === "OPEN";
+    const closer = read.closed.nodes.at(-1)?.actor;
+    return [
+      {
+        number: read.number,
+        state: open ? ("open" as const) : ("closed" as const),
+        closedAs: open || read.stateReason === null || read.stateReason === "REOPENED" ? null : CLOSED_AS[read.stateReason],
+        labels: read.labels.nodes.map(({ name }) => name),
+        labelEvents: labelEventsOf(read.timelineItems.nodes),
+        closedBy: open || closer === undefined || closer === null ? null : loginOf(closer),
+      },
+    ];
+  });
 }
 
 /** What a commit changed, as a diff file by file; a file GitHub shows no patch for is named with a note. */
