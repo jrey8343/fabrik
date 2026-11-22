@@ -73,7 +73,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Kit-opens-issues release notes, 
     expect(notes).toContain("`.fabrik/design.md`");
   });
 
-  it("say the two later parts are not built yet", () => {
+  it("name the Tickets of the two later parts", () => {
     expect(notes).toContain("[#884](https://github.com/jrey8343/fabrik/issues/884)");
     expect(notes).toContain("[#885](https://github.com/jrey8343/fabrik/issues/885)");
   });
@@ -116,11 +116,11 @@ describe("ADR-0039, the Kit opens issues itself", () => {
     expect(adr).toContain("- **It enters at Triage.**");
   });
 
-  it("says it reverses #825's link, and that the Request changes and Follow-up parts are built in later Tickets", () => {
+  it("says it reverses #825's link, and that the Follow-up part is built in a later Ticket", () => {
     expect(adr).toContain('This reverses #825\'s "The Operator still opens it from the link"');
     expect(adr).toContain("#884");
     expect(adr).toContain("#885");
-    expect(adr).toContain("built in later Tickets");
+    expect(adr).toContain("built in a later Ticket");
   });
 });
 
