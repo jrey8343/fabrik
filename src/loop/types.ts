@@ -15,7 +15,7 @@ import type { ChangeFingerprint } from "./changeFingerprint.ts";
 import type { DigestGiven, PictureOf } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
 import type { Label, TriggerLabel } from "./labels.ts";
-import type { CheckFixMark, FlakyCheckMark, OperatorMentionMark, PrototypeRequestMarker } from "./markers.ts";
+import type { CheckFixMark, FlakyCheckMark, OpenedSpinOff, OperatorMentionMark, PrototypeRequestMarker } from "./markers.ts";
 import type { RequestChangesText, RollInIssue } from "./owedRollIn.ts";
 
 /** An AFK role whose agent job passes structured output to its push job. */
@@ -1098,6 +1098,14 @@ export interface PullRequestSnapshot {
    */
   readonly followUpsOpened: boolean;
   /**
+   * Each Spin-off the Kit's notes on it record as opened from a Request
+   * changes (#884), oldest first, each issue once (openedSpinOffsAmong):
+   * read from the notes that landed, so one whose push was refused records
+   * nothing here. A later run that returns one of them again has it dropped
+   * (src/loop/implement.ts).
+   */
+  readonly openedSpinOffs: readonly OpenedSpinOff[];
+  /**
    * The Kit's list of asks on it now, by id, oldest first: each Request
    * changes of the Operator's a Review is given and each line comment in it,
    * as a Digest's first line records the ones it answered
@@ -1647,6 +1655,15 @@ export interface Snapshot {
    * other event, and for a run that returned none.
    */
   readonly requestChangesAsks: readonly RequestChangesAsks[] | null;
+  /**
+   * Gathered with `requestChangesAsks`, and null whenever it is: the
+   * Spin-off issues the Fabrik App already opened from that pull request
+   * (#884), open or closed, lowest number first, each with the ask its
+   * marker names and its title as it is now. An earlier landing of the same
+   * run that was applied only in part, or whose push was refused, leaves
+   * them, and the plan opens none of them again.
+   */
+  readonly spinOffIssues: readonly OpenedSpinOff[] | null;
   /**
    * Gathered for an agent pull request merging whose passes named a fault
    * and whose faults the Kit has not seen to yet (#885): what tells which of

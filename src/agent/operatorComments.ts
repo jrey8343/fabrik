@@ -84,7 +84,7 @@ export interface SetAsidePoint {
 /**
  * The points the Kit's notes on a PR record as opened as Spin-offs, each
  * joined to the Operator's words among `requestedChanges`. `opened` is what
- * the notes record, oldest first (openedSpinOffsIn). One whose Request
+ * the notes record, oldest first, each issue once (openedSpinOffsAmong). One whose Request
  * changes is not among those given, as one dismissed since, is left out:
  * the run is not given what it asked, so it has nothing to weigh it by.
  */

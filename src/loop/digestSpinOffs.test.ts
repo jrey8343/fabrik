@@ -51,6 +51,16 @@ describe("The asks Kit code lists, on a pull request with Spin-offs (#884)", () 
     ]);
   });
 
+  it("name a Spin-off once when two notes record its issue, as the note of a push that was refused and the note of the landing after it", () => {
+    const note = runNote(REQUEST_CHANGES_RUN_MARKER, 8, [57, "review-8", "Export the waitlist as CSV"]);
+    const kitComments = [
+      { at: at(25), body: note },
+      { at: at(26), body: note },
+    ];
+
+    expect(digestFactsOf(aThread({ kitComments, requestChanges })).asks[0]).toMatchObject({ id: "review-8", spinOffs: [{ issue: 57, title: "Export the waitlist as CSV" }] });
+  });
+
   it("name none on an ask no Spin-off was opened from, which is listed as it always was", () => {
     const kitComments = [{ at: at(25), body: runNote(REQUEST_CHANGES_RUN_MARKER, 8, [57, "review-8", "Export the waitlist as CSV"]) }];
 

@@ -39,7 +39,9 @@ import {
   gateRerunMarker,
   IMPLEMENT_RUN_FAILED_MARKER,
   operatorMentionMarker,
+  pushedHeadMarker,
   RESEARCH_RUN_FAILED_MARKER,
+  spinOffMarker,
   verdictMarker,
 } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
@@ -1663,7 +1665,14 @@ function pullRequestGitHub({
   author = APP_BOT,
   body = "",
   closing = [],
-}: { author?: { login: string; __typename: string } | null; body?: string; closing?: readonly ClosingIssue[] } = {}): GitHub {
+  comments = [],
+}: {
+  author?: { login: string; __typename: string } | null;
+  body?: string;
+  closing?: readonly ClosingIssue[];
+  /** Its comments, oldest first: the Fabrik App's unless one says who wrote it. */
+  comments?: readonly { readonly body: string; readonly author?: { readonly login: string; readonly __typename: string } }[];
+} = {}): GitHub {
   return {
     async graphql(query: string): Promise<unknown> {
       if (!query.includes("pullRequest(number: $number)")) return { repository: { owner: { login: "acme" }, issues: { nodes: [] } } };
@@ -1683,7 +1692,10 @@ function pullRequestGitHub({
             ...(/^\s*body$/m.test(pullRequestQuery) ? { body } : {}),
             url: "https://github.com/acme/shop/pull/50",
             labels: { nodes: [] },
-            comments: { pageInfo: { hasPreviousPage: false }, nodes: [] },
+            comments: {
+              pageInfo: { hasPreviousPage: false },
+              nodes: comments.map((comment, at) => ({ id: `C_${at}`, isMinimized: false, body: comment.body, createdAt: `2026-11-0${at + 2}T09:00:00Z`, author: comment.author ?? APP_BOT })),
+            },
             changesRequests: { nodes: [] },
             draftEvents: { pageInfo: { hasPreviousPage: false }, nodes: [] },
             createdAt: "2026-11-01T09:00:00Z",
@@ -3546,13 +3558,44 @@ describe("Gathering the asks a Request-changes run's Spin-offs may name (#884)",
     html_url: `https://github.com/acme/shop/pull/50#discussion_r${id}`,
   });
 
+  /** An issue of acme/shop as GitHub holds it: the Fabrik App's, unless a test says who opened it. */
+  interface HeldIssue {
+    readonly number: number;
+    readonly title: string;
+    readonly body: string;
+    readonly author?: { readonly login: string; readonly __typename: string };
+    /** The repo it is in, when it is cross-referenced from another. */
+    readonly repo?: string;
+  }
+  /** What GitHub holds around PR #50: its comments, the repo's open issues, and the issues it cross-references to the PR, open or closed. */
+  interface Held {
+    readonly comments?: readonly { readonly body: string; readonly author?: { readonly login: string; readonly __typename: string } }[];
+    readonly open?: readonly HeldIssue[];
+    readonly referenced?: readonly HeldIssue[];
+  }
+
   /** A GitHub holding Ticket #7 and its agent PR #50, with these reviews and line comments on the PR. */
-  function githubWith(reviews: unknown[], lineComments: unknown[]) {
+  function githubWith(reviews: unknown[], lineComments: unknown[], held: Held = {}) {
     const reads: string[] = [];
+    const issueReads: string[] = [];
     const issues = issueGitHub({ labels: ["ready-for-agent"] });
-    const pullRequests = pullRequestGitHub({ body: "Saves the cart.\n\nCloses #7", closing: [{ number: 7, labels: ["ready-for-agent"] }] });
+    const pullRequests = pullRequestGitHub({ body: "Saves the cart.\n\nCloses #7", closing: [{ number: 7, labels: ["ready-for-agent"] }], ...(held.comments === undefined ? {} : { comments: held.comments }) });
+    const nodeOf = ({ number, title, body, author }: HeldIssue) => ({ number, title, body, author: author ?? APP_BOT });
+    const onePage = { pageInfo: { hasNextPage: false, endCursor: null } };
     const github = {
       async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+        if (query.includes("CROSS_REFERENCED_EVENT") && query.includes("body")) {
+          issueReads.push("cross-references");
+          const nodes = (held.referenced ?? []).map((issue) => ({
+            __typename: "CrossReferencedEvent",
+            source: { __typename: "Issue", ...nodeOf(issue), repository: { nameWithOwner: issue.repo ?? "acme/shop" } },
+          }));
+          return { repository: { pullRequest: { crossReferences: { ...onePage, nodes: [{ __typename: "CrossReferencedEvent", source: { __typename: "PullRequest" } }, ...nodes] } } } };
+        }
+        if (query.includes("issues(states: OPEN") && query.includes("body") && !query.includes("labels:")) {
+          issueReads.push("open issues");
+          return { repository: { issues: { ...onePage, nodes: (held.open ?? []).map(nodeOf) } } };
+        }
         return (query.includes("pullRequest(number: $number)") ? pullRequests : issues).graphql(query, variables);
       },
       async rest(method: string, path: string): Promise<unknown> {
@@ -3564,7 +3607,7 @@ describe("Gathering the asks a Request-changes run's Spin-offs may name (#884)",
         throw new Error(`Unexpected call: ${method} ${path}`);
       },
     } as unknown as GitHub;
-    return { github, reads };
+    return { github, reads, issueReads };
   }
 
   function finished(output: Record<string, unknown>, fixes: Record<string, unknown> = { review: 902 }): LoopEvent {
@@ -3605,13 +3648,84 @@ describe("Gathering the asks a Request-changes run's Spin-offs may name (#884)",
     ["a Request-changes run that returned no Spin-off", finished({})],
     ["a Request-changes run whose output breaks its contract", finished({ spinOffs, fix: "" })],
     ["a Retry, whose output carries no Spin-offs", finished({ spinOffs }, {})],
-  ])("reads nothing written on the pull request for %s", async (_, event) => {
-    const { github, reads } = githubWith([review(902, "Rename the total.")], [lineComment(9, 902)]);
+  ])("reads nothing written on the pull request, and no issue, for %s", async (_, event) => {
+    const { github, reads, issueReads } = githubWith([review(902, "Rename the total.")], [lineComment(9, 902)]);
 
     const snapshot = await gatherSnapshot(github, repo, event, null, APP_LOGIN);
 
     expect(snapshot.requestChangesAsks).toBeNull();
+    expect(snapshot.spinOffIssues).toBeNull();
     expect(reads).toEqual([]);
+    expect(issueReads).toEqual([]);
+  });
+
+  /** A Spin-off issue as the plan landing a Request-changes run on PR #`pullRequest` opens it, for this ask of review 902. */
+  const aSpinOffIssue = (number: number, title: string, ask = "inline-9", pullRequest = 50, overrides: Partial<HeldIssue> = {}): HeldIssue => ({
+    number,
+    title,
+    body: [spinOffMarker({ from: "request-changes", pullRequest, review: 902, ask }), "The Operator asked for it apart.", "", `From PR #${pullRequest}`].join("\n"),
+    ...overrides,
+  });
+
+  it("holds the Spin-off issues the Fabrik App already opened from the pull request, open or closed, each once, lowest number first, with the ask its marker names", async () => {
+    const { github, issueReads } = githubWith([review(902, "Rename the total.")], [lineComment(9, 902)], {
+      open: [
+        aSpinOffIssue(61, "Export the waitlist"),
+        // Not this pull request's Spin-offs: another's, a Design session's, another bot's, a person's quoting the marker, and one whose marker is not its first line.
+        aSpinOffIssue(62, "From another pull request", "inline-9", 49),
+        { number: 63, title: "A Design session's", body: `${spinOffMarker({ from: "design", issue: 7 })}\nText each patient.` },
+        aSpinOffIssue(64, "A look-alike", "inline-9", 50, { author: { login: "dependabot", __typename: "Bot" } }),
+        aSpinOffIssue(65, "A quote", "inline-9", 50, { author: { login: "acme", __typename: "User" } }),
+        { number: 66, title: "Marker further down", body: `Text first.\n${spinOffMarker({ from: "request-changes", pullRequest: 50, review: 902, ask: "inline-9" })}` },
+      ],
+      referenced: [
+        // One closed since, as by Triage as a duplicate, and the open one again, which GitHub cross-references too.
+        aSpinOffIssue(60, "Text the waitlist", "review-902"),
+        aSpinOffIssue(61, "Export the waitlist"),
+        aSpinOffIssue(67, "In another repo", "inline-9", 50, { repo: "acme/other" }),
+      ],
+    });
+
+    const snapshot = await gatherSnapshot(github, repo, finished({ spinOffs }), null, APP_LOGIN);
+
+    expect(snapshot.spinOffIssues).toEqual([
+      { issue: 60, from: "review-902", title: "Text the waitlist" },
+      { issue: 61, from: "inline-9", title: "Export the waitlist" },
+    ]);
+    expect(issueReads.toSorted()).toEqual(["cross-references", "open issues"]);
+  });
+
+  it("reads the Spin-offs the Fabrik App's notes on the pull request record as opened, each issue once, and never from a person's comment", async () => {
+    const record = (issue: number, from: string, title: string) => `<!-- fabrik:spin-off-opened #${issue} ${JSON.stringify({ from, title })} -->`;
+    const { github } = githubWith([review(902, "Rename the total.")], [lineComment(9, 902)], {
+      comments: [
+        { body: ["<!-- fabrik:request-changes-run-empty -->", record(60, "inline-4", "Text the waitlist"), "The run committed nothing."].join("\n") },
+        { body: ["<!-- fabrik:request-changes-run-empty -->", record(60, "inline-4", "Text the waitlist"), record(61, "inline-9", "Export the waitlist"), "The run committed nothing."].join("\n") },
+        { body: ["<!-- fabrik:request-changes-run-empty -->", record(99, "inline-9", "Planted"), "Quoted by a person."].join("\n"), author: { login: "acme", __typename: "User" } },
+      ],
+    });
+
+    const { pullRequest } = await gatherSnapshot(github, repo, finished({ spinOffs }), null, APP_LOGIN);
+
+    expect(pullRequest?.openedSpinOffs).toEqual([
+      { issue: 60, from: "inline-4", title: "Text the waitlist" },
+      { issue: 61, from: "inline-9", title: "Export the waitlist" },
+    ]);
+  });
+
+  it("records none from a run's push note whose push never landed, so the landing that follows names its Spin-offs again and opens none of them twice", async () => {
+    const refused = [
+      "<!-- fabrik:request-changes-run -->",
+      '<!-- fabrik:spin-off-opened #61 {"from":"inline-9","title":"Export the waitlist"} -->',
+      pushedHeadMarker("c".repeat(40)),
+      "The Implementer pushed the Operator's requested changes.",
+    ].join("\n");
+    const { github } = githubWith([review(902, "Rename the total.")], [lineComment(9, 902)], { comments: [{ body: refused }], open: [aSpinOffIssue(61, "Export the waitlist")] });
+
+    const snapshot = await gatherSnapshot(github, repo, finished({ spinOffs }), null, APP_LOGIN);
+
+    expect(snapshot.pullRequest?.openedSpinOffs).toEqual([]);
+    expect(snapshot.spinOffIssues).toEqual([{ issue: 61, from: "inline-9", title: "Export the waitlist" }]);
   });
 });
 

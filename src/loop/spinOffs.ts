@@ -45,9 +45,11 @@ export function openSpinOff(
 
 /**
  * The item that names one Spin-off in the comment that says the Kit opened
- * it: its number, once the plan has made it, its title, and under them
- * `why`, one line saying which of the Operator's words it rests on.
+ * it: its number, once the plan has made it or as it is when the issue is
+ * there already, its title, and under them `why`, one line saying which of
+ * the Operator's words it rests on.
  */
-export function spinOffItem(issue: CreatedIssue, title: string, why: string): Linked {
-  return ["\n- ", issue, ` ${withoutMentions(title)}\n  ${why}`];
+export function spinOffItem(issue: CreatedIssue | number, title: string, why: string): Linked {
+  const item = ` ${withoutMentions(title)}\n  ${why}`;
+  return typeof issue === "number" ? [`\n- #${issue}${item}`] : ["\n- ", issue, item];
 }

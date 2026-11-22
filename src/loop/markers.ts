@@ -234,11 +234,15 @@ const SPIN_OFF_MARKER = /^<!-- fabrik:spin-off (\{.*?\}) -->/;
  * Where a Spin-off came from: the issue whose Design session opened it as
  * the session finished (#883), or the pull request and the Operator's
  * Request changes on it, by GitHub's id for the review, that asked for a
- * point to be its own issue (#884).
+ * point to be its own issue (#884), with the ask in that review the point
+ * is in, by Kit code's id for it: `review-<id>` for the review's own words,
+ * `inline-<id>` for a comment on the code. The ask is what tells a second
+ * landing of the same run which issue is already there for a Spin-off it
+ * returns (src/loop/implement.ts).
  */
 export type SpinOffSource =
   | { readonly from: "design"; readonly issue: number }
-  | { readonly from: "request-changes"; readonly pullRequest: number; readonly review: number };
+  | { readonly from: "request-changes"; readonly pullRequest: number; readonly review: number; readonly ask: string };
 
 /**
  * A Spin-off's first line (#883): it says the issue is a Spin-off, which the
@@ -246,7 +250,8 @@ export type SpinOffSource =
  * of what marks one: a Spin-off carries no label of its own.
  */
 export function spinOffMarker(source: SpinOffSource): string {
-  const value = source.from === "design" ? { from: source.from, issue: source.issue } : { from: source.from, pullRequest: source.pullRequest, review: source.review };
+  const value =
+    source.from === "design" ? { from: source.from, issue: source.issue } : { from: source.from, pullRequest: source.pullRequest, review: source.review, ask: source.ask };
   return `<!-- fabrik:spin-off ${markerJson(value)} -->`;
 }
 
@@ -261,9 +266,11 @@ export function spinOffIn(body: string): SpinOffSource | null {
   const json = SPIN_OFF_MARKER.exec(body)?.[1];
   if (json === undefined) return null;
   try {
-    const { from, issue, pullRequest, review } = JSON.parse(json) as Record<string, unknown>;
+    const { from, issue, pullRequest, review, ask } = JSON.parse(json) as Record<string, unknown>;
     if (from === "design") return isPositiveInteger(issue) ? { from, issue } : null;
-    if (from === "request-changes") return isPositiveInteger(pullRequest) && isPositiveInteger(review) ? { from, pullRequest, review } : null;
+    if (from === "request-changes") {
+      return isPositiveInteger(pullRequest) && isPositiveInteger(review) && typeof ask === "string" && ask !== "" ? { from, pullRequest, review, ask } : null;
+    }
     return null;
   } catch {
     return null;
@@ -289,12 +296,14 @@ export interface OpenedSpinOff {
 /**
  * The marker line a Request-changes run's outcome note records one Spin-off
  * on (#884), among the marker lines the note opens with: the issue the plan
- * opens for it, written as its `#number` once it exists, what asked for it,
- * and its title. It is where every later run on the pull request, its
- * Reviews and its Digest read the Spin-offs from (openedSpinOffsIn).
+ * opens for it, written as its `#number` once it exists, or the number of
+ * the issue that is there already, what asked for it, and its title. It is
+ * where every later run on the pull request, its Reviews and its Digest
+ * read the Spin-offs from (openedSpinOffsAmong).
  */
-export function openedSpinOffLine(issue: CreatedIssue, { from, title }: Pick<OpenedSpinOff, "from" | "title">): readonly (string | CreatedIssue)[] {
-  return ["<!-- fabrik:spin-off-opened ", issue, ` ${markerJson({ from, title })} -->`];
+export function openedSpinOffLine(issue: CreatedIssue | number, { from, title }: Pick<OpenedSpinOff, "from" | "title">): readonly (string | CreatedIssue)[] {
+  const end = ` ${markerJson({ from, title })} -->`;
+  return typeof issue === "number" ? [`<!-- fabrik:spin-off-opened #${issue}${end}`] : ["<!-- fabrik:spin-off-opened ", issue, end];
 }
 
 /**
@@ -317,6 +326,17 @@ export function openedSpinOffsIn(body: string): OpenedSpinOff[] {
     }
   }
   return opened;
+}
+
+/**
+ * The Spin-offs a pull request's notes record as opened, oldest first, given
+ * the Fabrik App's comments on it in that order, each issue once: a note
+ * whose push never landed and the note of the landing that followed both
+ * record the issue the first one opened.
+ */
+export function openedSpinOffsAmong(bodies: readonly string[]): OpenedSpinOff[] {
+  const opened = bodies.flatMap(openedSpinOffsIn);
+  return opened.filter(({ issue }, at) => opened.findIndex((earlier) => earlier.issue === issue) === at);
 }
 
 const FOLLOW_UP_MARKER = /^<!-- fabrik:follow-up (\{.*?\}) -->/;

@@ -53,7 +53,7 @@ function landing(from: readonly string[], changes: Extract<LoopEvent, { kind: "i
     requestChangesRunInFlight: 900,
     requestChangesRunReviews: [900],
   });
-  const snapshot: Snapshot = { ...snapshotOfPullRequest(pullRequest), issue: anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] }), requestChangesAsks: ASKS };
+  const snapshot: Snapshot = { ...snapshotOfPullRequest(pullRequest), issue: anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] }), requestChangesAsks: ASKS, spinOffIssues: [] };
   return planFor(event, snapshot, kitConfig());
 }
 
@@ -92,10 +92,11 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Kit-opens-issues release notes, 
     const with_ = changed("What the Kit opens a Request changes' Spin-off with.");
 
     expect(opened).toMatchObject({ labels: ["needs-triage"], blockedBy: [{ ticket: 7 }] });
-    expect(opened?.kind === "create-issue" ? opened.body.split("\n")[0] : "").toBe(spinOffMarker({ from: "request-changes", pullRequest: 50, review: 900 }));
+    expect(opened?.kind === "create-issue" ? opened.body.split("\n")[0] : "").toBe(spinOffMarker({ from: "request-changes", pullRequest: 50, review: 900, ask: "inline-9" }));
     expect(opened?.kind === "create-issue" ? opened.body.split("\n").at(-1) : "").toBe("From PR #50");
     expect(with_).toContain("with `needs-triage` and no other label");
-    expect(with_).toContain('`<!-- fabrik:spin-off {"from":"request-changes","pullRequest":<n>,"review":<id>} -->`');
+    expect(with_).toContain('`<!-- fabrik:spin-off {"from":"request-changes","pullRequest":<n>,"review":<id>,"ask":"<ask>"} -->`');
+    expect(with_).toContain("naming the pull request, the review and the ask in it that asked, `review-<id>` or `inline-<id>`");
     expect(with_).toContain("`From PR #<n>`");
     expect(with_).toContain("a blocked-by edge to the pull request's Ticket");
   });
@@ -146,12 +147,52 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Kit-opens-issues release notes, 
     expect(why).toContain("No new label, no Setup step and no new App permission is needed");
   });
 
-  it("say the limits the rule has: a run that states wrongly that no point was to be built, a run that ends without landing, and a landing that fails part-way", () => {
+  it("say the limits the rule has: a run that states wrongly that no point was to be built, a run that ends without landing, and what the Kit knows an opened Spin-off by", () => {
     const limits = notes.split("\n## Known limits\n")[1] ?? "";
     expect(limits).toContain("- **A run of only Spin-offs rests on the run's own statement too.**");
     expect(limits).not.toContain("Once a Spin-off names it, Kit code counts the whole of it as set aside.");
     expect(limits).toContain("- **A run that ends without landing opens no Spin-off.**");
-    expect(limits).toContain("- **A landing that fails part-way can open a Spin-off twice.**");
+    expect(limits).not.toContain("can open a Spin-off twice");
+    expect(limits).toContain("- **The Kit knows a Spin-off it already opened by its ask and its exact title.**");
+  });
+
+  it("say each Spin-off opens once, as the plan leaves out one that is an issue already and drops one an earlier comment records", () => {
+    const once = changed("Each Spin-off opens once.");
+    const event: LoopEvent = {
+      kind: "implement-run-finished",
+      runUrl: RUN,
+      issue: 7,
+      output: JSON.stringify({
+        title: "Rename the total",
+        summary: "Adds the order total.",
+        fix: "Set the export aside, as the Operator asked.",
+        reviewMiss: false,
+        amendsTicket: false,
+        spinOffs: [{ title: "Export the waitlist as CSV", body: 'The Operator wrote: "open the CSV export as its own issue".', from: "inline-9" }],
+      }),
+      branch: "fabrik/ticket-7",
+      base: "fabrik/ticket-7",
+      changes: PUSHED,
+      fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: RUN, review: 900 },
+    };
+    const opened = { issue: 61, from: "inline-9", title: "Export the waitlist as CSV" };
+    const pullRequest = (openedSpinOffs: (typeof opened)[]) =>
+      aPullRequest({ verdicts: [{ verdict: "pass", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }], leftDraftSinceVerdict: true, notedChangesRequests: [900], requestChangesRunInFlight: 900, requestChangesRunReviews: [900], openedSpinOffs });
+    const read = (openedSpinOffs: (typeof opened)[], spinOffIssues: (typeof opened)[]): Snapshot => ({
+      ...snapshotOfPullRequest(pullRequest(openedSpinOffs)),
+      issue: anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] }),
+      requestChangesAsks: ASKS,
+      spinOffIssues,
+    });
+    const anIssueAlready = actionsOf(planFor(event, read([], [opened]), kitConfig()));
+    const recorded = actionsOf(planFor(event, read([opened], [opened]), kitConfig()));
+
+    expect(anIssueAlready.map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
+    expect(JSON.stringify(anIssueAlready)).toContain("- #61 Export the waitlist as CSV");
+    expect(JSON.stringify(recorded)).not.toContain("#61");
+    expect(once).toContain("leaves out a Spin-off the Fabrik App already opened from the pull request, for the same ask and under the same title, open or closed");
+    expect(once).toContain("its comment still names it by its number");
+    expect(once).toContain("drops a Spin-off that an earlier comment of the Kit's on the pull request already records");
   });
 });
 
@@ -218,6 +259,16 @@ describe("ADR-0039 and ADR-0010, on a Request changes' Spin-offs (#884)", () => 
     expect(adr).not.toContain("once a Spin-off names that ask it counts as set aside");
   });
 
+  it("says each Spin-off opens once, and how the Kit knows one that is an issue already", () => {
+    const part = adr.split("A Request changes' Spin-offs are the second part built (#884):")[1]?.split("\n\n")[1] ?? "";
+    const once = part.split("\n").find((line) => line.startsWith("- **Each opens once.**")) ?? "";
+
+    expect(once).toContain("the ask its marker names and its title");
+    expect(once).toContain("never by a search");
+    expect(once).toContain("One an earlier note that landed already records is dropped");
+    expect(adr).not.toContain("the landing that follows opens the Spin-off again");
+  });
+
   it("no longer says its own part is still to be built", () => {
     expect(adr).toContain("#885");
     expect(adr).not.toContain("A Request changes' Spin-offs come with #884");
@@ -251,11 +302,12 @@ describe("The README's account of a Request changes' Spin-offs (#884)", () => {
     expect(spinOffs).toContain("(#884, ADR-0039)");
     expect(spinOffs).toContain("`spinOffs`");
     expect(spinOffs).toContain("with `needs-triage` and no other label");
-    expect(spinOffs).toContain('`<!-- fabrik:spin-off {"from":"request-changes","pullRequest":<n>,"review":<id>} -->`');
+    expect(spinOffs).toContain('`<!-- fabrik:spin-off {"from":"request-changes","pullRequest":<n>,"review":<id>,"ask":"<ask>"} -->`');
     expect(spinOffs).toContain("`From PR #<n>`");
     expect(spinOffs).toContain("a blocked-by edge to the PR's Ticket");
     expect(spinOffs).toContain("`<!-- fabrik:spin-off-opened #<issue> {…} -->`");
     expect(spinOffs).toContain('"The points set aside as Spin-offs"');
+    expect(spinOffs).toContain("Each opens once: a landing leaves out one the Fabrik App already opened from the PR for the same ask and under the same title, open or closed, naming it by its number all the same, and drops one an earlier note on the PR already records.");
   });
 
   it("says when a run that commits nothing goes back to the Merge gate, and that anything short of it is handed back", () => {

@@ -54,7 +54,7 @@ import type { SentBack } from "../loop/backToDesign.ts";
 import { withoutChangeLines } from "../loop/changeFingerprint.ts";
 import { type DigestFacts, digestFactsOf } from "../loop/digestFacts.ts";
 import { mapOfferOf, type MapOfferOf } from "../loop/mapCap.ts";
-import { flakyCheckIssueOf, followsSpecIn, followUpIssueOf, fromAuditIn, fromPullRequestIn, openedSpinOffsIn, spinOffIn, type SpinOffSource } from "../loop/markers.ts";
+import { flakyCheckIssueOf, followsSpecIn, followUpIssueOf, fromAuditIn, fromPullRequestIn, openedSpinOffsAmong, spinOffIn, type SpinOffSource } from "../loop/markers.ts";
 import { withoutRoundLines } from "../loop/roundLine.ts";
 import type { AuditIssueSnapshot, AuditWindow, KitConfig } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
@@ -421,7 +421,7 @@ async function readOperatorFeedback(
         body: c.body ?? "",
       })),
     }));
-  const opened = conversation.filter(({ user }) => user?.type === "Bot").flatMap(({ body }) => openedSpinOffsIn(body ?? ""));
+  const opened = openedSpinOffsAmong(conversation.filter(({ user }) => user?.type === "Bot").map(({ body }) => body ?? ""));
   return { operatorComments: comments.sort(byTime((c) => c.createdAt)), requestedChanges, spinOffs: setAsidePoints(opened, requestedChanges) };
 }
 

@@ -814,6 +814,18 @@ describe("The Operator's comments on a PR", () => {
         ]);
       });
 
+      it("reach it once each when two notes record the same issue, as the note of a push that was refused and the note of the landing after it", async () => {
+        const github = withNotes([
+          conversation(20, APP, runNote([57, "review-3", "Export the waitlist as CSV"])),
+          conversation(21, APP, runNote([57, "review-3", "Export the waitlist as CSV"], [58, "inline-5", "Drop the provider row"])),
+        ]);
+
+        expect(await spinOffsOf(github)).toMatchObject([
+          { issue: 57, from: "review-3" },
+          { issue: 58, from: "inline-5" },
+        ]);
+      });
+
       it("are read only from a bot's note, so nobody plants one by quoting its marker", async () => {
         expect(await spinOffsOf(withNotes([conversation(20, OP, runNote([57, "review-3", "Planted"])), conversation(21, OTHER, runNote([58, "inline-5", "Planted"]))]))).toBeUndefined();
       });

@@ -11,7 +11,7 @@ import { operatorCommentId } from "../agent/operatorComments.ts";
 import { verdictsIn } from "../github/threads.ts";
 import { type ProductChange, productChangeBetween, type VerdictEffect, verdictEffect } from "./changeFingerprint.ts";
 import { listedFollowUpsIn } from "./followUps.ts";
-import { conflictAttemptIn, CONFLICT_RUN_MARKER, handBackMarkIn, openedSpinOffsIn, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, startedReviewsIn, touchUpBodyOnlyIn, touchUpPushIn, UNMARKED_RETRY_PUSH } from "./markers.ts";
+import { conflictAttemptIn, CONFLICT_RUN_MARKER, handBackMarkIn, openedSpinOffsAmong, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, startedReviewsIn, touchUpBodyOnlyIn, touchUpPushIn, UNMARKED_RETRY_PUSH } from "./markers.ts";
 import { MAX_RETRIES, MAX_TOUCH_UPS, retryNumber, touchUpNumber } from "./retry.ts";
 import { isBrokenRun, type RequestChangesAsks, type Verdict, type VerdictRecord } from "./types.ts";
 import type { FollowUpKind } from "./verdict.ts";
@@ -274,7 +274,7 @@ export function digestFactsOf(thread: DigestThread): DigestFacts {
  * `kitBodies`, the Kit's own comments oldest first, record.
  */
 function asksIn(requestChanges: readonly ThreadRequestChanges[], kitBodies: readonly string[]): DigestAsk[] {
-  const opened = kitBodies.flatMap(openedSpinOffsIn);
+  const opened = openedSpinOffsAmong(kitBodies);
   return requestChanges
     .filter(({ dismissed, deferred }) => !dismissed && !deferred)
     .toSorted(oldestFirst)

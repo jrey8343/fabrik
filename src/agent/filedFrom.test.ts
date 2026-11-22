@@ -459,10 +459,10 @@ describe("The README's account of a Design-session turn", () => {
 // A Spin-off of a Request changes carries the `From PR` line of the pull request the Operator asked to keep it apart
 // from (#884), so a Design session on it is never offered that pull request to roll the work back in to.
 describe("The pull request a Request changes' Spin-off was set aside from (#884)", () => {
-  const body = '<!-- fabrik:spin-off {"from":"request-changes","pullRequest":84,"review":900} -->\nExport the waitlist as CSV.\n\nFrom PR #84';
+  const body = '<!-- fabrik:spin-off {"from":"request-changes","pullRequest":84,"review":900,"ask":"inline-9"} -->\nExport the waitlist as CSV.\n\nFrom PR #84';
 
   it("is read as set aside from, when the Spin-off's marker names the pull request its From PR line names", async () => {
-    const read = await readFiledFrom(gitHub({ 84: restPullRequest }), repo, body, { from: "request-changes", pullRequest: 84, review: 900 });
+    const read = await readFiledFrom(gitHub({ 84: restPullRequest }), repo, body, { from: "request-changes", pullRequest: 84, review: 900, ask: "inline-9" });
 
     expect(read).toEqual({ ...atTheMergeGate, setAside: true });
   });
@@ -470,7 +470,7 @@ describe("The pull request a Request changes' Spin-off was set aside from (#884)
   it.each([
     ["an issue that is no Spin-off", null],
     ["a Design session's Spin-off", { from: "design", issue: 41 } as const],
-    ["a Spin-off set aside from another pull request", { from: "request-changes", pullRequest: 85, review: 900 } as const],
+    ["a Spin-off set aside from another pull request", { from: "request-changes", pullRequest: 85, review: 900, ask: "inline-9" } as const],
   ])("is read as any pull request an issue was filed from, for %s", async (_which, spinOff) => {
     expect(await readFiledFrom(gitHub({ 84: restPullRequest }), repo, body, spinOff)).toEqual(atTheMergeGate);
   });

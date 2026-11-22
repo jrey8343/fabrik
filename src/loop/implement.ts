@@ -22,6 +22,7 @@ import {
   fromPullRequestLine,
   handBackMarker,
   KEPT_BRANCH_START_AGAIN_MARKER,
+  type OpenedSpinOff,
   openedSpinOffLine,
   pushedHeadMarker,
   requestChangesAnswersMarker,
@@ -288,6 +289,7 @@ function opening(ticket: number, issue: IssueSnapshot, headSha: string): PullReq
     digests: [],
     faults: [],
     followUpsOpened: false,
+    openedSpinOffs: [],
   };
 }
 
@@ -348,8 +350,10 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   // A run this landing starts is held while every Subscription is used up, and its note says so (#341).
   const held = heldOn(snapshot.kitIssues, config);
   // A Request-changes run's Spin-offs are held to the asks the push job read from GitHub itself (#884), never to what
-  // the agent job passed out. They are read only for an output that returns Spin-offs.
+  // the agent job passed out, and against the Spin-off issues it found already opened from the pull request. Both are
+  // read only for an output that returns Spin-offs.
   const asks = fixes.review === undefined ? null : snapshot.requestChangesAsks;
+  const spinOffIssues = fixes.review === undefined ? null : snapshot.spinOffIssues;
   const parsed = parseImplementOutput(
     event.output,
     fixes.review === undefined ? "pull-request" : "request-changes",
@@ -453,7 +457,10 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   if (spinOffs.length > 0 && asks === null) {
     return { kind: "fail", failure: "infrastructure", reason: `The snapshot is missing the asks of the Request changes on #${pullRequest.number}, which the run's Spin-offs name` };
   }
-  const setAside = setAsideAsSpinOffs(spinOffs, pullRequest, issueNumber, asks ?? []);
+  if (spinOffs.length > 0 && spinOffIssues === null) {
+    return { kind: "fail", failure: "infrastructure", reason: `The snapshot is missing the Spin-offs already opened from #${pullRequest.number}, which the run's Spin-offs are held against` };
+  }
+  const setAside = setAsideAsSpinOffs(spinOffs, pullRequest, issueNumber, asks ?? [], spinOffIssues ?? []);
   // Merging main in or rebasing onto it, to fix a conflict, is a change even with none of the run's own.
   if (changes.net.length === 0 && changes.updatedFromMain !== true && mainMerge === undefined) {
     // A Request-changes run's empty diff is no Verdict, so it never costs a Retry (#388).
@@ -709,9 +716,34 @@ interface SetAside {
  * names each by its number and title, with a link to the Operator's words,
  * which is the place `asks`, the push job's own read, gives for the ask the
  * Spin-off names: the run's own text never supplies a link.
+ *
+ * Each is opened once, whatever lands twice. A Spin-off is taken for one
+ * already opened when the ask it names in `from` and its title, trimmed and
+ * with no mentions as the issue was opened, are both the same:
+ *
+ * - **One an earlier note that landed records** (`pullRequest.openedSpinOffs`)
+ *   is dropped, as one a later run returns again for an earlier review. That
+ *   note already gives it to every later run, so this one neither opens it
+ *   nor names it, and it counts toward nothing.
+ * - **One whose issue is there already** (`opened`, the push job's own read
+ *   of the Fabrik App's Spin-off issues from this pull request) is not
+ *   opened again: an earlier landing of this run opened it and then failed,
+ *   or its push was refused, which takes its note back out of the thread.
+ *   The note still names it, by the number it has, so later runs are given
+ *   it.
  */
-function setAsideAsSpinOffs(spinOffs: readonly RequestedSpinOff[], pullRequest: PullRequestSnapshot, ticket: number, asks: readonly RequestChangesAsks[]): SetAside {
+function setAsideAsSpinOffs(
+  returned: readonly RequestedSpinOff[],
+  pullRequest: PullRequestSnapshot,
+  ticket: number,
+  asks: readonly RequestChangesAsks[],
+  opened: readonly OpenedSpinOff[],
+): SetAside {
+  const same = (spinOff: RequestedSpinOff) => (one: OpenedSpinOff) => one.from === spinOff.from && one.title.trim() === withoutMentions(spinOff.title).trim();
+  const spinOffs = returned.filter((spinOff) => !pullRequest.openedSpinOffs.some(same(spinOff)));
   if (spinOffs.length === 0) return { actions: [], markers: [], listed: [], everyAsk: false };
+  // Each one's issue: the number of the one that is there already, or the one this plan creates, keyed by its place among those returned.
+  const issues = spinOffs.map((spinOff, i) => opened.find(same(spinOff))?.issue ?? spinOffIssue(i));
   // The contract has already refused a `from` that names none of these asks.
   const askedIn = (from: string) => asks.flatMap(({ review, asks: theirs }) => theirs.filter(({ id }) => id === from).map(({ url }) => ({ review, url })))[0];
   const one = spinOffs.length === 1;
@@ -719,20 +751,25 @@ function setAsideAsSpinOffs(spinOffs: readonly RequestedSpinOff[], pullRequest: 
   const read = pullRequest.requestChangesRunReviews.map((review) => asks.find((one) => one.review === review)?.asks ?? []);
   return {
     everyAsk: read.length > 0 && read.every((theirs) => theirs.length > 0 && theirs.every(({ id }) => named.has(id))),
-    actions: spinOffs.map((spinOff, i) =>
-      openSpinOff(
-        spinOffIssue(i),
-        { from: "request-changes", pullRequest: pullRequest.number, review: askedIn(spinOff.from)?.review ?? 0 },
-        { ...spinOff, lines: [fromPullRequestLine(pullRequest.number)] },
-        [{ ticket }],
-      ),
-    ),
-    markers: spinOffs.map((spinOff, i) => openedSpinOffLine(spinOffIssue(i), { from: spinOff.from, title: withoutMentions(spinOff.title) })),
+    actions: spinOffs.flatMap((spinOff, i) => {
+      const issue = issues[i];
+      return issue === undefined || typeof issue === "number"
+        ? []
+        : [
+            openSpinOff(
+              issue,
+              { from: "request-changes", pullRequest: pullRequest.number, review: askedIn(spinOff.from)?.review ?? 0, ask: spinOff.from },
+              { ...spinOff, lines: [fromPullRequestLine(pullRequest.number)] },
+              [{ ticket }],
+            ),
+          ];
+    }),
+    markers: spinOffs.map((spinOff, i) => openedSpinOffLine(issues[i] ?? spinOffIssue(i), { from: spinOff.from, title: withoutMentions(spinOff.title) })),
     listed: [
       [
         `\nThe Kit opened ${one ? "1 Spin-off" : `${spinOffs.length} Spin-offs`}, work the Operator's Request changes asked to be ${one ? "an issue of its own" : "issues of their own"}, which Triage sorts next. ${one ? "It waits" : "Each waits"} on #${ticket}, this pull request's Ticket.\n`,
         ...spinOffs.flatMap((spinOff, i) =>
-          spinOffItem(spinOffIssue(i), spinOff.title, `Asked for in [the Operator's ${spinOff.from.startsWith("inline-") ? "comment on the code" : "Request changes"}](${askedIn(spinOff.from)?.url ?? pullRequest.url})`),
+          spinOffItem(issues[i] ?? spinOffIssue(i), spinOff.title, `Asked for in [the Operator's ${spinOff.from.startsWith("inline-") ? "comment on the code" : "Request changes"}](${askedIn(spinOff.from)?.url ?? pullRequest.url})`),
         ),
       ],
     ],

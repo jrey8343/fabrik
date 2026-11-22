@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { anIssue, aPullRequest, HEAD_SHA, kitConfig, notificationsOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import { leftDraftSinceVerdictIn, notDismissedIn, type PullRequestHistoryItem, pushedSinceVerdictIn, requestChangesRunIn, requestChangesSinceRunIn, verdictsIn } from "../github/threads.ts";
-import { openedSpinOffsIn, pushedHeadIn, requestChangesAnswersIn, requestChangesRunStartedMarker, stepUpReasonIn, verdictMarker } from "./markers.ts";
+import { type OpenedSpinOff, openedSpinOffsIn, pushedHeadIn, requestChangesAnswersIn, requestChangesRunStartedMarker, stepUpReasonIn, verdictMarker } from "./markers.ts";
 import { runInFlight } from "./retry.ts";
 import { planFor } from "./rules.ts";
 import type { Action, LoopEvent, Plan, PullRequestSnapshot, RequestChangesAsks, Snapshot, VerdictRecord } from "./types.ts";
@@ -58,14 +58,18 @@ const ASKS: readonly RequestChangesAsks[] = [
   },
 ];
 
-/** PR 50 for Ticket 7, passed on its head and back in draft, with the Request-changes run for review 900 in flight. */
-function snapshot(asks: readonly RequestChangesAsks[] | null = ASKS, pullRequest: Partial<PullRequestSnapshot> = {}): Snapshot {
+/**
+ * PR 50 for Ticket 7, passed on its head and back in draft, with the Request-changes run for review 900 in flight, and
+ * these Spin-off issues already opened from it, none unless a test says so.
+ */
+function snapshot(asks: readonly RequestChangesAsks[] | null = ASKS, pullRequest: Partial<PullRequestSnapshot> = {}, spinOffIssues: readonly OpenedSpinOff[] = []): Snapshot {
   return {
     ...snapshotOfPullRequest(
       aPullRequest({ verdicts: [pass()], leftDraftSinceVerdict: true, notedChangesRequests: [900], requestChangesRunInFlight: 900, requestChangesRunReviews: [900], ...pullRequest }),
     ),
     issue: anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] }),
     requestChangesAsks: asks,
+    spinOffIssues: asks === null ? null : spinOffIssues,
   };
 }
 
@@ -94,7 +98,7 @@ describe("The plan landing a Request-changes run that returned a Spin-off (#884)
         key: "spin-off:1",
         title: "Export the waitlist as CSV",
         body: [
-          '<!-- fabrik:spin-off {"from":"request-changes","pullRequest":50,"review":900} -->',
+          '<!-- fabrik:spin-off {"from":"request-changes","pullRequest":50,"review":900,"ask":"inline-9"} -->',
           'On the waitlist pull request the Operator wrote: "Open the CSV export as its own issue."',
           "",
           "The clinic wants the waitlist as a CSV file.",
@@ -317,6 +321,85 @@ describe("A Request-changes run that committed nothing with some ask left to bui
 
     expect(actionsOf(plan).map((action) => action.kind)).toEqual(["comment", "add-labels", "mark-ready-for-review"]);
     handedBack(plan);
+  });
+});
+
+describe("A Spin-off the Kit already opened from the pull request (#884)", () => {
+  /** The CSV export's issue, as the Fabrik App opened it for the comment on the code. */
+  const EXPORT: OpenedSpinOff = { issue: 61, from: "inline-9", title: "Export the waitlist as CSV" };
+  const TEXT = spinOff({ title: "Text the waitlist", from: "review-900" });
+
+  it("is not opened again when the run lands a second time, as after a push that was refused: the note names it by the number it has", () => {
+    const plan = planFor(landed(PUSHED), snapshot(ASKS, {}, [EXPORT]), kitConfig());
+
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
+    expect(note(plan).split("\n")[2]).toBe('<!-- fabrik:spin-off-opened #61 {"from":"inline-9","title":"Export the waitlist as CSV"} -->');
+    expect(note(plan)).toContain(
+      [
+        "The Kit opened 1 Spin-off, work the Operator's Request changes asked to be an issue of its own, which Triage sorts next. It waits on #7, this pull request's Ticket.",
+        "",
+        "- #61 Export the waitlist as CSV",
+        `  Asked for in [the Operator's comment on the code](${INLINE_URL})`,
+      ].join("\n"),
+    );
+    expect(openedSpinOffsIn(note(plan))).toEqual([EXPORT]);
+  });
+
+  it("leaves the plan opening only what a landing applied in part did not, and the note naming each in the order returned", () => {
+    const plan = planFor(landed(PUSHED, [spinOff(), TEXT]), snapshot(ASKS, {}, [EXPORT]), kitConfig());
+
+    expect(created(plan).map((action) => action.kind === "create-issue" && [action.key, action.title])).toEqual([["spin-off:2", "Text the waitlist"]]);
+    expect(openedSpinOffsIn(note(plan))).toEqual([EXPORT, { issue: 58, from: "review-900", title: "Text the waitlist" }]);
+    expect(note(plan)).toContain("The Kit opened 2 Spin-offs,");
+    expect(note(plan)).toContain("- #61 Export the waitlist as CSV\n");
+    expect(note(plan)).toContain("- #58 Text the waitlist\n");
+  });
+
+  it.each([
+    ["the same title from another ask", { ...EXPORT, from: "review-900" }],
+    ["another title from the same ask", { ...EXPORT, title: "Export the waitlist as a spreadsheet" }],
+  ])("takes it for the one returned only when its from and its title are both the same: %s is another Spin-off", (_, other) => {
+    expect(created(planFor(landed(PUSHED), snapshot(ASKS, {}, [other]), kitConfig()))).toHaveLength(1);
+  });
+
+  it("matches the title with its outer spaces trimmed and its mentions taken out, as the issue was opened", () => {
+    const mentioning = spinOff({ title: "Ask @operator about exports " });
+    // As the issue was opened: a zero-width space after the `@`.
+    const opened: OpenedSpinOff = { issue: 61, from: "inline-9", title: " Ask @\u200boperator about exports" };
+
+    expect(created(planFor(landed(PUSHED, [mentioning]), snapshot(ASKS, {}, [opened]), kitConfig()))).toEqual([]);
+  });
+
+  it("still returns a run of only Spin-offs to the Merge gate when its landing is the second, opening only what the first did not", () => {
+    const plan = planFor(landed(NOTHING, [TEXT, spinOff()], { onlySpinOffs: true }), snapshot(ASKS, {}, [EXPORT]), kitConfig());
+
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["create-issue", "comment-linking", "mark-ready-for-review", "request-review"]);
+    expect(created(plan).map((action) => action.kind === "create-issue" && action.title)).toEqual(["Text the waitlist"]);
+  });
+
+  it("is dropped when an earlier note that landed records it, as one a later run returns again for an earlier review: the run lands as one that returned none", () => {
+    // Review 899 asked for the export apart, an earlier run landed it as #61, and the run for review 900 returns it again.
+    const earlier: RequestChangesAsks[] = [{ review: 899, asks: [{ id: "inline-4", url: "https://github.com/acme/shop/pull/50#discussion_r4" }] }, ...ASKS];
+    const recorded: OpenedSpinOff = { ...EXPORT, from: "inline-4" };
+    const read = snapshot(earlier, { openedSpinOffs: [recorded] }, [recorded]);
+
+    expect(planFor(landed(PUSHED, [spinOff({ from: "inline-4" })]), read, kitConfig())).toEqual(planFor(landed(PUSHED, null), read, kitConfig()));
+  });
+
+  it("is dropped by the note's record alone, as once a Design session's rewrite has taken its marker off the issue", () => {
+    const plan = planFor(landed(PUSHED, [spinOff(), TEXT]), snapshot(ASKS, { openedSpinOffs: [EXPORT] }), kitConfig());
+
+    expect(created(plan).map((action) => action.kind === "create-issue" && action.title)).toEqual(["Text the waitlist"]);
+    expect(openedSpinOffsIn(note(plan))).toEqual([{ issue: 57, from: "review-900", title: "Text the waitlist" }]);
+    expect(note(plan)).toContain("The Kit opened 1 Spin-off,");
+  });
+
+  it("fails, opening nothing, when the issues already opened from the pull request weren't read", () => {
+    expect(planFor(landed(PUSHED), { ...snapshot(), spinOffIssues: null }, kitConfig())).toEqual({
+      kind: "fail",
+      failure: "infrastructure",
+      reason: "The snapshot is missing the Spin-offs already opened from #50, which the run's Spin-offs are held against",
+    });
   });
 });
 

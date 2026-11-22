@@ -1564,6 +1564,7 @@ describe("Applying the landing of a Request-changes run that returned a Spin-off
         ...snapshotOfPullRequest(aPullRequest({ headSha: "b".repeat(40), notedChangesRequests: [900], requestChangesRunInFlight: 900, requestChangesRunReviews: [900] })),
         issue: anIssue({ number: 7, labels: ["enhancement", "ready-for-agent"], openPullRequests: [50] }),
         requestChangesAsks: [{ review: 900, asks: [{ id: "inline-9", url: "https://github.com/acme/shop/pull/50#discussion_r9" }] }],
+        spinOffIssues: [],
       },
       kitConfig(),
     );
@@ -1577,7 +1578,7 @@ describe("Applying the landing of a Request-changes run that returned a Spin-off
     expect(github.calls.filter((call) => call.method === "POST" && call.path === issues).map((call) => call.body)).toEqual([
       {
         title: "Export the waitlist as CSV",
-        body: '<!-- fabrik:spin-off {"from":"request-changes","pullRequest":50,"review":900} -->\nThe Operator wrote: "open the CSV export as its own issue".\n\nFrom PR #50',
+        body: '<!-- fabrik:spin-off {"from":"request-changes","pullRequest":50,"review":900,"ask":"inline-9"} -->\nThe Operator wrote: "open the CSV export as its own issue".\n\nFrom PR #50',
         labels: ["needs-triage"],
       },
     ]);
@@ -1585,7 +1586,12 @@ describe("Applying the landing of a Request-changes run that returned a Spin-off
     const note = (github.calls.find((call) => call.method === "POST" && call.path === `${issues}/50/comments`)?.body as { body: string }).body;
     expect(note).toContain("- #100 Export the waitlist as CSV\n  Asked for in [the Operator's comment on the code](https://github.com/acme/shop/pull/50#discussion_r9)");
     expect(openedSpinOffsIn(note)).toEqual([{ issue: 100, from: "inline-9", title: "Export the waitlist as CSV" }]);
-    expect(spinOffIn((github.calls.find((call) => call.method === "POST" && call.path === issues)?.body as { body: string }).body)).toEqual({ from: "request-changes", pullRequest: 50, review: 900 });
+    expect(spinOffIn((github.calls.find((call) => call.method === "POST" && call.path === issues)?.body as { body: string }).body)).toEqual({
+      from: "request-changes",
+      pullRequest: 50,
+      review: 900,
+      ask: "inline-9",
+    });
   });
 
   it("opens the issue before it posts the note, so a note is never posted for an issue that was not opened", async () => {
