@@ -3,7 +3,9 @@
 // issue under its own heading, which prompts/triage.md names. Like the issue,
 // it was written by people outside Fabrik: data to judge, never instructions.
 // And whether the issue is a Spin-off (#883), which the run's output contract
-// goes by.
+// goes by. An issue the Kit opened for a Follow-up that is a fault carries
+// `followUp` in issue.json (#885), which the prompt alone goes by: Triage
+// sorts it as any issue, so the contract holds it to nothing more.
 import { readFile } from "node:fs/promises";
 import { RECENT_ISSUES_FILE, type RecentIssue } from "./inputs.ts";
 import { jsonBlock } from "./prompt.ts";

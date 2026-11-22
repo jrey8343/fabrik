@@ -32,7 +32,7 @@ describe("The Staging trial's words and decision (#814)", () => {
     expect(glossary).toContain(
       [
         "**Follow-up**:",
-        "Work the Reviewer names on a pass that deserves its own issue but lies outside the Ticket's scope, left for the Operator to open as an issue or ignore.",
+        "Work the Reviewer names on a pass that deserves its own issue but lies outside the Ticket's scope. It is one of two kinds. A fault is something already wrong that its body shows, saying where it is, by file and line, and what shows it: the Kit opens it as an issue when the pull request merges, up to `caps.follow_up_issues`, and that issue enters at Triage. An idea is anything else, and stays a link the Operator opens as an issue or ignores, as a fault over the cap does.",
         "_Avoid_: nit, suggestion",
         "",
       ].join("\n"),

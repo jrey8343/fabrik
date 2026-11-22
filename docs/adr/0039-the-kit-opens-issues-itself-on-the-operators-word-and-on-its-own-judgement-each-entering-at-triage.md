@@ -40,9 +40,19 @@ A Request changes' Spin-offs are the second part built (#884):
 - **The Reviewer is given each beside the Operator's words.** A point properly set aside is no part of the Ticket as amended, and never a finding for being unbuilt. One the words did not ask to separate is an unbuilt requested change, an Execution flaw. The Reviewer checks the Implementer's reading of the Operator's words, which is a reading of words and never a judgement of whether the work belongs.
 - **The Digest shows each under its ask.** Kit code's facts name, on each ask, the Spin-offs opened from it. The writer answers for what was to be built, and has one more answer, set aside, for an ask none of which was. Kit code takes that answer only on an ask it opened a Spin-off from, so the writer cannot set a point aside either.
 
-This reverses #825's "The Operator still opens it from the link": the `newIssue` Operator step and its link go, and the contract refuses the field by name. It also reverses #101's "nothing auto-filed", for faults only. ADR-0007 and ADR-0010 stand: an Operator comment still triggers nothing, and a point of a Request changes is built on the pull request unless the Operator's own words ask for it to be separate.
+A Follow-up that is a fault is the third part built (#885):
 
-The Follow-up part is built in a later Ticket: Follow-ups that are faults come with #885, which adds its part to this record.
+- **Faults, and not ideas.** The Reviewer marks each Follow-up a fault or an idea. A fault is something already wrong: a bug, a test that is missing or fails, a doc that is stale. Its body says where it is, by file and line, and what shows it is wrong, so whoever reads the issue can check it against the code without the pull request. Anything else is an idea, and so is a problem the Reviewer cannot show that way. An idea opened by the Kit would reach Triage, and from there Design sessions the Operator never asked for, so an idea stays the link it was. A Follow-up given no kind is an idea: the bar is met by showing the fault, never by default.
+- **At the merge, and not at the pass.** A pull request can pass more than once, and each pass may name the same fault or another. A fault opened at the pass would start its fix beside an open pull request on the same code, and one named on a pull request that never merges would be a fault in code `main` never held. So the plan for the merge gathers every fault any pass named, in the order named, drops one whose trimmed title repeats an earlier one's, and opens the rest. The Verdict comment says so beside each fault, in place of a link. A Plain pull request has no Verdict and a pull request closed unmerged did not land, so nothing opens for either.
+- **What each is opened with.** `needs-triage` alone, the marker line naming the pull request as the body's first line, the Reviewer's text, and the `From PR` line an issue opened from a link ends with. It is no sub-issue and nothing blocks it: the pull request it was found beside has merged.
+- **A cap, and no veto.** `caps.follow_up_issues`, 5 by default, which a Product repo can only lower as its other caps, counts the open issues the Fabrik App wrote whose first line is the marker. A merge opens its faults only up to the room under it, and a fault over it stays an Open as issue link in the Kit's comment on the merged pull request. At 0 the Kit opens none. The cap is what keeps fixes that name more faults from filling the Merge gate. There is no veto before the merge. A decision per Follow-up on every pull request is the work #101 avoided. The Operator closes an issue they don't want, and nothing reopens it.
+- **One the Operator already opened is left out.** By the rule that already read a Follow-up as opened: an issue the Operator opened whose `From PR` line names the pull request and whose trimmed title is the fault's, open or closed.
+- **Once.** The Kit posts one comment on the merged pull request, which mentions nobody: each issue it opened, each fault left over the cap with its link, and each that was an issue already. Its first line, `<!-- fabrik:follow-ups-opened -->`, is what a second look at the same merge reads, from an event or a Tick, and with it nothing more is opened. It is posted whenever a pass named a fault, so the rule rests on that one line. A plan applied only in part leaves no comment, so the next look also leaves out a fault that the Fabrik App already opened for this pull request, by the marker and the title.
+- **Triage sorts it as any issue.** Its input says the issue is a Follow-up the Kit opened and names its pull request. Nobody asked for it, so Triage may set it aside, which it may not do to a Spin-off.
+- **The Digest shows every fault.** Kit code lists them itself, each with a line saying it opens at the merge. The writer chooses only among the ideas, a reply that names a fault's id is refused, and its choice gates nothing.
+- **The Retro's evidence says what became of each.** A fault carries the issue the Kit opened and its state label, or how it closed and whether the Operator or Triage closed it, or that it stayed a link over the cap. Faults the Operator keeps closing as not planned point at the Reviewer's bar or at the cap, and the Retro is where either is tuned.
+
+This reverses #825's "The Operator still opens it from the link": the `newIssue` Operator step and its link go, and the contract refuses the field by name. It also reverses #101's "nothing auto-filed", for faults only: an idea, an Audit candidate and a Retro proposal are still links the Operator opens. ADR-0007 and ADR-0010 stand: an Operator comment still triggers nothing, and a point of a Request changes is built on the pull request unless the Operator's own words ask for it to be separate.
 
 ## Considered options
 
@@ -57,6 +67,9 @@ The Follow-up part is built in a later Ticket: Follow-ups that are faults come w
 - **Counting the points in a review.** A point is free text, and nothing but an agent can count them. An ask is something Kit code already lists, by GitHub's own ids.
 - **Filing power for the Implementer.** The Reviewer reads its summary and is the one judge.
 - **A veto on a fault before merge.** A decision per Follow-up on every pull request is the work #101 avoided.
+- **The Digest writer choosing which faults to show.** A fault left out of the Digest would still open at the merge, unseen. Kit code shows every fault, so what the Operator reads at the Merge gate is what the merge opens.
+- **A cap on each pull request's faults.** It would bound one merge and not what stands open in front of the Operator, which is what an attention cap is for.
+- **Finding the Kit's Follow-up issues by a search.** GitHub's search lags an issue just opened, so a second look could miss the first look's issues. The Kit reads the open issues and the pull request's cross-references instead.
 - **A new metric.** The Retro's evidence is enough to tune the bar.
 
 ## Consequences
@@ -65,6 +78,7 @@ The Follow-up part is built in a later Ticket: Follow-ups that are faults come w
 - Triage runs at once on a Spin-off that waits on Tickets not yet built: the blocked-by edges hold Dispatch, not Triage or the Design queue.
 - A Spin-off blocked by a Ticket that is closed as not planned stays held, as any work behind such a Blocker does.
 - A Design session that later rewrites a Spin-off drops its marker line. Triage, the marker's one reader, has sorted the issue by then.
+- A Design session that rewrites a Follow-up issue keeps its marker line, and a Spec written from one carries it: the cap reads the marker for as long as the issue is open.
 - The agent-inputs job doesn't know the Fabrik App's login, so it takes any bot's issue that opens with the marker for a Spin-off, as it does for a Check's issue. The push job, which knows the login, reads the marker only on the App's own.
 - A live Design session files as the Operator, so nothing it opens is a Spin-off to the Kit.
 - Kit code goes by asks, not by points. One ask can hold a point to build and a point to set aside, and once a Spin-off names that ask it counts as set aside. A run that committed nothing on such a review goes back to the Merge gate with the other point unbuilt and no Review to find it. The run's note, which lists what was set aside, and the Reviewer's check on the next push are what catch it.
@@ -72,5 +86,11 @@ The Follow-up part is built in a later Ticket: Follow-ups that are faults come w
 - A plan that fails after opening a Spin-off and before posting the run's note leaves the run in flight, and the landing that follows opens the Spin-off again. Triage's duplicate check is what catches the second one.
 - A Spin-off whose Request changes is dismissed later is no longer given to later runs, as the Request changes itself is not. Its issue stays.
 - A Design session on a Request changes' Spin-off is told of the pull request it was set aside from, and that a Roll-in onto it is not on offer.
+- A fault has no link on its Verdict. One named on a pull request that closes unmerged, or whose merge the Kit's plan never saw, is words on that Verdict and nothing more, and the Operator opens it by hand if they want it.
+- Only the merge's own event opens a pull request's faults. No Tick looks at merged pull requests yet, so the comment's mark guards a second look that nothing takes today.
+- A Verdict posted before a Follow-up had a kind lists links alone, so every Follow-up on it is an idea, and nothing opens for it at the merge.
+- A fault the Operator opened and has since retitled is not known as opened, and the merge opens it.
+- The cap is read as the merge is planned. Two pull requests that merge at the same moment can each read the count before the other's issues exist, and between them open more than the room.
+- An issue the Fabrik App opens is Kit-owned to the read library, so a Follow-up issue that became a Ticket is none to its outcomes, as a Spin-off is none.
 
 Decided in [Spec: The Kit opens issues itself](https://github.com/jrey8343/fabrik/issues/882).

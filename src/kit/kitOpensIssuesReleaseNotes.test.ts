@@ -68,7 +68,8 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Kit-opens-issues release notes, 
 
   it("say why it is a minor, in the releasing guide's terms, and what a Product repo's own instructions may need", () => {
     const why = notes.split("\n").find((line) => line.startsWith("- **Why a minor:**")) ?? "";
-    expect(why).toContain("No new label, no Setup step, no new App permission and no new Kit config field");
+    // The Follow-up part adds the minor's one Kit config field (#885).
+    expect(why).toContain("No new label, no Setup step and no new App permission is needed");
     expect(why).toContain("the read library removes nothing");
     expect(notes).toContain("`.fabrik/design.md`");
   });
@@ -96,7 +97,7 @@ describe("The glossary's account of a Spin-off (#883)", () => {
     expect(entry("Design session")).toContain("Any finish but a Map can open Spin-offs");
     expect(entry("Operator step")).toContain("It never asks the Operator to open an issue: work that needs an issue of its own is a Spin-off");
     expect(entry("Triage")).toContain("A Spin-off it sets aside only as a duplicate of a named issue");
-    expect(entry("Intake")).toContain("a Check's issue or a Spin-off");
+    expect(entry("Intake")).toContain("a Check's issue, a Spin-off");
   });
 });
 
@@ -116,11 +117,10 @@ describe("ADR-0039, the Kit opens issues itself", () => {
     expect(adr).toContain("- **It enters at Triage.**");
   });
 
-  it("says it reverses #825's link, and that the Follow-up part is built in a later Ticket", () => {
+  it("says it reverses #825's link, and names the Tickets of the two later parts", () => {
     expect(adr).toContain('This reverses #825\'s "The Operator still opens it from the link"');
     expect(adr).toContain("#884");
     expect(adr).toContain("#885");
-    expect(adr).toContain("built in a later Ticket");
   });
 });
 

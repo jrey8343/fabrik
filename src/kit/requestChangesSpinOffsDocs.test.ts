@@ -69,9 +69,8 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Kit-opens-issues release notes, 
   const notes = read(NOTES);
   const changed = (lead: string) => notes.split("\n").find((line) => line.startsWith(`- **${lead}**`)) ?? "";
 
-  it("say the draft holds the Spec's first two parts, and that the third is not built yet", () => {
-    expect(notes).toContain("This draft holds the first two of the Spec's three parts");
-    expect(notes).toContain("A Follow-up that is a fault ([#885](https://github.com/jrey8343/fabrik/issues/885)) adds its part here when it is built.");
+  it("say the draft holds a Request changes' Spin-offs among the Spec's parts", () => {
+    expect(notes).toContain("a Request changes that asks for a Spin-off ([#884](https://github.com/jrey8343/fabrik/issues/884))");
   });
 
   it("say in the release-note line that a Request changes can ask for a point to be its own issue", () => {
@@ -138,7 +137,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Kit-opens-issues release notes, 
     expect(notes).not.toContain("every point of a Request changes is still built on the pull request");
     expect(notes).toContain("a point of a Request changes with no such words is still built on the pull request (ADR-0010)");
     const why = notes.split("\n").find((line) => line.startsWith("- **Why a minor:**")) ?? "";
-    expect(why).toContain("No new label, no Setup step, no new App permission and no new Kit config field");
+    expect(why).toContain("No new label, no Setup step and no new App permission is needed");
   });
 
   it("say the limits the rule has: an ask that holds both, a run that ends without landing, and a landing that fails part-way", () => {
@@ -201,8 +200,7 @@ describe("ADR-0039 and ADR-0010, on a Request changes' Spin-offs (#884)", () => 
     expect(rule("Only the Operator's words set a point aside.")).toContain("an agent that may judge a requested change unrelated may leave unbuilt what the Operator asked for");
   });
 
-  it("says the Follow-up part alone is still to be built", () => {
-    expect(adr).toContain("The Follow-up part is built in a later Ticket");
+  it("no longer says its own part is still to be built", () => {
     expect(adr).toContain("#885");
     expect(adr).not.toContain("A Request changes' Spin-offs come with #884");
   });

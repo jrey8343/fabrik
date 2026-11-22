@@ -151,11 +151,11 @@ The Kit's scheduled check of a Product repo's production errors and default-bran
 _Avoid_: alerting, watcher, monitor agent
 
 **Intake**:
-The rule that gives a new issue `needs-triage`, unless a skill made it or it already has a state, so Triage sees it. A sub-issue with no state gets one quiet line instead, saying which label to add. An issue the Kit opens itself for Triage, a Check's issue or a Spin-off, is opened with `needs-triage` already on, so Intake leaves it alone and Triage sees it all the same.
+The rule that gives a new issue `needs-triage`, unless a skill made it or it already has a state, so Triage sees it. A sub-issue with no state gets one quiet line instead, saying which label to add. An issue the Kit opens itself for Triage, a Check's issue, a Spin-off or a Follow-up that is a fault, is opened with `needs-triage` already on, so Intake leaves it alone and Triage sees it all the same.
 _Avoid_: inbox, new-issue hook
 
 **Triage**:
-The AFK step that sorts each incoming issue (not ones the Loop's own skills create) into its next state: straight to an Implementer, into design with the Operator, or set aside. An issue it sets aside as a duplicate of one of the Recent issues closes as GitHub's *duplicate*, naming that issue, the original; any other it sets aside closes as *not planned*. A Spin-off it sets aside only as a duplicate of a named issue, since the Operator asked for it.
+The AFK step that sorts each incoming issue (not ones the Loop's own skills create) into its next state: straight to an Implementer, into design with the Operator, or set aside. An issue it sets aside as a duplicate of one of the Recent issues closes as GitHub's *duplicate*, naming that issue, the original; any other it sets aside closes as *not planned*. A Spin-off it sets aside only as a duplicate of a named issue, since the Operator asked for it. A Follow-up the Kit opened it sorts as any issue, and may set aside, since nobody asked for it.
 _Avoid_: sorting
 
 **Recent issues**:
@@ -279,7 +279,7 @@ Sending a Ticket that can't be built as designed to a new Design session: after 
 _Avoid_: rejection, bounce
 
 **Follow-up**:
-Work the Reviewer names on a pass that deserves its own issue but lies outside the Ticket's scope, left for the Operator to open as an issue or ignore.
+Work the Reviewer names on a pass that deserves its own issue but lies outside the Ticket's scope. It is one of two kinds. A fault is something already wrong that its body shows, saying where it is, by file and line, and what shows it: the Kit opens it as an issue when the pull request merges, up to `caps.follow_up_issues`, and that issue enters at Triage. An idea is anything else, and stays a link the Operator opens as an issue or ignores, as a fault over the cap does.
 _Avoid_: nit, suggestion
 
 **Infrastructure failure**:
@@ -415,7 +415,7 @@ A UI pull request whose Implementer showed nothing of its change: it named no Ev
 _Avoid_: capture failure, missing screenshot
 
 **Digest**:
-The Kit's plain-English account of an agent pull request as it stands at one head, written each time it arrives at the Merge gate and kept on the pull request for the Operator: what was decided and why, what was left out of scope, what needs follow-up, and which parts deserve the Operator's own eyes.
+The Kit's plain-English account of an agent pull request as it stands at one head, written each time it arrives at the Merge gate and kept on the pull request for the Operator: what was decided and why, what was left out of scope, its Follow-ups, the faults the Kit opens as issues at the merge and the ideas worth opening, and which parts deserve the Operator's own eyes.
 _Avoid_: PR summary, brief, report, changelog
 
 **Capture identity**:
