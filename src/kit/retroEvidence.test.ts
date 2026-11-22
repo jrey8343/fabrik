@@ -785,9 +785,10 @@ describe("the evidence bundle", () => {
           followUpIssues: [aKitFollowUpIssue({ number: 101 })],
         });
 
+        // In the order the Verdict comment lists them: its ideas, then its faults.
         expect(followUps).toEqual([
-          { ref: "#50", pullRequest: 50, kind: "fault", title: BADGE.title, body: BADGE.body, openedAs: null, kitOpened: { ref: "#101", issue: 101, state: "open", stateLabel: "ready-for-agent" }, overCap: false },
           { ref: "#50", pullRequest: 50, kind: "idea", title: MONEY.title, body: MONEY.body, openedAs: 90, kitOpened: null, overCap: false },
+          { ref: "#50", pullRequest: 50, kind: "fault", title: BADGE.title, body: BADGE.body, openedAs: null, kitOpened: { ref: "#101", issue: 101, state: "open", stateLabel: "ready-for-agent" }, overCap: false },
           { ref: "#50", pullRequest: 50, kind: "fault", title: FOOTER.title, body: FOOTER.body, openedAs: null, kitOpened: null, overCap: true },
         ]);
       });

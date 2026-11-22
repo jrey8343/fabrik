@@ -30,9 +30,10 @@ describe("Kit code's facts about the Follow-ups, by kind (#885)", () => {
   it("give each Follow-up its kind, a fault with no link and an idea with its Open as issue link", () => {
     const { followUps } = digestFactsOf({ openedAt: "2026-11-02T10:00:00Z", kitComments: [aPassNaming(5, "a", [BADGE, MONEY])], requestChanges: [], landedNothing: 0 });
 
+    // In the order the Verdict comment lists them: its ideas, then its faults.
     expect(followUps).toEqual([
-      { id: "f1", kind: "fault", title: BADGE.title, url: null },
-      { id: "f2", kind: "idea", title: MONEY.title, url: newIssueUrl(REPO, MONEY.title, MONEY.body, "From PR #50") },
+      { id: "f1", kind: "idea", title: MONEY.title, url: newIssueUrl(REPO, MONEY.title, MONEY.body, "From PR #50") },
+      { id: "f2", kind: "fault", title: BADGE.title, url: null },
     ]);
   });
 });

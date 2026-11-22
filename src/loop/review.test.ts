@@ -651,7 +651,8 @@ describe("Review: the Follow-ups on a pass", () => {
       "verdict: pass\n\nChecked it.\n\nfollow-ups:\n- [fault] The badge miscounts\n  `badge.ts:14` reads a stale count.\n- [idea] Extract the money type\n  The cart and the till both round.",
     );
 
-    expect(body).toContain("#### The badge miscounts\n\n`badge.ts:14` reads a stale count.\n\nThe Kit opens this fault as an issue when the pull request merges.\n\n#### Extract the money type");
+    // The idea first, with its link, then the fault.
+    expect(body).toMatch(/#### Extract the money type\n\nThe cart and the till both round\.\n\n\[Open as issue\]\([^)]+\)\n\n#### The badge miscounts\n\n`badge\.ts:14` reads a stale count\.\n\nThe Kit opens this fault as an issue when the pull request merges\.\n/);
     expect(issueLinks(body).map((link) => link.searchParams.get("title"))).toEqual(["Extract the money type"]);
     expect(body).not.toMatch(/\[(fault|idea)\]/);
   });

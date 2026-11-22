@@ -158,7 +158,8 @@ export type RowFollowUp = FollowUp & { readonly filedAs: number | null };
 
 /**
  * The Follow-ups the pass on open agent pull request `pullRequest`'s head
- * named, in the Verdict's order, each with its title, its body, its kind
+ * named, in the order its Verdict comment lists them, the ideas and then the
+ * faults, each with its title, its body, its kind
  * (#885) and the number of the related issue, a candidate or an owed
  * Roll-in's, that has exactly its title, compared as the Retro's evidence
  * compares a filed Follow-up's, else null. None when the latest Verdict on

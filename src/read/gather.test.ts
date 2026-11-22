@@ -471,7 +471,7 @@ describe("a gather shaped for Home", () => {
           ],
         });
 
-        expect(facts.mergedFollowUps).toEqual([{ pullRequest: 50, named: [BADGE, MONEY], opened: [{ issue: 101, title: "The badge miscounts" }] }]);
+        expect(facts.mergedFollowUps).toEqual([{ pullRequest: 50, named: [MONEY, BADGE], opened: [{ issue: 101, title: "The badge miscounts" }] }]);
       });
 
       it("are read from a bot's comments alone, so nobody names a Follow-up or an opened issue by quoting one", async () => {
@@ -517,8 +517,8 @@ describe("a gather shaped for Home", () => {
         });
 
         expect(rowsOf(facts, null, null, null, NOW).find(({ standing }) => standing.pullRequest === 50)?.followUps).toEqual([
-          { ...BADGE, filedAs: 101 },
           { ...MONEY, filedAs: null },
+          { ...BADGE, filedAs: 101 },
         ]);
       });
     });

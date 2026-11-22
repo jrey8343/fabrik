@@ -43,14 +43,19 @@ export type NamedFollowUp = Omit<FollowUp, "kind"> & { readonly kind?: FollowUpK
  * The Follow-ups part of a pass's Verdict comment: each Follow-up's title
  * and body, with @-mentions stripped, then a fault's line saying the Kit
  * opens it when the pull request merges, or an idea's Open as issue link.
+ * The ideas come first, then the faults, each in the order named: a reader
+ * pinned to a release before a Follow-up had a kind ends each item at its
+ * link, so it reads every idea and stops at the first fault, where a fault
+ * listed among the ideas would have taken the next idea's link for its own.
  * Nothing when there are none. followUpsIn reads it back.
  */
 export function followUpsSection(followUps: readonly NamedFollowUp[], repoUrl: string, pullRequest: number): string[] {
   if (followUps.length === 0) return [];
+  const isFault = ({ kind }: NamedFollowUp) => kind === "fault";
   return [
     "",
     FOLLOW_UPS_HEADING,
-    ...followUps.flatMap((followUp) => {
+    ...[...followUps.filter((followUp) => !isFault(followUp)), ...followUps.filter(isFault)].flatMap((followUp) => {
       const title = withoutMentions(followUp.title);
       const body = withoutMentions(followUp.body);
       return [

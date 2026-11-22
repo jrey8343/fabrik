@@ -27,13 +27,35 @@ describe("The Follow-ups part of a pass's Verdict comment (#885)", () => {
 });
 
 describe("Reading a posted Verdict comment's Follow-ups back (#885)", () => {
-  it("reads each one's kind, title and body, a fault with no link and an idea with its own", () => {
+  it("reads each one's kind, title and body, an idea with its link and a fault with none", () => {
     expect(listedFollowUpsIn(sectionOf(BADGE, MONEY, FOOTER))).toEqual([
-      { ...BADGE, url: null },
       { ...MONEY, url: newIssueUrl(REPO, MONEY.title, MONEY.body, "From PR #50") },
+      { ...BADGE, url: null },
       { ...FOOTER, url: null },
     ]);
-    expect(followUpsIn(sectionOf(BADGE, MONEY, FOOTER))).toEqual([BADGE, MONEY, FOOTER]);
+    expect(followUpsIn(sectionOf(BADGE, MONEY, FOOTER))).toEqual([MONEY, BADGE, FOOTER]);
+  });
+
+  it("lists the ideas before the faults, each in the order named, so a reader that knows only links reads every idea and stops at the first fault", () => {
+    /** The reader as it was before a Follow-up had a kind: an item ends at its Open as issue link. */
+    const readBefore = (comment: string): string[] => {
+      const lines = comment.split("\n");
+      const titles: string[] = [];
+      let at = lines.lastIndexOf("### Follow-ups") + 1;
+      for (;;) {
+        while (lines[at] === "") at += 1;
+        const title = /^#### (.*)$/.exec(lines[at] ?? "")?.[1];
+        const link = lines.findIndex((line, i) => i > at && /^\[Open as issue\]\((.*)\)$/.test(line));
+        if (title === undefined || link === -1) return titles;
+        titles.push(title);
+        at = link + 1;
+      }
+    };
+    const TIDY = { kind: "idea", title: "Tidy the cart", body: "" } as const;
+
+    expect(followUpsIn(sectionOf(BADGE, MONEY, FOOTER, TIDY)).map(({ title }) => title)).toEqual([MONEY.title, TIDY.title, BADGE.title, FOOTER.title]);
+    expect(readBefore(sectionOf(BADGE, MONEY, FOOTER, TIDY))).toEqual([MONEY.title, TIDY.title]);
+    expect(readBefore(sectionOf(BADGE, FOOTER))).toEqual([]);
   });
 
   it("reads a comment posted before a Follow-up had a kind as naming ideas", () => {

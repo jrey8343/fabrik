@@ -50,10 +50,11 @@ describe("an open pull request's Follow-ups, by kind (#885)", () => {
       github: factsOf({ openIssues: [anOpenIssue({ number: 7, labels: ["ready-for-agent"] })], openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, draft: false, headSha: HEAD, comments: [pass] })] }),
     });
 
+    // In the order the Verdict comment lists them: its ideas, then its faults.
     expect(rowOf50(facts)?.followUps).toEqual([
-      { title: BADGE.title, body: BADGE.body, kind: "fault", filedAs: null },
       { title: MONEY.title, body: MONEY.body, kind: "idea", filedAs: null },
       { title: "Tidy the cart", body: "", kind: "idea", filedAs: null },
+      { title: BADGE.title, body: BADGE.body, kind: "fault", filedAs: null },
     ]);
   });
 });
@@ -62,7 +63,7 @@ describe("what a merged pull request's comments say of its Follow-ups (#885)", (
   it("is the Follow-ups its last Verdict named, when that is a pass, and each fault the Kit opened as an issue", () => {
     const comments = [verdictListing("pass", "2026-11-09T09:00:00Z", [MONEY]), verdictListing("pass", "2026-11-09T10:00:00Z", [BADGE, MONEY, FOOTER]), faultsComment([[101, BADGE.title]], [FOOTER.title])];
 
-    expect(mergedFollowUpsOf(50, comments)).toEqual({ pullRequest: 50, named: [BADGE, MONEY, FOOTER], opened: [{ issue: 101, title: BADGE.title }] });
+    expect(mergedFollowUpsOf(50, comments)).toEqual({ pullRequest: 50, named: [MONEY, BADGE, FOOTER], opened: [{ issue: 101, title: BADGE.title }] });
   });
 
   it("is nothing when its last Verdict is no pass, or its pass named none", () => {
