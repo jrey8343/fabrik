@@ -8,10 +8,10 @@
 // Verdict comment gave it (src/loop/followUps.ts). Pure, no I/O.
 import type { KitConfig } from "../kit/config.ts";
 import { issueTitleOf, oncePerTitle, openAsIssueLink } from "./followUps.ts";
-import { NEEDS_TRIAGE } from "./labels.ts";
 import { joinLinked, type Linked, linkedComment } from "./linked.ts";
 import { FOLLOW_UPS_OPENED_MARKER, followUpLeftLine, followUpMarker, followUpOpenedLine, fromPullRequestLine } from "./markers.ts";
 import { withoutMentions } from "./mentions.ts";
+import { openAtTriage } from "./openedAtTriage.ts";
 import type { Action, CreatedIssue, FollowUpIssuesSnapshot, LoopEvent, PullRequestSnapshot } from "./types.ts";
 import type { Fault } from "./verdict.ts";
 
@@ -90,25 +90,16 @@ interface OpenedFault {
 }
 
 /**
- * Opens one fault as an issue of its own, as the Fabrik App. It enters at
- * Triage: it is opened with `needs-triage`, as a Check's issue and a
- * Spin-off are, and no other label. Its body opens with the Follow-up
- * marker, which names the pull request, then holds the Reviewer's text,
- * which mentions nobody, and ends with the `From PR` line an issue opened
- * from the link ends with. It is no sub-issue and nothing blocks it: the
- * pull request it was found beside has merged.
+ * Opens one fault as an issue of its own, as the Kit opens every issue of
+ * its own (openAtTriage): with `needs-triage` alone, as a Spin-off is. Its
+ * body opens with the Follow-up marker, which names the pull request, then
+ * holds the Reviewer's text, and ends with the `From PR` line an issue
+ * opened from the link ends with. Its title is cut to what GitHub takes, as
+ * that link cuts it. Nothing blocks it: the pull request it was found
+ * beside has merged.
  */
 function openFault(issue: CreatedIssue, { title, body }: Fault, pullRequest: number): Action {
-  const text = withoutMentions(body);
-  return {
-    kind: "create-issue",
-    key: issue.created,
-    title: issueTitleOf(withoutMentions(title)),
-    body: [followUpMarker(pullRequest), ...(text === "" ? [] : [text, ""]), fromPullRequestLine(pullRequest)].join("\n"),
-    labels: [NEEDS_TRIAGE],
-    parent: null,
-    blockedBy: [],
-  };
+  return openAtTriage(issue, followUpMarker(pullRequest), { title: issueTitleOf(withoutMentions(title)), body, lines: [fromPullRequestLine(pullRequest)] });
 }
 
 /** The comment's part naming each issue the Kit opened for a fault, in this plan or an earlier one. */
