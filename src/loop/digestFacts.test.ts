@@ -6,10 +6,9 @@ import { type DigestThread, digestFactsOf } from "./digestFacts.ts";
 import { aDigestFacts, aDigestGiven, aDigestReply, aRequestChanges } from "../__fixtures__/digests.ts";
 import { anIssue, aPullRequest, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { verdictsIn } from "../github/threads.ts";
-import { followUpsSection, newIssueUrl } from "./followUps.ts";
+import { followUpsSection, type NamedFollowUp, newIssueUrl } from "./followUps.ts";
 import { retryAfterFlaw } from "./retry.ts";
 import { planFor } from "./rules.ts";
-import type { FollowUp } from "./verdict.ts";
 import {
   conflictAttemptMarker,
   CONFLICT_RUN_MARKER,
@@ -493,7 +492,7 @@ describe("The Follow-ups of every pass on the pull request", () => {
   const DEAD_CODE = { title: "Delete the old basket page", body: "" };
   const COPY = { title: "Say 'basket' in the emails", body: "They still say cart." };
   /** A pass whose comment lists these Follow-ups after its findings, as the Kit posts one (src/loop/followUps.ts). */
-  const aPassNaming = (minute: number, head: string, followUps: readonly FollowUp[]) =>
+  const aPassNaming = (minute: number, head: string, followUps: readonly NamedFollowUp[]) =>
     aVerdict(minute, { verdict: "pass", headSha: sha(head) }, ["", "### Checked", "", "Every criterion.", ...followUpsSection(followUps, REPO, 50), "", "[The run](https://github.com/acme/shop/actions/runs/42/attempts/1)"].join("\n"));
 
   it("are listed in the order their Verdicts name them, each with an id, its title and its Open as issue link as the Verdict has it", () => {
@@ -504,9 +503,9 @@ describe("The Follow-ups of every pass on the pull request", () => {
     const { followUps } = digestFactsOf(thread);
 
     expect(followUps).toEqual([
-      { id: "f1", title: "Rate limit the cart", url: newIssueUrl(REPO, RATE_LIMIT.title, RATE_LIMIT.body, "From PR #50") },
-      { id: "f2", title: "Delete the old basket page", url: newIssueUrl(REPO, DEAD_CODE.title, DEAD_CODE.body, "From PR #50") },
-      { id: "f3", title: "Say 'basket' in the emails", url: newIssueUrl(REPO, COPY.title, COPY.body, "From PR #50") },
+      { id: "f1", kind: "idea", title: "Rate limit the cart", url: newIssueUrl(REPO, RATE_LIMIT.title, RATE_LIMIT.body, "From PR #50") },
+      { id: "f2", kind: "idea", title: "Delete the old basket page", url: newIssueUrl(REPO, DEAD_CODE.title, DEAD_CODE.body, "From PR #50") },
+      { id: "f3", kind: "idea", title: "Say 'basket' in the emails", url: newIssueUrl(REPO, COPY.title, COPY.body, "From PR #50") },
     ]);
     expect(followUps[0]?.url).toMatch(/^https:\/\/github\.com\/acme\/shop\/issues\/new\?title=Rate\+limit\+the\+cart&body=Saving\+has\+no\+limit\./);
     expect(thread.kitComments[0]?.body).toContain(`[Open as issue](${followUps[0]?.url})`);
@@ -536,9 +535,9 @@ describe("The Follow-ups a Digest shows", () => {
   const THREE = aDigestGiven({
     facts: aDigestFacts({
       followUps: [
-        { id: "f1", title: "Rate limit the cart", url: `${NEW_ISSUE}Rate+limit+the+cart` },
-        { id: "f2", title: "Delete the old basket page", url: `${NEW_ISSUE}Delete+the+old+basket+page` },
-        { id: "f3", title: "Say 'basket' in the emails", url: `${NEW_ISSUE}Say+%27basket%27+in+the+emails` },
+        { id: "f1", kind: "idea", title: "Rate limit the cart", url: `${NEW_ISSUE}Rate+limit+the+cart` },
+        { id: "f2", kind: "idea", title: "Delete the old basket page", url: `${NEW_ISSUE}Delete+the+old+basket+page` },
+        { id: "f3", kind: "idea", title: "Say 'basket' in the emails", url: `${NEW_ISSUE}Say+%27basket%27+in+the+emails` },
       ],
     }),
   });

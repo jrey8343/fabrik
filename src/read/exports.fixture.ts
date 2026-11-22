@@ -743,6 +743,7 @@ const A_DIGEST_DATA = {
   whatItDoes: "A shopper can now save their basket from /basket.",
   howItGotHere: "One Review passed it at the first head.",
   followUps: [{ title: "Share a saved basket by link", url: "https://github.com/owner/product/issues/new?title=Share+a+saved+basket+by+link" }],
+  faults: [{ title: "The saved-basket test is skipped" }],
 } as const satisfies DigestData;
 
 /** The folds of a Digest, as a reader renders them: the comment's Markdown from the folds line down, the run's link last. */

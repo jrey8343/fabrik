@@ -9,11 +9,23 @@ import type { Verdict, VerdictTags } from "./types.ts";
 
 export const VERDICTS: readonly Verdict[] = ["pass", "execution-flaw", "design-flaw"];
 
+/**
+ * What a Follow-up is (#885, ADR-0039): a `fault`, something already wrong
+ * that its body shows, which the Kit opens as an issue when the pull request
+ * merges, or an `idea`, anything else, which stays an Open as issue link.
+ */
+export type FollowUpKind = "fault" | "idea";
+
+/** The kinds a Follow-up can be, as the Reviewer's reply marks an item: `[fault]` or `[idea]` before its title. */
+export const FOLLOW_UP_KINDS: readonly FollowUpKind[] = ["fault", "idea"];
+
 /** Work that deserves its own issue but lies outside the Ticket's scope (GLOSSARY.md). */
 export interface FollowUp {
   readonly title: string;
   /** Markdown. */
   readonly body: string;
+  /** A fault or an idea (#885): one the Reviewer gave no kind is an idea. */
+  readonly kind: FollowUpKind;
 }
 
 /**
@@ -200,7 +212,9 @@ export const FOLLOW_UPS_PREFIX = "follow-ups:";
 
 /**
  * Splits a Follow-ups block off the findings: a `follow-ups:` line, then one
- * `- <title>` item per Follow-up with its body indented beneath it. The block
+ * `- <title>` item per Follow-up with its body indented beneath it. A title
+ * may open with its kind, `[fault]` or `[idea]` (#885): one with neither is
+ * an idea, and any other mark is part of the title. The block
  * ends at the first line that is neither. A Verdict that isn't a pass drops
  * the block and keeps the rest. On a pass, a malformed block, or findings
  * after it, stays in the findings as plain text, and the Verdict still lands.
@@ -223,16 +237,18 @@ function followUpsBlock(rest: string, verdict: Verdict): { findings: string; fol
 
 /** The items under a `follow-ups:` line, each line an item's title, part of its body, or blank; null if they don't make one. */
 function followUpItems(lines: readonly string[]): FollowUp[] | null {
-  const items: { title: string; body: string[] }[] = [];
+  const items: { title: string; body: string[]; kind: FollowUpKind }[] = [];
   for (const line of lines) {
-    const title = /^- (.*)$/.exec(line)?.[1]?.trim();
+    const item = /^- (.*)$/.exec(line)?.[1]?.trim();
+    const kind = item === undefined ? undefined : FOLLOW_UP_KINDS.find((each) => item.startsWith(`[${each}]`));
+    const title = item === undefined || kind === undefined ? item : item.slice(kind.length + 2).trim();
     if (title === "") return null;
-    if (title !== undefined) items.push({ title, body: [] });
+    if (title !== undefined) items.push({ title, body: [], kind: kind ?? "idea" });
     else if (items.length > 0) items.at(-1)?.body.push(line);
     else if (line.trim() !== "") return null;
   }
   if (items.length === 0) return null;
-  return items.map(({ title, body }) => ({ title, body: dedent(body) }));
+  return items.map(({ title, body, kind }) => ({ title, body: dedent(body), kind }));
 }
 
 /** Body lines with their common indent taken off and blank lines trimmed from both ends. */

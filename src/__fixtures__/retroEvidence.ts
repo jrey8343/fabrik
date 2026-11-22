@@ -6,7 +6,7 @@ import { type RunRecord, runStoreName } from "../kit/runRecord.ts";
 import { followUpsSection } from "../loop/followUps.ts";
 import { verdictActions } from "../loop/review.ts";
 import type { Verdict } from "../loop/types.ts";
-import type { FollowUp } from "../loop/verdict.ts";
+import type { NamedFollowUp } from "../loop/followUps.ts";
 import { aComment, aRunRecord, factsOf } from "../read/builders.ts";
 import { aPullRequest, aRetroIssue, retroBody } from "./snapshots.ts";
 
@@ -48,7 +48,7 @@ export function theRetroBeingFilled(windowEnd: string): RetroIssueFacts {
  */
 export function aVerdictWithFollowUps(
   verdict: Verdict,
-  followUps: readonly FollowUp[],
+  followUps: readonly NamedFollowUp[],
   at: string,
   pullRequest: number,
   overrides: Partial<CommentFacts> = {},

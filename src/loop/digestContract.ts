@@ -561,8 +561,15 @@ export interface DigestData {
   readonly items: readonly DigestDataItem[];
   readonly whatItDoes: string;
   readonly howItGotHere: string;
-  /** Each Follow-up shown, with its Open as issue link. */
+  /** Each idea shown, with its Open as issue link: the Follow-ups the writer chose. */
   readonly followUps: readonly { readonly title: string; readonly url: string }[];
+  /**
+   * Each fault the pull request's passes named (#885), once by its title:
+   * the Follow-ups the Kit opens as issues when the pull request merges,
+   * which Kit code shows whatever the writer chose. None on a Digest written
+   * before a Follow-up had a kind.
+   */
+  readonly faults: readonly { readonly title: string }[];
 }
 
 /**
@@ -572,9 +579,10 @@ export interface DigestData {
  * (digestItemsOf); each place is as it resolves in the head, one that does
  * not being dropped and its item kept (placeAt); a picture is kept only when
  * it is one of the pictures, a captured route or a produced named shot's
- * name, compared exactly, and is dropped otherwise, its item kept; the Follow-ups are the ones the reply names,
- * once, in the order Kit code listed them; and every text has lost its
- * mentions.
+ * name, compared exactly, and is dropped otherwise, its item kept; the Follow-ups are the ideas the reply names,
+ * once, in the order Kit code listed them; the faults are every one Kit code
+ * listed, once by its trimmed title, as the merge opens them
+ * (src/loop/followUpIssues.ts); and every text has lost its mentions.
  */
 function digestDataOf(reply: DigestReply, { facts, head, pictures }: Pick<DigestGiven, "facts" | "head" | "pictures">): DigestData {
   return {
@@ -589,7 +597,10 @@ function digestDataOf(reply: DigestReply, { facts, head, pictures }: Pick<Digest
     })),
     whatItDoes: shown(reply.whatItDoes),
     howItGotHere: shown(reply.howItGotHere),
-    followUps: facts.followUps.filter(({ id }) => reply.followUps.includes(id)).map(({ title, url }) => ({ title: withoutMentions(title), url })),
+    followUps: facts.followUps.flatMap(({ id, title, url }) => (url !== null && reply.followUps.includes(id) ? [{ title: withoutMentions(title), url }] : [])),
+    faults: facts.followUps
+      .filter(({ kind, title }, at, all) => kind === "fault" && all.findIndex((earlier) => earlier.kind === "fault" && earlier.title.trim() === title.trim()) === at)
+      .map(({ title }) => ({ title: withoutMentions(title.trim()) })),
   };
 }
 
@@ -627,7 +638,7 @@ function isDataItem(value: unknown): value is DigestDataItem {
 
 /** Whether a value has every field of a data line at this release's version, each of its type. A field it does not know is no fault: a later release may add one. */
 function isDigestData(value: Record<string, unknown>): boolean {
-  const { v, items, whatItDoes, howItGotHere, followUps } = value;
+  const { v, items, whatItDoes, howItGotHere, followUps, faults } = value;
   return (
     v === DIGEST_DATA_VERSION &&
     Array.isArray(items) &&
@@ -635,7 +646,9 @@ function isDigestData(value: Record<string, unknown>): boolean {
     typeof whatItDoes === "string" &&
     typeof howItGotHere === "string" &&
     Array.isArray(followUps) &&
-    followUps.every((followUp) => isObject(followUp) && typeof followUp["title"] === "string" && typeof followUp["url"] === "string")
+    followUps.every((followUp) => isObject(followUp) && typeof followUp["title"] === "string" && typeof followUp["url"] === "string") &&
+    // A data line written before a Follow-up had a kind has no faults (#885).
+    (faults === undefined || (Array.isArray(faults) && faults.every((fault) => isObject(fault) && typeof fault["title"] === "string")))
   );
 }
 
@@ -684,7 +697,8 @@ export function readDigestComment(body: string): DigestCommentRead {
   if (value["v"] !== DIGEST_DATA_VERSION) return { ok: false, why: "unknown-version" };
   if (!isDigestData(value)) return { ok: false, why: "malformed" };
   const foldsLine = lines.indexOf(DIGEST_FOLDS_MARKER);
-  return { ok: true, ...mark, data: value as unknown as DigestData, folds: foldsLine === -1 ? "" : lines.slice(foldsLine + 1).join("\n") };
+  const data = { faults: [], ...value } as unknown as DigestData;
+  return { ok: true, ...mark, data, folds: foldsLine === -1 ? "" : lines.slice(foldsLine + 1).join("\n") };
 }
 
 /** Where a Digest is: the Product repo's web address, its pull request, the head it is written as of, a full sha, and what its pictures name. */
@@ -720,8 +734,10 @@ function asCode(name: string): string {
  * each item as its bold claim and its sentence, then its places as plain
  * links, then its picture, named in words as a captured route or an Evidence
  * shot as `where` says, or "Nothing." when there is none;
- * What it does; How it got here; and the Follow-ups, each as its title and
- * its Open as issue link, or that none is named. No code appears in it, no
+ * What it does; How it got here; and the Follow-ups, first each fault as its
+ * title and the line saying the Kit opens it when the pull request merges
+ * (#885), then each idea shown as its title and its Open as issue link, or
+ * that none is named. No code appears in it, no
  * image is embedded or linked, and an item's suggested request is not
  * rendered: it is for a reader of the data.
  */
@@ -751,7 +767,12 @@ export function digestTop(data: DigestData, where: DigestWhere): string {
     "",
     "### Follow-ups",
     "",
-    ...(data.followUps.length === 0 ? ["None named."] : data.followUps.map(({ title, url }) => `- ${withoutMentions(title)}: [Open as issue](${url})`)),
+    ...(data.faults.length + data.followUps.length === 0
+      ? ["None named."]
+      : [
+          ...data.faults.map(({ title }) => `- ${withoutMentions(title)}: the Kit opens this fault as an issue when the pull request merges`),
+          ...data.followUps.map(({ title, url }) => `- ${withoutMentions(title)}: [Open as issue](${url})`),
+        ]),
   ].join("\n");
 }
 
@@ -900,10 +921,19 @@ function wordsRefused({ items, whatItDoes, howItGotHere }: DigestReply): string[
   return [`Needs your eyes, What it does and How it got here come to ${words} words between them, over the ${MAX_TOP_WORDS} a Digest's top may hold`];
 }
 
-/** Why Kit code refuses a reply over the Follow-ups it names, or nothing: one Kit code did not list. */
+/**
+ * Why Kit code refuses a reply over the Follow-ups it names, or nothing: one
+ * Kit code did not list, and a fault (#885), which Kit code shows itself in
+ * every Digest, so the writer's choice is only among the ideas.
+ */
 function followUpsRefused(shown: readonly string[], listed: DigestFacts["followUps"]): string[] {
-  const unlisted = [...new Set(shown)].filter((id) => !listed.some((followUp) => followUp.id === id));
-  return unlisted.length === 0 ? [] : [`the reply names ${unlisted.length === 1 ? "a Follow-up" : "Follow-ups"} Kit code did not list: ${named(unlisted)}`];
+  const ids = [...new Set(shown)];
+  const unlisted = ids.filter((id) => !listed.some((followUp) => followUp.id === id));
+  const faults = ids.filter((id) => listed.some((followUp) => followUp.id === id && followUp.kind === "fault"));
+  return [
+    ...(unlisted.length === 0 ? [] : [`the reply names ${unlisted.length === 1 ? "a Follow-up" : "Follow-ups"} Kit code did not list: ${named(unlisted)}`]),
+    ...(faults.length === 0 ? [] : [`the reply names ${faults.length === 1 ? "a fault" : "faults"} among the Follow-ups to show, which Kit code shows itself: ${named(faults)}`]),
+  ];
 }
 
 /**

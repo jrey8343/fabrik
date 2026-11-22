@@ -14,6 +14,7 @@ import { listedFollowUpsIn } from "./followUps.ts";
 import { conflictAttemptIn, CONFLICT_RUN_MARKER, handBackMarkIn, openedSpinOffsIn, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, startedReviewsIn, touchUpBodyOnlyIn, touchUpPushIn, UNMARKED_RETRY_PUSH } from "./markers.ts";
 import { MAX_RETRIES, MAX_TOUCH_UPS, retryNumber, touchUpNumber } from "./retry.ts";
 import { isBrokenRun, type RequestChangesAsks, type Verdict, type VerdictRecord } from "./types.ts";
+import type { FollowUpKind } from "./verdict.ts";
 
 /** A pull request's thread, as much of it as the facts are worked out from. */
 export interface DigestThread {
@@ -133,9 +134,11 @@ export interface Round {
 export interface DigestFollowUp {
   /** Kit code's id for it on this thread: `f1`, `f2`, … in the order listed. */
   readonly id: string;
+  /** A fault, which Kit code shows in every Digest and opens as an issue at the merge, or an idea, which the writer may show (#885). */
+  readonly kind: FollowUpKind;
   readonly title: string;
-  /** Its Open as issue link, as its Verdict comment has it. */
-  readonly url: string;
+  /** An idea's Open as issue link, as its Verdict comment has it; null on a fault, which has none. */
+  readonly url: string | null;
 }
 
 /** How many rounds of each counted kind the thread holds. */
@@ -162,7 +165,7 @@ export interface DigestFacts {
   readonly rounds: readonly Round[];
   /** The rounds, counted. */
   readonly counts: RoundCounts;
-  /** The Follow-ups of every pass on the pull request, in the order their Verdicts list them. The writer says which to show, by id. */
+  /** The Follow-ups of every pass on the pull request, in the order their Verdicts list them. The writer says which of the ideas to show, by id; Kit code shows every fault (#885). */
   readonly followUps: readonly DigestFollowUp[];
   /**
    * The asks: every Request changes of the Operator's as the Reviewer is
@@ -242,7 +245,7 @@ export function digestFactsOf(thread: DigestThread): DigestFacts {
     rounds,
     followUps: bodies
       .flatMap((body) => (verdictsIn([body])[0]?.verdict === "pass" ? listedFollowUpsIn(body) : []))
-      .map(({ title, url }, index) => ({ id: `f${index + 1}`, title, url })),
+      .map(({ kind, title, url }, index) => ({ id: `f${index + 1}`, kind, title, url })),
     asks: asksIn(thread.requestChanges, bodies),
     // The next flaw would call for Retry `retryNumber`, so the ones before it are used.
     retriesLeft: Math.max(0, MAX_RETRIES + 1 - retryNumber(verdicts, thread.landedNothing)),

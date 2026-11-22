@@ -637,7 +637,7 @@ describe("The Digest writer's prompt", () => {
     const words = (text: string) => text.split(/\s+/).filter((word) => word !== "").length;
     // Kit code's asks are the ones the example answers under no id of its own, and its Follow-ups the one it shows.
     const asks = example.asks.filter(({ criterion }) => criterion === undefined).map(({ id }) => ({ id, what: "request-changes" as const, url: "about:blank" }));
-    const facts = aDigestFacts({ asks, followUps: [{ id: "f1", title: "Share a saved basket by link", url: "about:blank" }] });
+    const facts = aDigestFacts({ asks, followUps: [{ id: "f1", kind: "idea", title: "Share a saved basket by link", url: "about:blank" }] });
 
     expect(asks.length).toBeGreaterThan(0);
     expect(example.asks.some(({ criterion }) => criterion !== undefined)).toBe(true);

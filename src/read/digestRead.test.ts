@@ -30,6 +30,7 @@ const DATA: DigestData = {
   whatItDoes: "A shopper can now save their basket from /basket.",
   howItGotHere: "One Review passed it at the first head.",
   followUps: [{ title: "Share a saved basket by link", url: "https://github.com/owner/product/issues/new?title=Share+a+saved+basket+by+link" }],
+  faults: [{ title: "The saved-basket test is skipped" }],
 };
 
 const FOLDS = ["<details>", "<summary>Walk me through it</summary>", "", "1. The basket page's Save button.", "", "</details>", "", "[The run](https://github.com/owner/product/actions/runs/42/attempts/1)"].join("\n");

@@ -646,6 +646,16 @@ describe("Review: the Follow-ups on a pass", () => {
     expect(body.indexOf("### Follow-ups")).toBeLessThan(body.indexOf("[The run]"));
   });
 
+  it("a pass shows a fault with the line saying the Kit opens it when the pull request merges, and no link, and an idea with its link (#885)", () => {
+    const body = verdictCommentFor(
+      "verdict: pass\n\nChecked it.\n\nfollow-ups:\n- [fault] The badge miscounts\n  `badge.ts:14` reads a stale count.\n- [idea] Extract the money type\n  The cart and the till both round.",
+    );
+
+    expect(body).toContain("#### The badge miscounts\n\n`badge.ts:14` reads a stale count.\n\nThe Kit opens this fault as an issue when the pull request merges.\n\n#### Extract the money type");
+    expect(issueLinks(body).map((link) => link.searchParams.get("title"))).toEqual(["Extract the money type"]);
+    expect(body).not.toMatch(/\[(fault|idea)\]/);
+  });
+
   it("a pass with no Follow-ups has no Follow-ups part", () => {
     const body = verdictCommentFor("verdict: pass\n\nChecked it.");
 

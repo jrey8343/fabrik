@@ -26,6 +26,7 @@ describe("Reading the Follow-ups a Reviewer names on a pass", () => {
         {
           title: "The cart badge miscounts after a refresh",
           body: "It was already wrong before this PR: `badge.ts` reads a stale count.\n\nSeen on the product page.",
+          kind: "idea",
         },
       ],
       considered: [],
@@ -59,7 +60,7 @@ describe("Reading the Follow-ups a Reviewer names on a pass", () => {
       verdict: "pass",
       findings: "Checked it.",
       findingTags: [],
-      followUps: [{ title: "Tidy the footer", body: "It was crooked already." }],
+      followUps: [{ title: "Tidy the footer", body: "It was crooked already.", kind: "idea" }],
       considered: ["conversation-3"],
       redChecks: [],
     });
@@ -91,6 +92,43 @@ describe("Reading the Follow-ups a Reviewer names on a pass", () => {
     const output = "Checked it.\n\nfollow-ups:\n- Tidy the footer\n  Crooked.\n\nOne more thing.";
 
     expect(parseVerdict(`verdict: pass\n\n${output}`)).toMatchObject({ ok: true, findings: output, followUps: [] });
+  });
+});
+
+describe("Reading each Follow-up's kind (#885)", () => {
+  it("reads a Follow-up marked a fault and one marked an idea, each title without its mark", () => {
+    const parsed = parseVerdict(
+      "verdict: pass\n\nChecked it.\n\nfollow-ups:\n- [fault] The badge miscounts\n  `badge.ts:14` reads a stale count.\n- [idea] Extract the money type\n  The cart and the till both round.",
+    );
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      findings: "Checked it.",
+      followUps: [
+        { kind: "fault", title: "The badge miscounts", body: "`badge.ts:14` reads a stale count." },
+        { kind: "idea", title: "Extract the money type", body: "The cart and the till both round." },
+      ],
+    });
+  });
+
+  it("reads a Follow-up with no kind as an idea", () => {
+    expect(parseVerdict("verdict: pass\n\nChecked it.\n\nfollow-ups:\n- Tidy the footer\n  Crooked.")).toMatchObject({
+      ok: true,
+      followUps: [{ kind: "idea", title: "Tidy the footer", body: "Crooked." }],
+    });
+  });
+
+  it("reads any other mark as part of the title, and the Follow-up as an idea", () => {
+    expect(parseVerdict("verdict: pass\n\nChecked it.\n\nfollow-ups:\n- [bug] Tidy the footer\n  Crooked.")).toMatchObject({
+      ok: true,
+      followUps: [{ kind: "idea", title: "[bug] Tidy the footer", body: "Crooked." }],
+    });
+  });
+
+  it("a fault with no title after its mark still lands, its block left in the findings as plain text", () => {
+    const block = "follow-ups:\n- [fault]\n  A body.";
+
+    expect(parseVerdict(`verdict: pass\n\nChecked it.\n\n${block}`)).toMatchObject({ ok: true, findings: `Checked it.\n\n${block}`, followUps: [] });
   });
 });
 
