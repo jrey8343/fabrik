@@ -4,7 +4,8 @@
 // client's own file read gives it: a path with nothing at it, a directory and
 // a submodule are each no file, and a file a query will not give as that
 // read does is read singly by it. The gather reads its caller workflow and
-// the Kit's files with it (./gather.ts). Read only.
+// the Kit's files with it (./gather.ts), and the Spend read the Run records a
+// reader doesn't hold (./spend.ts). Read only.
 import type { ReadClient, Repo } from "../github/client.ts";
 
 /** Each path asked for, with its text, or null where there is no file. */
@@ -103,6 +104,11 @@ export async function filesAt(client: Pick<ReadClient, "graphql" | "fileText">, 
  * REST request with the Kit's own client, only for each file GitHub will not
  * give as that read does in a query (filesAt). None at all for no path. It
  * throws a refusal of the query or of a file read, as a file read does.
+ *
+ * `ref` may be a branch, or HEAD for the default branch, in place of a
+ * commit: GitHub then works out that branch's head again for each call, and
+ * for each file a call reads singly, so two calls can read at two commits. A
+ * reader that needs its paths at one commit across calls passes the commit.
  *
  * What it asks costs more than the paths alone: to know a symbolic link, the
  * query also asks for the whole listing of each directory the paths are in,

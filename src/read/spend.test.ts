@@ -20,13 +20,20 @@ function callerIn(timeZone: string): string {
   ].join("\n");
 }
 
+/** The modes GitHub's query gives a tree's entries. */
+const MODE = { file: 33188, directory: 16384 } as const;
+
 /**
  * A canned fabrik-runs store over the API: its files by path, which its git
- * trees list and a file read returns at its default branch. Every request is
- * logged in `requests`, as `GET <API path>` or `file <path>@<ref>`.
+ * trees list, a file read returns and a query of objects by `ref:path`
+ * expressions gives at its default branch, as the files read asks (#895).
+ * Every request is logged in `requests`, as `GET <API path>`,
+ * `file <path>@<ref>` or `query` and each expression it asked, and each
+ * query's paths that end in `.json` in `queried`.
  */
-function storeOf(files: Readonly<Record<string, string>>) {
+function storeOf(files: Readonly<Record<string, string>>, options: { readonly refuseQuery?: (at: number) => GitHubError | undefined } = {}) {
   const requests: string[] = [];
+  const queried: string[][] = [];
   /** Each entry directly under `dir` ("" for the root). */
   const entriesIn = (dir: string) => {
     const prefix = dir === "" ? "" : `${dir}/`;
@@ -46,14 +53,31 @@ function storeOf(files: Readonly<Record<string, string>>) {
       const dir = tree === "HEAD" ? "" : decodeURIComponent(tree).replace(/^tree:/, "");
       return Promise.resolve({ sha: tree, tree: entriesIn(dir), truncated: false });
     },
-    graphql: () => Promise.reject(new Error("Unexpected GraphQL query")),
+    async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+      const objects = [...query.matchAll(/(\w+): object\(expression: \$(\w+)\)/g)].map(([, alias = "", variable = ""]) => [alias, String(variables[variable])] as const);
+      if (objects.length === 0 || variables["owner"] !== "jrey8343" || variables["name"] !== "fabrik-runs") throw new Error(`Unexpected GraphQL query: ${query}`);
+      requests.push(`query ${objects.map(([, expression]) => expression).join(" ")}`);
+      queried.push(objects.flatMap(([, expression]) => (expression.endsWith(".json") ? [expression.replace(/^HEAD:/, "")] : [])));
+      const refusal = options.refuseQuery?.(queried.length);
+      if (refusal !== undefined) throw refusal;
+      /** What GitHub gives for `ref:path` at the default branch: a file, a directory with its entries' modes, or null for nothing there. */
+      const objectAt = (expression: string) => {
+        const [ref = "", path = ""] = expression.split(/:(.*)/s);
+        if (ref !== "HEAD") return null;
+        const text = files[path];
+        if (text !== undefined) return { __typename: "Blob", text, isBinary: false, isTruncated: false };
+        const entries = entriesIn(path);
+        return entries.length === 0 ? null : { __typename: "Tree", entries: entries.map(({ path: name, type }) => ({ name, mode: type === "tree" ? MODE.directory : MODE.file })) };
+      };
+      return { repository: Object.fromEntries(objects.map(([alias, expression]) => [alias, objectAt(expression)])) } as T;
+    },
     fileText(repo, path, ref) {
       requests.push(`file ${path}@${ref}`);
       if (repo.owner !== "jrey8343" || repo.name !== "fabrik-runs") return Promise.reject(new Error(`Unexpected repo: ${repo.owner}/${repo.name}`));
       return Promise.resolve(files[path] ?? null);
     },
   };
-  return { client, requests };
+  return { client, requests, queried };
 }
 
 const SHOP = "runs/acme/shop/2026-11";
@@ -152,17 +176,15 @@ describe("The Spend read", () => {
     });
   });
 
-  it("returns a failure part way, a record's read GitHub never answered, as unread with why", async () => {
-    const { client } = storeOf({ [`${SHOP}/1001-1-implement.json`]: JSON.stringify(aRunRecord({ runId: 1001 })) });
-    const failing: ReadClient = {
-      ...client,
-      fileText: (repo, path, ref) =>
-        path.startsWith("runs/") ? Promise.reject(new GitHubError("fetch failed", 0, { request: `GET ${path}@${ref}` })) : client.fileText(repo, path, ref),
-    };
+  it("returns a failure part way, the records' query GitHub never answered, as unread with why", async () => {
+    const { client } = storeOf(
+      { [`${SHOP}/1001-1-implement.json`]: JSON.stringify(aRunRecord({ runId: 1001 })) },
+      { refuseQuery: () => new GitHubError("fetch failed", 0, { request: "POST /graphql" }) },
+    );
 
-    expect(await readSpend(failing, ["2026-11"], () => false, NOW)).toEqual({
+    expect(await readSpend(client, ["2026-11"], () => false, NOW)).toEqual({
       kind: "unread",
-      why: `GET ${SHOP}/1001-1-implement.json@HEAD got no answer from GitHub: fetch failed`,
+      why: "POST /graphql got no answer from GitHub: fetch failed",
     });
   });
 
@@ -180,7 +202,7 @@ describe("The Spend read", () => {
   });
 
   // The count the Ticket asks for: a store of two Product repos, one owner, with two months asked for.
-  it("makes ten requests for a first read of two months on two Product repos, plus one per new record, and the same ten for a read with nothing new", async () => {
+  it("makes ten requests for a first read of two months on two Product repos, plus one query for its twelve new records, and the same ten for a read with nothing new (#896)", async () => {
     const files = {
       [CALLER]: callerIn("Europe/London"),
       ...Object.fromEntries(
@@ -198,9 +220,110 @@ describe("The Spend read", () => {
     const again = await readSpend(later.client, ["2026-11", "2026-10"], (path) => paths.has(path), NOW);
 
     expect(paths.size).toBe(12);
-    expect(first.requests).toHaveLength(10 + 12);
+    expect(first.requests).toHaveLength(10 + 1);
+    expect(first.queried).toEqual([[...paths]]);
     expect(again).toMatchObject({ kind: "read", records: {}, unreadable: { count: 0, newestSchema: null } });
     expect(later.requests).toHaveLength(10);
+  });
+
+  describe("fetches the records a reader doesn't hold a batch to a query (#896)", () => {
+    /** `count` records of the shop's November, from run 5000, each a Run record of its own. */
+    const recordsOf = (count: number, from = 5000) =>
+      Object.fromEntries(Array.from({ length: count }, (_, at) => [`${SHOP}/${from + at}-1-implement.json`, JSON.stringify(aRunRecord({ runId: from + at }))]));
+
+    it("asks one query for each fifty new records, each record in one of them, and no REST request for any record", async () => {
+      const files = { [CALLER]: callerIn("Europe/London"), ...recordsOf(120) };
+      const { client, requests, queried } = storeOf(files);
+
+      const read = await readSpend(client, ["2026-11"], () => false, NOW);
+
+      expect(read.kind === "read" ? Object.keys(read.records) : read).toEqual(Object.keys(recordsOf(120)));
+      expect(queried.map((paths) => paths.length)).toEqual([50, 50, 20]);
+      expect(queried.flat()).toEqual(Object.keys(recordsOf(120)));
+      expect(requests.filter((request) => request.startsWith("file "))).toEqual([`file ${CALLER}@HEAD`]);
+      expect(requests.filter((request) => request.startsWith("GET ")).every((request) => request.includes("/git/trees/"))).toBe(true);
+    });
+
+    it("puts no path the reader holds in any query", async () => {
+      const files = recordsOf(60);
+      const held = new Set(Object.keys(files).filter((_, at) => at % 3 === 0));
+      const { client, requests, queried } = storeOf(files);
+
+      const read = await readSpend(client, ["2026-11"], (path) => held.has(path), NOW);
+
+      expect(read.kind === "read" ? Object.keys(read.records) : read).toEqual(Object.keys(files).filter((path) => !held.has(path)));
+      expect(queried.flat().filter((path) => held.has(path))).toEqual([]);
+      expect(requests.filter((request) => [...held].some((path) => request.includes(path)))).toEqual([]);
+    });
+
+    it("gives a reader that stops the read at a number of new records no more than that, and asks for no other", async () => {
+      const files = recordsOf(80);
+      const fetched: string[] = [];
+      const { client, queried } = storeOf(files);
+
+      const read = await readSpend(
+        client,
+        ["2026-11"],
+        (path) => {
+          if (fetched.length >= 3) return true;
+          fetched.push(path);
+          return false;
+        },
+        NOW,
+      );
+
+      expect(fetched).toEqual(Object.keys(files).slice(0, 3));
+      expect(read.kind === "read" ? Object.keys(read.records) : read).toEqual(fetched);
+      expect(queried).toEqual([fetched]);
+    });
+
+    it("gives the same records, count of those it couldn't read and newest schema among them as it did a file read to a record, across batches", async () => {
+      const files = {
+        ...recordsOf(70),
+        [`${SHOP}/5010-1-implement.json`]: JSON.stringify({ ...aRunRecord({ runId: 5010 }), schema: 14 }),
+        [`${SHOP}/5020-1-implement.json`]: "not JSON",
+        [`${SHOP}/5065-1-implement.json`]: JSON.stringify({ ...aRunRecord({ runId: 5065 }), schema: 15 }),
+      };
+      const { client, queried } = storeOf(files);
+
+      const read = await readSpend(client, ["2026-11"], () => false, NOW);
+
+      expect(queried.map((paths) => paths.length)).toEqual([50, 20]);
+      expect(read).toEqual({
+        kind: "read",
+        records: Object.fromEntries(
+          Array.from({ length: 70 }, (_, at) => 5000 + at)
+            .filter((run) => ![5010, 5020, 5065].includes(run))
+            .map((run) => [`${SHOP}/${run}-1-implement.json`, aRunRecord({ runId: run })]),
+        ),
+        unreadable: { count: 3, newestSchema: 15 },
+        timeZone: "UTC",
+      });
+    });
+
+    it("returns a batch GitHub refuses as unread, with why, giving no record of the batches before it, and never throws", async () => {
+      const refusal = new GitHubError("GitHub GraphQL query failed: Resource not accessible by integration", 403, {
+        body: JSON.stringify({ message: "Resource not accessible by integration" }),
+        request: "POST /graphql",
+      });
+      const { client, queried } = storeOf(recordsOf(120), { refuseQuery: (at) => (at === 2 ? refusal : undefined) });
+
+      expect(await readSpend(client, ["2026-11"], () => false, NOW)).toEqual({
+        kind: "unread",
+        why: "POST /graphql failed with 403: Resource not accessible by integration",
+      });
+      expect(queried).toHaveLength(2);
+    });
+
+    it.each<[string, Readonly<Record<string, string>>, (path: string) => boolean]>([
+      ["every record of it held", recordsOf(12), () => true],
+      ["no record in it", { "runs/acme/shop/2026-10/900-1-implement.json": JSON.stringify(aRunRecord({ runId: 900 })) }, () => false],
+    ])("asks for no record at all of a month with %s", async (_what, files, held) => {
+      const { client, requests } = storeOf(files);
+
+      expect(await readSpend(client, ["2026-11"], held, NOW)).toMatchObject({ kind: "read", records: {}, unreadable: { count: 0, newestSchema: null } });
+      expect(requests.filter((request) => request.startsWith("query ") || (request.startsWith("file ") && request.includes(".json")))).toEqual([]);
+    });
   });
 });
 

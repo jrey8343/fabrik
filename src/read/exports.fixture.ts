@@ -240,13 +240,13 @@ function clientWithFiles(files: Readonly<Record<string, string>>): ReadClient {
 
 /**
  * GitHub's answer to a query of objects by `ref:path` expressions, as the
- * files read asks (#895), over these files of `owner/product` at `ref`: each
- * a file, a directory any of them is in, with its entries, or nothing.
- * Null for any other query.
+ * files read asks (#895), over these files of `repo` (`owner/product` unless
+ * named) at `ref`: each a file, a directory any of them is in, with its
+ * entries, or nothing. Null for any other query.
  */
-function filesQueryAnswer(files: Readonly<Record<string, string>>, ref: string, query: string, variables: Record<string, unknown>): unknown {
+function filesQueryAnswer(files: Readonly<Record<string, string>>, ref: string, query: string, variables: Record<string, unknown>, repo = "owner/product"): unknown {
   const objects = [...query.matchAll(/(\w+): object\(expression: \$(\w+)\)/g)];
-  if (objects.length === 0 || variables["owner"] !== "owner" || variables["name"] !== "product") return null;
+  if (objects.length === 0 || `${String(variables["owner"])}/${String(variables["name"])}` !== repo) return null;
   const objectAt = (expression: string) => {
     const [at = "", path = ""] = expression.split(/:(.*)/s);
     const text = files[path];
@@ -1263,8 +1263,9 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
                     ? [{ path: "2026-11", type: "tree", sha: "2026-11" }]
                     : [{ path: "1000-1-implement.json", type: "blob", sha: "a-blob" }],
           }),
-        fileText: (_repo, path) =>
-          Promise.resolve(path.startsWith("runs/") ? JSON.stringify(aSchema7Record()) : '    - cron: "0 8 * * 1"\n      timezone: "Europe/London"\n'),
+        graphql: <T,>(query: string, variables: Record<string, unknown>) =>
+          Promise.resolve(filesQueryAnswer({ "runs/owner/product/2026-11/1000-1-implement.json": JSON.stringify(aSchema7Record()) }, "HEAD", query, variables, "jrey8343/fabrik-runs") as T),
+        fileText: (_repo, path) => Promise.resolve(path.startsWith("runs/") ? null : '    - cron: "0 8 * * 1"\n      timezone: "Europe/London"\n'),
       },
       ["2026-11"],
       (path) => path.endsWith("/999-1-implement.json"),
