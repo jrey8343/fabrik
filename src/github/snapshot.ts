@@ -3410,9 +3410,11 @@ export async function jobsOfUnfinishedRuns(github: Pick<ReadClient, "rest">, rep
  * its address, and the answer a reader holds for a conditional ask of it,
  * stays the same all hour (#898). The runs listed from before the window's
  * start, to the second, are then dropped, so the answer is the one a bound to
- * the second gave. The listing reaches back up to an hour further, so in a
- * repo past GitHub's 1,000 runs a listing up to an hour's more of its oldest
- * go unread. Throws when the Actions API can't be read.
+ * the second gave. The listing reaches back up to an hour further, so it can
+ * take a page more, but it reads the same runs: GitHub lists runs newest
+ * first, and that hour's are older than every run in the window, so in a
+ * repo past GitHub's 1,000 runs it leaves unread the runs a bound to the
+ * second did. Throws when the Actions API can't be read.
  */
 export async function jobsOfUnfinishedRunsAt(github: Pick<ReadClient, "rest">, repo: Repo, now: number): Promise<ActionsJob[]> {
   const since = windowStartAt(now);
