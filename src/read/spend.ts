@@ -1,5 +1,6 @@
 // The Spend read (#624): what the factory has used, read straight from the
-// fabrik-runs store with the Kit's own reader of a Run record, and runner
+// fabrik-runs store with the Kit's own reader of a Run record, its new records
+// fetched a batch to a query by the files read (./files.ts, #896), and runner
 // time summed from the records. Each Subscription's last weekly-limit reading
 // is the Replay gate's own rule (subscriptionReadingsOf, src/kit/replayFacts.ts).
 // Read only, over the API: no checkout and no filesystem.
@@ -8,6 +9,7 @@ import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { newerSchemaOf, readRunRecord, type RunRecord, type UnreadableRunRecords } from "../kit/runRecord.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "../kit/runStore.ts";
 import { STORE_CALLER_PATH, timeZoneIn } from "../setup/shims.ts";
+import { readFiles } from "./files.ts";
 
 /** What the Spend read gives, or why it couldn't read the store. */
 export type SpendRead =
@@ -25,8 +27,14 @@ export type SpendRead =
 /** The store's default branch, which every listing and file read is made at. */
 const DEFAULT_BRANCH = "HEAD";
 
-/** How many records are fetched at once, so a first read of a full month stays clear of GitHub's limits on concurrent requests. */
-const FETCHES_AT_ONCE = 10;
+/**
+ * How many Run records one query fetches. A record is a few kilobytes, so
+ * fifty of them, with the listing of each month they are filed under that
+ * the files read asks beside them, keep an answer well inside what GitHub
+ * gives a query, in size and in time, while a hundred new records cost two
+ * queries. The batches are asked one after another, never at once.
+ */
+const RECORDS_A_QUERY = 50;
 
 /**
  * The Run records the store filed under `months` ("YYYY-MM": the month a
@@ -37,27 +45,35 @@ const FETCHES_AT_ONCE = 10;
  * them, the count of those it couldn't read and the newest schema among
  * them, and the store caller's time zone, read by the Kit's reader of it.
  *
- * It lists the store's git trees, so a month of any size is listed whole,
- * and reads each new record's file, never a transcript, a score file or a
- * Replay's patch. A refusal or a failure is returned as unread with why,
- * never thrown. The last argument is when the read is made, as every read
- * takes it; the store is read at its default branch's head, whenever that is.
+ * `held` is asked once of each record's path, in the order the store lists
+ * them, before any record is fetched, and every path it says is not held is
+ * fetched, so a reader that answers held past a number of new paths stops
+ * the read at that number, and knows each path it fetched.
+ *
+ * It lists the store's git trees, a REST request for each tree, so a month
+ * of any size is listed whole, and reads the store's caller by the client's
+ * file read. It fetches the new records' files by the files read, a GraphQL
+ * query made through the client's own query call for each RECORDS_A_QUERY of
+ * them, and none for a read with nothing new; a file GitHub won't give whole
+ * in a query is read singly, as the files read reads one. It never reads a
+ * transcript, a score file or a Replay's patch. A refusal or a failure, of a
+ * listing, the caller or a batch, is returned as unread with why, never
+ * thrown, and gives no record of the batches before it. The last argument is
+ * when the read is made, as every read takes it; the store is read at its
+ * default branch's head, whenever that is.
  */
 export async function readSpend(
-  client: Pick<ReadClient, "rest" | "fileText">,
+  client: Pick<ReadClient, "rest" | "graphql" | "fileText">,
   months: readonly string[],
   held: (path: string) => boolean,
   _now: string,
 ): Promise<SpendRead> {
   try {
     const [paths, caller] = await Promise.all([recordPathsIn(client, months), client.fileText(RUN_STORE, STORE_CALLER_PATH, DEFAULT_BRANCH)]);
-    const stored = await fetchedAFewAtATime(
-      paths.filter((path) => !held(path)),
-      async (path) => [path, await client.fileText(RUN_STORE, path, DEFAULT_BRANCH)] as const,
-    );
+    const stored = await fetchedABatchAtATime(client, paths.filter((path) => !held(path)));
     return { kind: "read", ...readRecords(stored), timeZone: (caller === null ? null : timeZoneIn(caller)) ?? "UTC" };
   } catch (error) {
-    // A refusal, or a read GitHub failed, of the store's trees, its caller or a record.
+    // A refusal, or a read GitHub failed, of the store's trees, its caller or a batch of records.
     return { kind: "unread", why: whyUnread(error, "A read of the store") };
   }
 }
@@ -99,11 +115,13 @@ async function recordPathsIn(client: Pick<ReadClient, "rest">, months: readonly 
   return monthsListed.flatMap(({ dir, entries }) => entries.filter(({ type, path }) => type === "blob" && path.endsWith(".json")).map(({ path }) => `${dir}/${path}`));
 }
 
-/** `fetch` of each of `items`, no more than FETCHES_AT_ONCE at once, in their order. */
-async function fetchedAFewAtATime<T, R>(items: readonly T[], fetch: (item: T) => Promise<R>): Promise<R[]> {
-  const fetched: R[] = [];
-  for (let start = 0; start < items.length; start += FETCHES_AT_ONCE) {
-    fetched.push(...(await Promise.all(items.slice(start, start + FETCHES_AT_ONCE).map(fetch))));
+/** Each of `paths` in the store, with its text or null where there is no file, in their order: RECORDS_A_QUERY to a files read, one batch after another. */
+async function fetchedABatchAtATime(client: Pick<ReadClient, "graphql" | "fileText">, paths: readonly string[]): Promise<(readonly [string, string | null])[]> {
+  const fetched: (readonly [string, string | null])[] = [];
+  for (let start = 0; start < paths.length; start += RECORDS_A_QUERY) {
+    const batch = paths.slice(start, start + RECORDS_A_QUERY);
+    const files = await readFiles(client, RUN_STORE_REPO, DEFAULT_BRANCH, batch);
+    fetched.push(...batch.map((path) => [path, files[path] ?? null] as const));
   }
   return fetched;
 }
