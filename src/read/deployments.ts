@@ -245,7 +245,10 @@ type DeploymentState =
  * latest is `failure` or `error`; passed over when its latest is `inactive`
  * and none succeeded; running for anything else, a Deployment with no report
  * yet included. GraphQL names a report's state as REST does, in capitals, so
- * `IN_PROGRESS` is the rule's `in_progress`.
+ * `IN_PROGRESS` is the rule's `in_progress`. A failure's log is its
+ * `logUrl`, the one address REST gives as both `log_url` and the older
+ * `target_url`, so a reporter that sets only `target_url` has it there too.
+ * Of two reports made in the same second, the later is given first.
  */
 function stateOf(reports: readonly RawReport[] | "unread"): DeploymentState {
   if (reports === "unread") return "unread";

@@ -38,6 +38,9 @@ interface Query {
   readonly variables: Record<string, unknown>;
 }
 
+/** What a query reads, by its shape: a Deployment's reports, asked by its node id, or else a page of the environment's Deployments. */
+const queried = (query: string): Query["of"] => (/\bnode\(id: \$id\)/.test(query) ? "reports" : "deployments");
+
 /** What a read asked: each REST path, and each GraphQL query. */
 type Asking = Pick<ReadClient, "rest" | "graphql"> & { readonly calls: string[]; readonly queries: Query[] };
 
@@ -89,13 +92,14 @@ function repoWith(repo: CannedRepo): Asking {
         return { pageInfo: { hasNextPage: to < nodes.length, endCursor: to < nodes.length ? String(to) : null }, nodes: nodes.slice(from, to) };
       };
       if (/\bdeployments\(/.test(query)) {
-        queries.push({ of: "deployments", variables });
+        queries.push({ of: queried(query), variables });
         expect(variables).toMatchObject({ owner: "owner", name: "product" });
         expect(query).toMatch(/orderBy: \{ field: CREATED_AT, direction: DESC \}/);
+        // GitHub lists only the environment the query names, so a query that names none would list every environment's.
+        expect(query).toContain("environments: [$environment]");
         if (repo.deployments instanceof GitHubError) throw repo.deployments;
-        const environment = query.includes("environments: [$environment]") ? variables["environment"] : undefined;
         const listed = held()
-          .filter((deployment) => environment === undefined || (deployment.environment ?? "production") === environment)
+          .filter((deployment) => (deployment.environment ?? "production") === variables["environment"])
           .toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id - a.id)
           .map((deployment) => ({
             id: `DE_${deployment.id}`,
@@ -108,8 +112,8 @@ function repoWith(repo: CannedRepo): Asking {
           }));
         return answer({ repository: { deployments: paged(listed, first("deployments"), variables["after"]) } });
       }
-      if (/\bnode\(id: \$id\)/.test(query)) {
-        queries.push({ of: "reports", variables });
+      if (queried(query) === "reports") {
+        queries.push({ of: queried(query), variables });
         const deployment = held().find(({ id }) => `DE_${id}` === variables["id"]);
         if (deployment === undefined) return answer({ node: null });
         if (deployment.reports instanceof GitHubError) throw deployment.reports;
@@ -131,8 +135,8 @@ function askingNothing(): Asking {
       calls.push(path);
       return Promise.reject(new Error(`asked ${path}`));
     },
-    graphql<T>(_query: string, variables: Record<string, unknown>): Promise<T> {
-      queries.push({ of: "deployments", variables });
+    graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+      queries.push({ of: queried(query), variables });
       return Promise.reject(new Error("asked a query"));
     },
   };
@@ -156,6 +160,7 @@ describe("The Deployments read", () => {
     const client = askingNothing();
     const read = await readDeployments(client, "owner/product", "production", [], NOW);
     expect(client.calls).toEqual([]);
+    expect(client.queries).toEqual([]);
     expect(read).toEqual({ repo: "owner/product", environment: "production", readAt: NOW, merges: {} });
   });
 
@@ -332,6 +337,18 @@ describe("The Deployments read", () => {
     it.each(["http://deploys.example.com/40", "javascript:alert(1)", "not an address", ""])("gives a log address that is not https, %j, as null", async (log) => {
       const read = await readWith([{ state: "failure", at: "2026-11-12T08:09:00Z", log }]);
       expect(deployOf(read, sha("a")).log).toBeNull();
+    });
+
+    // GitHub gives a Deployment's reports newest first, so of two made in the same second the later is given first, and is the latest.
+    it.each([
+      ["failure", "inactive", "none"],
+      ["inactive", "failure", "failed"],
+    ])("is read by the later of two reports made in the same second, %s then %s, as %s", async (earlier, later, is) => {
+      const read = await readWith([
+        { state: earlier, at: "2026-11-12T08:09:00Z" },
+        { state: later, at: "2026-11-12T08:09:00Z" },
+      ]);
+      expect(deployOf(read, sha("a")).is).toBe(is);
     });
 
     it("is running again when a failed one is retried and its latest report is in progress", async () => {
