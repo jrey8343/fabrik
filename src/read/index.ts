@@ -83,6 +83,11 @@ export type { ActionsStep, KitSaid } from "../kit/kitSaid.ts";
 export type { RunKind } from "../github/snapshot.ts";
 export type { RunInFlight, RunsRead } from "./runs.ts";
 
+// The named runs read and its fold
+
+export { foldNamedRuns, readNamedRuns } from "./runs.ts";
+export type { NamedRun, NamedRunsRead } from "./runs.ts";
+
 // The gather and the rows
 
 export { homeFactsOf } from "./builders.ts";

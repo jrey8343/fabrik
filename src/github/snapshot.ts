@@ -3394,35 +3394,88 @@ interface ListedJob {
  * never asks GitHub to filter by status, whose listings seemed to miss a run
  * between its jobs (#725), so one listing reads every run as it stands. A job
  * has a start only once it is in progress or done, since Actions gives a
- * queued job one too. Throws when the Actions API can't be read.
+ * queued job one too. Throws when the Actions API can't be read. The Loop's
+ * own reads of Actions (Dispatch's count, the sweep and the rest) bound the
+ * listing to the second; the read library's runs read, which the Weekly
+ * summary reads through too, bounds it to the hour (jobsOfUnfinishedRunsAt).
  */
 export async function jobsOfUnfinishedRuns(github: Pick<ReadClient, "rest">, repo: Repo): Promise<ActionsJob[]> {
-  const base = `/repos/${repo.owner}/${repo.name}/actions`;
-  const since = new Date(Date.now() - RUNS_IN_FLIGHT_WINDOW_MS).toISOString().replace(/\.\d{3}Z$/, "Z");
-  const listed = await workflowRunsListed(github, `${base}/runs?created=${encodeURIComponent(`>=${since}`)}&exclude_pull_requests=true`);
+  return jobsOfRunsListed(github, repo, isoToTheSecond(windowStartAt(Date.now())), ({ status }) => status !== "completed");
+}
+
+/**
+ * Every job of every workflow run not yet completed and created within the
+ * window at `now` (ms), as jobsOfUnfinishedRuns reads them, but with the
+ * listing's `created` bound the window's start rounded down to the hour, so
+ * its address, and the answer a reader holds for a conditional ask of it,
+ * stays the same all hour (#898). The runs listed from before the window's
+ * start, to the second, are then dropped, so the answer is the one a bound to
+ * the second gave. The listing reaches back up to an hour further, so in a
+ * repo past GitHub's 1,000 runs a listing up to an hour's more of its oldest
+ * go unread. Throws when the Actions API can't be read.
+ */
+export async function jobsOfUnfinishedRunsAt(github: Pick<ReadClient, "rest">, repo: Repo, now: number): Promise<ActionsJob[]> {
+  const since = windowStartAt(now);
+  return jobsOfRunsListed(github, repo, isoToTheSecond(Math.floor(since / HOUR_MS) * HOUR_MS), (run) => isUnfinishedSince(run, since));
+}
+
+/** The jobs of each run the listing bounded at `bound`, ISO 8601, gives that `keep` keeps: the one listing both reads of the runs not yet finished make. */
+async function jobsOfRunsListed(github: Pick<ReadClient, "rest">, repo: Repo, bound: string, keep: (run: ListedWorkflowRun) => boolean): Promise<ActionsJob[]> {
+  const listed = await workflowRunsListed(github, `/repos/${repo.owner}/${repo.name}/actions/runs?created=${encodeURIComponent(`>=${bound}`)}&exclude_pull_requests=true`);
   // A run listed on two pages, as one created while paging shifts the rest along, is read once.
-  const runs = new Map(listed.filter(({ status }) => status !== "completed").map((run) => [run.id, run]));
-  const listings = await Promise.all(
-    [...runs.values()].map(async (run) => ({
-      run,
-      page: (await github.rest("GET", `${base}/runs/${run.id}/jobs?filter=latest&per_page=100`)) as { jobs: ListedJob[] },
-    })),
-  );
-  return listings.flatMap(({ run, page }) => {
-    const runUrl = run.html_url ?? `https://github.com/${repo.owner}/${repo.name}/actions/runs/${run.id}`;
-    return page.jobs.map((job) => ({
-      run: run.id,
-      attempt: run.run_attempt ?? 1,
-      createdAt: run.created_at,
-      runUrl,
-      name: job.name,
-      status: job.status,
-      conclusion: job.conclusion ?? null,
-      startedAt: job.status === "in_progress" || job.status === "completed" ? (job.started_at ?? null) : null,
-      url: job.html_url ?? runUrl,
-      steps: (job.steps ?? []).map((step) => ({ name: step.name, status: step.status, conclusion: step.conclusion ?? null })),
-    }));
-  });
+  const runs = new Map(listed.filter(keep).map((run) => [run.id, run]));
+  const listings = await Promise.all([...runs.values()].map((run) => jobsOfListedRun(github, repo, run)));
+  return listings.flat();
+}
+
+/**
+ * Every job of one workflow run, by its id, as jobsOfUnfinishedRunsAt gives
+ * a listed run's (#898): none, with no further request, once the run has
+ * completed or when it was created before the window at `now` (ms), so a run
+ * that read would not keep has none here either. Two requests at most: the
+ * run, and its jobs. Throws when the Actions API can't be read, or holds no
+ * such run.
+ */
+export async function jobsOfRun(github: Pick<ReadClient, "rest">, repo: Repo, run: number, now: number): Promise<ActionsJob[]> {
+  const since = windowStartAt(now);
+  const read = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/actions/runs/${run}`)) as ListedWorkflowRun;
+  return isUnfinishedSince(read, since) ? jobsOfListedRun(github, repo, read) : [];
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/** When the window of the runs read made at `now` (ms) starts, to the second, as its listing was once bounded; throws for a `now` that is no time. */
+function windowStartAt(now: number): number {
+  if (!Number.isFinite(now)) throw new RangeError(`The runs read's window needs a time, not ${now}.`);
+  return Math.floor((now - RUNS_IN_FLIGHT_WINDOW_MS) / 1000) * 1000;
+}
+
+/** `at` (ms) as ISO 8601 to the second, as GitHub's `created` bound is written. */
+function isoToTheSecond(at: number): string {
+  return new Date(at).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/** Whether a workflow run is one the runs read keeps, its window starting at `since` (ms): not completed, and created within the window. */
+function isUnfinishedSince(run: ListedWorkflowRun, since: number): boolean {
+  return run.status !== "completed" && Date.parse(run.created_at) >= since;
+}
+
+/** A workflow run's jobs, in one listing of its latest attempt's, each with the run's own facts. */
+async function jobsOfListedRun(github: Pick<ReadClient, "rest">, repo: Repo, run: ListedWorkflowRun): Promise<ActionsJob[]> {
+  const page = (await github.rest("GET", `/repos/${repo.owner}/${repo.name}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`)) as { jobs: ListedJob[] };
+  const runUrl = run.html_url ?? `https://github.com/${repo.owner}/${repo.name}/actions/runs/${run.id}`;
+  return page.jobs.map((job) => ({
+    run: run.id,
+    attempt: run.run_attempt ?? 1,
+    createdAt: run.created_at,
+    runUrl,
+    name: job.name,
+    status: job.status,
+    conclusion: job.conclusion ?? null,
+    startedAt: job.status === "in_progress" || job.status === "completed" ? (job.started_at ?? null) : null,
+    url: job.html_url ?? runUrl,
+    steps: (job.steps ?? []).map((step) => ({ name: step.name, status: step.status, conclusion: step.conclusion ?? null })),
+  }));
 }
 
 /** The most runs a page of the runs listing holds, which the runs read asks for. */
