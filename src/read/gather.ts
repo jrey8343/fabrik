@@ -27,7 +27,7 @@
 import { gatherWeeklyRunIssues, isAgent, labelEventsOf, openIssueOf, openKitIssueOf, openPullRequestOf, plainPullRequestOf } from "../github/facts.ts";
 import { pagesOf, type ReadClient, type Repo, whyUnread } from "../github/client.ts";
 import { leavingOutHeldLines } from "../github/heldLines.ts";
-import { byAppOf, CLOSED_AS, gatherClosedCheckIssues, gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, loginOf, readKitConfigSources } from "../github/snapshot.ts";
+import { byAppOf, CLOSED_AS, gatherClosedCheckIssues, gatherDesignQueueSlice, gatherDispatchCandidates, gatherKitIssues, KIT_CONFIG_SOURCE_PATHS, loginOf, readKitConfigSources } from "../github/snapshot.ts";
 import { type EvidenceMarker, evidenceMarkerIn } from "../evidence/uiEvidence.ts";
 import { type ShotsMarker, shotsMarkerIn } from "../evidence/shotsEvidence.ts";
 import { checkCallerWorkflow, fabrikRefsIn } from "../kit/caller.ts";
@@ -66,6 +66,7 @@ import {
   type RepoQueryResult,
   UNPROMOTED_PULL_REQUESTS_QUERY,
 } from "./homeQueries.ts";
+import { filesAt } from "./files.ts";
 import { mergedFollowUpsOf } from "./related.ts";
 import { gatherStore, type StoreFacts } from "./store.ts";
 
@@ -366,11 +367,14 @@ export interface Facts {
  * One repo, `owner/name`, read at `now`, ISO 8601, with `client`. The store
  * beside the Run records, known by the Kit's own constant for it, is read for
  * its own few facts instead (./store.ts). For any other repo, first its
- * caller workflow at its default branch's head: with none that pins the Kit
- * it is no Product repo, and nothing more is read. Otherwise the release it
- * pins, its Operator, its Kit config and whether that has a `ui` block,
- * whatever happens to the rest; then its facts, null with why when a query of
- * them fails or the Kit config could not be read. `appLogin`, the Fabrik
+ * caller workflow and the Kit's files at its default branch's head, in one
+ * GraphQL query and no REST request but for a file GitHub will not give whole
+ * in a query or a symbolic link (./files.ts, #895): with no caller that pins
+ * the Kit it is no Product repo, and nothing more is read. A refusal of that
+ * query fails the gather, as a refused read of the caller did. Otherwise the
+ * release it pins, its Operator, its Kit config and whether that has a `ui`
+ * block, whatever happens to the rest; then its facts, null with why when a
+ * query of them fails or the Kit config could not be read. `appLogin`, the Fabrik
  * App's bot login, may be left out: any bot's text is then taken for the
  * App's, as the Kit job does.
  */
@@ -380,13 +384,16 @@ export async function gatherRepo(client: ReadClient, repo: string, now: string, 
   const at: Repo = { owner, name };
   const { repository } = await client.graphql<RepoQueryResult>(REPO_QUERY, { owner, name });
   const branch = repository.defaultBranchRef;
-  const caller = branch === null ? null : await client.fileText(at, CALLER_PATH, branch.target.oid);
-  if (branch === null || caller === null || fabrikRefsIn(caller).length === 0) return { repo, product: false, store: false };
+  if (branch === null) return { repo, product: false, store: false };
+  // The caller workflow and every Kit file in one query at that head (#895), so a push between two reads never mixes two versions of them.
+  const files = await filesAt(client, at, branch.target.oid, [CALLER_PATH, ...KIT_CONFIG_SOURCE_PATHS]);
+  const caller = await files.fileText(at, CALLER_PATH, branch.target.oid);
+  if (caller === null || fabrikRefsIn(caller).length === 0) return { repo, product: false, store: false };
   const pins = checkCallerWorkflow(caller);
   const release = pins.ok ? pins.release : null;
   let kitConfig: KitConfigResult;
   try {
-    kitConfig = resolveKitConfig(await readKitConfigSources(client, at, branch.target.oid));
+    kitConfig = resolveKitConfig(await readKitConfigSources(files, at, branch.target.oid));
   } catch (error) {
     // With no Kit config to read the repo by, none of its facts are read either.
     const why = whyUnread(error, "A read of the Kit config");

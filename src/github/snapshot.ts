@@ -3507,17 +3507,17 @@ async function workflowRunsListed(github: Pick<ReadClient, "rest">, path: string
   return pages.flat();
 }
 
+/** The paths of the Kit config folder's files readKitConfigSources reads, in this order: the Kit config, the skills lock and each role's instructions. */
+export const KIT_CONFIG_SOURCE_PATHS: readonly string[] = [KIT_CONFIG_PATH, SKILLS_SOURCES_LOCK_PATH, ...INSTRUCTED_ROLES.map(instructionsPath)];
+
 /** Reads the Kit config folder's files from the Product repo at `ref`, through the API. */
 export async function readKitConfigSources(
   github: Pick<ReadClient, "fileText">,
   repo: Repo,
   ref: string,
 ): Promise<KitConfigSources> {
-  const [config, skillsLock, ...instructions] = await Promise.all([
-    github.fileText(repo, KIT_CONFIG_PATH, ref),
-    github.fileText(repo, SKILLS_SOURCES_LOCK_PATH, ref),
-    ...INSTRUCTED_ROLES.map((role) => github.fileText(repo, instructionsPath(role), ref)),
-  ]);
+  // Read through KIT_CONFIG_SOURCE_PATHS, in its order, so the gather's one query asks for every file read here (#895).
+  const [config, skillsLock, ...instructions] = await Promise.all(KIT_CONFIG_SOURCE_PATHS.map((path) => github.fileText(repo, path, ref)));
   return {
     config: config ?? null,
     skillsLock: skillsLock ?? null,
