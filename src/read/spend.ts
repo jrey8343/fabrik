@@ -115,7 +115,14 @@ async function recordPathsIn(client: Pick<ReadClient, "rest">, months: readonly 
   return monthsListed.flatMap(({ dir, entries }) => entries.filter(({ type, path }) => type === "blob" && path.endsWith(".json")).map(({ path }) => `${dir}/${path}`));
 }
 
-/** Each of `paths` in the store, with its text or null where there is no file, in their order: RECORDS_A_QUERY to a files read, one batch after another. */
+/**
+ * Each of `paths` in the store, with its text or null where there is no file,
+ * in their order: RECORDS_A_QUERY to a files read, one batch after another.
+ * Each batch reads at the default branch's head as it then is, so two batches
+ * can read at two commits; a Run record never changes once written
+ * (ADR-0009), and one gone since its listing is no file, so which head a
+ * batch reads at never changes what it gives.
+ */
 async function fetchedABatchAtATime(client: Pick<ReadClient, "graphql" | "fileText">, paths: readonly string[]): Promise<(readonly [string, string | null])[]> {
   const fetched: (readonly [string, string | null])[] = [];
   for (let start = 0; start < paths.length; start += RECORDS_A_QUERY) {
