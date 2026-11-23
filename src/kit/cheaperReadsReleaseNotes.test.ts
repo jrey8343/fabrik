@@ -196,6 +196,47 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The cheaper reads release notes, whi
     expect(await listingAt("2026-11-23T10:00:01Z")).not.toEqual(first);
   });
 
+  it("say the whole runs read reads the runs a bound to the second read, and its listing can take a page more, short of GitHub's 1,000 runs or past them", async () => {
+    const whole = bullet(changed, "The whole runs read's listing, bounded at the hour");
+    expect(whole).toContain("An ask costs the requests it did, 15 that day, or a page more where that hour's runs take the listing onto another: worked out from the bound, not counted.");
+    expect(whole).toContain("It reads the runs a bound to the second read, since GitHub lists them newest first and that hour's are older than every run in the 24 hours.");
+    const limit = bullet(section(notes, "Known limits"), "The whole runs read lists up to an hour more.");
+    expect(limit).toContain("it can ask a page more than a bound to the second did");
+    expect(limit).not.toContain("unread than before");
+
+    // GitHub's listing of the runs created at or after its `created` bound: newest first, a hundred to a page, and no run past the 1,000th.
+    const since = Date.parse(NOW) - 24 * 3_600_000;
+    const listing = (runs: readonly { id: number; status: string; created_at: string }[]) => (path: string) => {
+      if (path.includes("/jobs?")) return { jobs: [] };
+      if (path.includes("event=schedule")) return { workflow_runs: [] };
+      const query = new URL(path, "https://api.github.com").searchParams;
+      const bound = Date.parse((query.get("created") ?? "").replace(/^>=/, ""));
+      const page = Number(query.get("page"));
+      const listed = runs.filter((run) => Date.parse(run.created_at) >= bound).toSorted((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+      return { total_count: listed.length, workflow_runs: listed.slice(0, 1000).slice((page - 1) * 100, page * 100) };
+    };
+    /** `count` unfinished runs spread over the 24 hours, the first at its start to the second, beside 60 more between the hour before it and its start. */
+    const runsOf = (count: number) => {
+      const inside = Array.from({ length: count }, (_, at) => ({ id: 10_000 + at, status: "queued", created_at: new Date(since + Math.floor((at * 24 * 3_600_000) / count)).toISOString() }));
+      const before = Array.from({ length: 60 }, (_, at) => ({ id: 1 + at, status: "queued", created_at: new Date(Math.floor(since / 3_600_000) * 3_600_000 + at * 5000).toISOString() }));
+      return { inside, all: [...inside, ...before] };
+    };
+    const read = async (runs: ReturnType<typeof runsOf>) => {
+      const { client, asked } = counting({ rest: listing(runs.all) });
+      await readRuns(client, "acme/shop", NOW);
+      const jobsRead = asked.rest.flatMap((path) => /\/actions\/runs\/(\d+)\/jobs\?/.exec(path)?.[1] ?? []).map(Number);
+      return { jobsRead: jobsRead.toSorted((a, b) => a - b), pages: asked.rest.filter((path) => path.includes("/actions/runs?created=")).length };
+    };
+
+    // Short of 1,000: every run of the 24 hours is read, and the 60 before them cost the tenth page a bound to the second never asked.
+    const short = runsOf(850);
+    expect(await read(short)).toEqual({ jobsRead: short.inside.map(({ id }) => id), pages: Math.ceil(850 / 100) + 1 });
+
+    // Past 1,000: the 1,000 newest of the 24 hours are read, as a bound to the second read them, and none of the hour before.
+    const past = runsOf(1200);
+    expect((await read(past)).jobsRead).toEqual(past.inside.slice(200).map(({ id }) => id));
+  });
+
   it("say the release is a minor, and why, in the releasing guide's terms, with no section to turn it on", () => {
     const why = section(notes, "Why a minor");
     expect(why).toContain("by the releasing guide a new export is not a major");
@@ -205,12 +246,27 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The cheaper reads release notes, whi
     expect(notes).not.toContain("## To turn it on");
   });
 
-  it("say a Product repo only merges the bump", () => {
+  it("say a Product repo only merges the bump, and what a reader that hands the Deployments read or the Spend read fewer calls than a ReadClient adds", () => {
     expect(bullet(section(notes, "Upgrading"), "A Product repo merges the bump")).toContain("as for any minor, and does nothing else");
+    const reader = bullet(section(notes, "Upgrading"), "A reader of the read library");
+    expect(reader).toContain("A reader that hands `readDeployments` or `readSpend` a client of fewer calls than `ReadClient` adds `graphql` to it");
+    const client = bullet(section(notes, "For a reader of the read library"), "The client.");
+    expect(client).not.toContain("its shape doesn't change");
+    expect(client).toContain("`readDeployments` now calls `graphql` as well as REST, and `readSpend` as well as REST and `fileText`");
+  });
+
+  it("say the counts are counted but for those that say they are worked out or an estimate, and the fold leaves runs kept unread unread", () => {
+    expect(notes).toContain("but for three: the staging figure, which says it is an estimate, and the gather's queries now and the whole runs read's cost now, which say they are worked out");
+    expect(bullet(changed, "The gather's files, in one query")).toContain("21 queries and none, for a Product repo whose files are all text, worked out as the Spec's 20 and the files query, not counted");
+    expect(bullet(changed, "A read of named workflow runs, and its fold")).toContain("Runs kept unread stay unread.");
   });
 
   it("say the Console's line waits on the release's check of the Console, whose run replaces it", () => {
     const console = section(notes, "What the Console needs");
+    // The guess is what fabrik-console#115 expects: the pin, the mock's answers to the new queries and the points count's price of them.
+    expect(console).not.toContain("Only its pin moved");
+    expect(console).toContain("with its mock answering the new queries and its points count pricing them");
+    expect(console).toContain("the points count prices the files query, a batch of Run records and a page of Deployments with their reports");
     expect(console).toContain("This line is a guess until the release is checked against the Console (step 4 of [releasing.md](../releasing.md)), and that run's answer replaces it.");
     expect(read("docs/releasing.md")).toContain("A line about the Console in a draft in `docs/release-notes/` was written when the part was built, so it is a guess until this run.");
   });
