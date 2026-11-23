@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GitHubError, type ReadClient } from "../github/client.ts";
 import { readProductTicks } from "../github/tickFacts.ts";
 import { anOpenPullRequest, factsOf, standingFactsOf } from "./builders.ts";
@@ -44,13 +44,12 @@ interface CannedTick {
  * A made-up `owner/product` whose Actions holds these workflow runs, each with
  * its jobs, and these scheduled runs of `fabrik.yml`, newest first. Its
  * listing honours its `created` bound, as GitHub's does, and it answers a
- * read of one run by its id. `refuse.named` names runs whose own read and
- * jobs it refuses, as it refuses the listing with `refuse.runs`.
+ * read of one run by its id.
  */
 function actionsOf(
   runs: readonly CannedRun[],
   ticks: readonly CannedTick[] = [],
-  refuse: { runs?: boolean; tick?: boolean; named?: readonly number[] } = {},
+  refuse: { runs?: boolean; tick?: boolean } = {},
 ): Pick<ReadClient, "rest"> & { readonly calls: string[] } {
   const calls: string[] = [];
   const refusal = (path: string, status = 403) =>
@@ -76,8 +75,6 @@ function actionsOf(
           })),
         };
       }
-      const named = new RegExp(`^${base}/runs/(\\d+)(/jobs\\?filter=latest&per_page=100)?$`).exec(path);
-      if (named !== null && refuse.named?.includes(Number(named[1])) === true) throw refusal(path);
       if (refuse.runs === true) throw refusal(path);
       // The runs read keeps the unfinished ones by their status, of those its listing gives.
       const listed = new RegExp(`^${base}/runs\\?created=([^&]+)&exclude_pull_requests=true&per_page=100&page=(\\d+)$`).exec(path);
@@ -794,6 +791,19 @@ describe("The whole runs read's listing (#898)", () => {
     expect(read.runs).toMatchObject([{ run: 8 }, { run: 9 }]);
     // A run left out is not read further.
     expect(pathsOf(actions.calls).filter((path) => path.includes("/runs/7/"))).toEqual([]);
+  });
+
+  it("is bounded by the clock, as it was before, when the time it is handed is no time, and the runs are still read", async () => {
+    const actions = actionsOf([running(7, "2026-11-12T09:00:00Z")]);
+    vi.useFakeTimers({ now: Date.parse("2026-11-12T10:30:00Z"), toFake: ["Date"] });
+    try {
+      const read = await readRuns(actions, "owner/product", "not a time");
+
+      expect(read).toMatchObject({ readAt: "not a time", runs: [{ run: 7, issue: 12 }] });
+      expect(decodeURIComponent(listingsOf(actions.calls)[0] ?? "")).toContain("created=>=2026-11-11T10:00:00Z&");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

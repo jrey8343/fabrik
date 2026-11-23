@@ -3395,8 +3395,9 @@ interface ListedJob {
  * between its jobs (#725), so one listing reads every run as it stands. A job
  * has a start only once it is in progress or done, since Actions gives a
  * queued job one too. Throws when the Actions API can't be read. The Loop's
- * reads bound the listing to the second; the read library's runs read bounds
- * it to the hour (jobsOfUnfinishedRunsAt).
+ * own reads of Actions (Dispatch's count, the sweep and the rest) bound the
+ * listing to the second; the read library's runs read, which the Weekly
+ * summary reads through too, bounds it to the hour (jobsOfUnfinishedRunsAt).
  */
 export async function jobsOfUnfinishedRuns(github: Pick<ReadClient, "rest">, repo: Repo): Promise<ActionsJob[]> {
   return jobsOfRunsListed(github, repo, isoToTheSecond(windowStartAt(Date.now())), ({ status }) => status !== "completed");

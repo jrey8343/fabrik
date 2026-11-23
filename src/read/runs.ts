@@ -67,11 +67,14 @@ export interface RunInFlight {
  * flight, and when its Tick last started; never throws. It asks a listing of
  * every workflow run created in the last 24 hours, a page for each hundred,
  * at an address that stays the same within the hour (#898); one listing of
- * each unfinished run's jobs; and one of the Tick's scheduled runs.
+ * each unfinished run's jobs; and one of the Tick's scheduled runs. Its
+ * window is the 24 hours before `now`, or before the clock when `now` is no
+ * time, so such a read still reads the runs, as it did before.
  */
 export async function readRuns(client: Pick<ReadClient, "rest">, repo: string, now: string): Promise<RunsRead> {
   const target = repoOf(repo);
-  const [runs, tick] = await Promise.all([readInFlight(client, target, Date.parse(now)), readTick(client, target)]);
+  const at = Date.parse(now);
+  const [runs, tick] = await Promise.all([readInFlight(client, target, Number.isFinite(at) ? at : Date.now()), readTick(client, target)]);
   return { repo, readAt: now, runs, tick };
 }
 
@@ -124,7 +127,10 @@ export async function readNamedRuns(client: Pick<ReadClient, "rest">, repo: stri
  * place by run, as the whole read orders them. An unread run's entries, every
  * run's not named, the Tick and when the kept read was made are left as
  * kept. Runs kept unread stay unread, since a named read never says which
- * other runs are in flight. Pure; throws on a named read of another repo.
+ * other runs are in flight. The answer folded in last wins, whenever it was
+ * read, so a reader folds its named reads in the order it made them: a read
+ * made before another of the same run, folded after it, puts back what that
+ * one said. Pure; throws on a named read of another repo.
  */
 export function foldNamedRuns(kept: RunsRead, named: NamedRunsRead): RunsRead {
   if (named.repo !== kept.repo) throw new Error(`A named runs read of ${named.repo} can't be folded into the runs read of ${kept.repo}.`);
