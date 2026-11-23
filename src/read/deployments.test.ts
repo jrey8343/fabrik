@@ -5,14 +5,18 @@ import { type DeployOf, readDeployments } from "./deployments.ts";
 const NOW = "2026-11-12T10:00:00Z";
 const sha = (digit: string) => digit.repeat(40);
 
-/** One report on a Deployment, as GitHub's deployment statuses list it. */
+/** One report on a Deployment, by the state GitHub's REST API names it with, which its GraphQL API names in capitals. */
 interface CannedReport {
   readonly state: string;
   readonly at: string;
   readonly log?: string;
 }
 
-/** A Deployment as the repo holds it, its reports oldest first, or a GitHubError failing their read. */
+/**
+ * A Deployment as the repo holds it, its reports oldest first; or a
+ * GitHubError for reports that could not be read: more of them than a page
+ * holds, and the query for the rest refused.
+ */
 interface CannedDeployment {
   readonly id: number;
   readonly sha: string;
@@ -21,62 +25,53 @@ interface CannedDeployment {
   readonly reports?: readonly CannedReport[] | GitHubError;
 }
 
-/** What the repo holds: its Deployments, or a GitHubError failing their list, and how GitHub compares a merge commit with a deployed one. */
+/** What the repo holds: its Deployments, or a GitHubError failing the query that lists them, and how GitHub compares a merge commit with a deployed one. */
 interface CannedRepo {
   readonly deployments: readonly CannedDeployment[] | GitHubError;
   /** By `merge...deployed`; a pair left out is `diverged`. */
   readonly compare?: Readonly<Record<string, string | GitHubError>>;
 }
 
-const refusal = (path: string) =>
-  new GitHubError(`GitHub GET ${path} failed: 403`, 403, { body: JSON.stringify({ message: "Resource not accessible by integration" }), request: `GET ${path}` });
+/** A GraphQL query a read made: what it read, a page of the environment's Deployments or of one Deployment's reports, and its variables. */
+interface Query {
+  readonly of: "deployments" | "reports";
+  readonly variables: Record<string, unknown>;
+}
+
+/** What a read asked: each REST path, and each GraphQL query. */
+type Asking = Pick<ReadClient, "rest" | "graphql"> & { readonly calls: string[]; readonly queries: Query[] };
+
+const refusal = (request: string) =>
+  new GitHubError(`GitHub ${request} failed: 403`, 403, { body: JSON.stringify({ message: "Resource not accessible by integration" }), request });
+
+/** The refusal of a GraphQL query. */
+const QUERY_REFUSED = refusal("POST /graphql");
 
 /**
- * A made-up `owner/product` holding `repo`, answering as GitHub does: the
- * environment's Deployments newest first, by pages; each one's reports newest
- * first; and the comparison of two commits. Every path asked is kept.
+ * A made-up `owner/product` holding `repo`, answering as GitHub does: by
+ * GraphQL, a connection of the environment's Deployments, newest first, each
+ * with a connection of its reports, newest first, and a Deployment's reports
+ * by its node id, each connection giving as many at a time as the query asks
+ * for first, from its cursor, which here is how many came before; by REST,
+ * the comparison of two commits. Every REST path and every query asked is
+ * kept.
  */
-function repoWith(repo: CannedRepo): Pick<ReadClient, "rest"> & { readonly calls: string[] } {
+function repoWith(repo: CannedRepo): Asking {
   const calls: string[] = [];
+  const queries: Query[] = [];
+  const held = () => repo.deployments as readonly CannedDeployment[];
+  /** A Deployment's reports newest first, as GraphQL gives them; one whose reports can't be read has more than a page, of which only the first is given. */
+  const reportsOf = (deployment: CannedDeployment) =>
+    (deployment.reports instanceof GitHubError ? Array.from({ length: 101 }, (): CannedReport => ({ state: "in_progress", at: deployment.createdAt })) : (deployment.reports ?? []))
+      .map((report) => ({ state: report.state.toUpperCase(), createdAt: report.at, logUrl: report.log ?? null }))
+      .toReversed();
   return {
     calls,
+    queries,
     async rest(method: string, path: string): Promise<unknown> {
       expect(method).toBe("GET");
       calls.push(path);
       const url = new URL(path, "https://api.github.com");
-      const page = Number(url.searchParams.get("page") ?? "1");
-      const perPage = Number(url.searchParams.get("per_page") ?? "30");
-      if (url.pathname === "/repos/owner/product/deployments") {
-        if (repo.deployments instanceof GitHubError) throw repo.deployments;
-        const environment = url.searchParams.get("environment");
-        const listed = repo.deployments
-          .filter((deployment) => environment === null || (deployment.environment ?? "production") === environment)
-          .toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id - a.id);
-        return listed.slice((page - 1) * perPage, page * perPage).map((deployment) => ({
-          id: deployment.id,
-          sha: deployment.sha,
-          ref: "main",
-          environment: deployment.environment ?? "production",
-          created_at: deployment.createdAt,
-          updated_at: deployment.createdAt,
-        }));
-      }
-      const statuses = /^\/repos\/owner\/product\/deployments\/(\d+)\/statuses$/.exec(url.pathname);
-      if (statuses !== null) {
-        const deployment = (repo.deployments as readonly CannedDeployment[]).find(({ id }) => id === Number(statuses[1]));
-        if (deployment === undefined) throw new GitHubError(`GitHub GET ${path} failed: 404`, 404, { body: "{}", request: `GET ${path}` });
-        if (deployment.reports instanceof GitHubError) throw deployment.reports;
-        const reports = (deployment.reports ?? []).map((report, index) => ({
-          id: deployment.id * 1000 + index + 1,
-          state: report.state,
-          created_at: report.at,
-          updated_at: report.at,
-          log_url: report.log ?? "",
-          target_url: report.log ?? "",
-          environment: deployment.environment ?? "production",
-        }));
-        return reports.toReversed().slice((page - 1) * perPage, page * perPage);
-      }
       const compare = /^\/repos\/owner\/product\/compare\/([0-9a-f]{40}\.\.\.[0-9a-f]{40})$/.exec(url.pathname);
       if (compare !== null) {
         const status = repo.compare?.[compare[1]!] ?? "diverged";
@@ -85,17 +80,60 @@ function repoWith(repo: CannedRepo): Pick<ReadClient, "rest"> & { readonly calls
       }
       throw new Error(`unexpected ${path}`);
     },
+    async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+      const answer = (data: unknown) => data as T;
+      const first = (connection: string) => Number(new RegExp(`\\b${connection}\\([^)]*first: (\\d+)`).exec(query)?.[1]);
+      const paged = <N>(nodes: readonly N[], size: number, after: unknown) => {
+        const from = Number(after ?? 0);
+        const to = from + size;
+        return { pageInfo: { hasNextPage: to < nodes.length, endCursor: to < nodes.length ? String(to) : null }, nodes: nodes.slice(from, to) };
+      };
+      if (/\bdeployments\(/.test(query)) {
+        queries.push({ of: "deployments", variables });
+        expect(variables).toMatchObject({ owner: "owner", name: "product" });
+        expect(query).toMatch(/orderBy: \{ field: CREATED_AT, direction: DESC \}/);
+        if (repo.deployments instanceof GitHubError) throw repo.deployments;
+        const environment = query.includes("environments: [$environment]") ? variables["environment"] : undefined;
+        const listed = held()
+          .filter((deployment) => environment === undefined || (deployment.environment ?? "production") === environment)
+          .toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || b.id - a.id)
+          .map((deployment) => ({
+            id: `DE_${deployment.id}`,
+            databaseId: deployment.id,
+            commitOid: deployment.sha,
+            ref: { name: "main" },
+            environment: deployment.environment ?? "production",
+            createdAt: deployment.createdAt,
+            statuses: paged(reportsOf(deployment), first("statuses"), null),
+          }));
+        return answer({ repository: { deployments: paged(listed, first("deployments"), variables["after"]) } });
+      }
+      if (/\bnode\(id: \$id\)/.test(query)) {
+        queries.push({ of: "reports", variables });
+        const deployment = held().find(({ id }) => `DE_${id}` === variables["id"]);
+        if (deployment === undefined) return answer({ node: null });
+        if (deployment.reports instanceof GitHubError) throw deployment.reports;
+        return answer({ node: { statuses: paged(reportsOf(deployment), first("statuses"), variables["after"]) } });
+      }
+      throw new Error(`unexpected query ${query}`);
+    },
   };
 }
 
-/** A client that fails the test if anything is asked of it; every path it was asked is kept. */
-function askingNothing(): Pick<ReadClient, "rest"> & { readonly calls: string[] } {
+/** A client that fails the test if anything is asked of it; every REST path and query it was asked is kept. */
+function askingNothing(): Asking {
   const calls: string[] = [];
+  const queries: Query[] = [];
   return {
     calls,
+    queries,
     rest(_method: string, path: string): Promise<unknown> {
       calls.push(path);
       return Promise.reject(new Error(`asked ${path}`));
+    },
+    graphql<T>(_query: string, variables: Record<string, unknown>): Promise<T> {
+      queries.push({ of: "deployments", variables });
+      return Promise.reject(new Error("asked a query"));
     },
   };
 }
@@ -111,7 +149,7 @@ const MERGED_AT = "2026-11-12T08:00:00Z";
 const NONE: DeployOf = { is: "none", deployment: null, commit: null, at: null, log: null };
 
 /** The read of one merge of `sha("a")` at MERGED_AT. */
-const readOne = (client: Pick<ReadClient, "rest">) => readDeployments(client, "owner/product", "production", [{ mergeCommit: sha("a"), mergedAt: MERGED_AT }], NOW);
+const readOne = (client: Pick<ReadClient, "rest" | "graphql">) => readDeployments(client, "owner/product", "production", [{ mergeCommit: sha("a"), mergedAt: MERGED_AT }], NOW);
 
 describe("The Deployments read", () => {
   it("makes no request when asked about no merges, and answers for none", async () => {
@@ -190,25 +228,26 @@ describe("The Deployments read", () => {
         deployments: [{ id: 9, sha: sha("a"), environment: "staging", createdAt: "2026-11-12T08:02:00Z", reports: [{ state: "success", at: "2026-11-12T08:05:00Z" }] }],
       });
       expect(deployOf(await readOne(client), sha("a"))).toEqual(NONE);
-      expect(client.calls[0]).toBe("/repos/owner/product/deployments?environment=production&per_page=100&page=1");
+      expect(client.queries).toEqual([{ of: "deployments", variables: expect.objectContaining({ environment: "production" }) }]);
     });
 
     it("drops a Deployment of another environment that GitHub's list holds all the same", async () => {
-      const listing: Pick<ReadClient, "rest"> = {
-        rest: (_method, path) =>
-          Promise.resolve(
-            path.startsWith("/repos/owner/product/deployments?")
-              ? [{ id: 9, sha: sha("a"), environment: "staging", created_at: "2026-11-12T08:02:00Z" }]
-              : [{ id: 9001, state: "success", created_at: "2026-11-12T08:05:00Z", log_url: "", target_url: "" }],
-          ),
+      const none = { hasNextPage: false, endCursor: null };
+      const staging = { id: "DE_9", databaseId: 9, commitOid: sha("a"), environment: "staging", createdAt: "2026-11-12T08:02:00Z", statuses: { pageInfo: none, nodes: [{ state: "SUCCESS", createdAt: "2026-11-12T08:05:00Z", logUrl: null }] } };
+      const listing: Pick<ReadClient, "rest" | "graphql"> = {
+        rest: (_method, path) => Promise.reject(new Error(`asked ${path}`)),
+        graphql: <T>() => Promise.resolve({ repository: { deployments: { pageInfo: none, nodes: [staging] } } } as T),
       };
       expect(deployOf(await readOne(listing), sha("a"))).toEqual(NONE);
     });
 
     it("names the environment as a query value, whatever its name", async () => {
-      const client = repoWith({ deployments: [] });
-      await readDeployments(client, "owner/product", "prod & eu", [{ mergeCommit: sha("a"), mergedAt: MERGED_AT }], NOW);
-      expect(client.calls[0]).toBe("/repos/owner/product/deployments?environment=prod%20%26%20eu&per_page=100&page=1");
+      const client = repoWith({
+        deployments: [{ id: 9, sha: sha("a"), environment: "prod & eu", createdAt: "2026-11-12T08:02:00Z", reports: [{ state: "success", at: "2026-11-12T08:05:00Z" }] }],
+      });
+      const read = await readDeployments(client, "owner/product", "prod & eu", [{ mergeCommit: sha("a"), mergedAt: MERGED_AT }], NOW);
+      expect(deployOf(read, sha("a")).is).toBe("succeeded");
+      expect(client.queries).toEqual([{ of: "deployments", variables: expect.objectContaining({ environment: "prod & eu" }) }]);
     });
 
     it("asks each pair of merge and deployed commit once in a read, and none for the same commit", async () => {
@@ -241,7 +280,7 @@ describe("The Deployments read", () => {
     it("still asks about a Deployment whose reports could not be read when it was created before the deciding success", async () => {
       const client = repoWith({
         deployments: [
-          { id: 6, sha: sha("b"), createdAt: "2026-11-12T08:01:00Z", reports: refusal("/repos/owner/product/deployments/6/statuses") },
+          { id: 6, sha: sha("b"), createdAt: "2026-11-12T08:01:00Z", reports: QUERY_REFUSED },
           { id: 7, sha: sha("a"), createdAt: "2026-11-12T08:02:00Z", reports: [{ state: "success", at: "2026-11-12T08:05:00Z" }] },
         ],
         compare: { [`${sha("a")}...${sha("b")}`]: "behind" },
@@ -301,6 +340,58 @@ describe("The Deployments read", () => {
         { state: "in_progress", at: "2026-11-12T08:15:00Z" },
       ]);
       expect(deployOf(read, sha("a")).is).toBe("running");
+    });
+
+    // Every state GitHub's GraphQL API gives a report (its DeploymentStatusState), each read as the REST name the rule is written in.
+    it.each([
+      ["PENDING", "running"],
+      ["QUEUED", "running"],
+      ["IN_PROGRESS", "running"],
+      ["WAITING", "running"],
+      ["SUCCESS", "succeeded"],
+      ["FAILURE", "failed"],
+      ["ERROR", "failed"],
+      ["INACTIVE", "none"],
+    ])("reads GraphQL's %s as the rule reads it, %s", async (state, is) => {
+      const log = "https://github.com/owner/product/actions/runs/40/job/41";
+      const read = await readWith([{ state, at: "2026-11-12T08:09:00Z", log }]);
+      expect(deployOf(read, sha("a"))).toMatchObject({ is, log: is === "failed" ? log : null });
+    });
+  });
+
+  describe("a Deployment with more reports than a page holds", () => {
+    /** A success at 08:05, then `count` reports after it, a second apart, each `state`. */
+    const successThen = (count: number, state: string): CannedReport[] => [
+      { state: "success", at: "2026-11-12T08:05:00Z" },
+      ...Array.from({ length: count }, (_, index) => ({ state, at: new Date(Date.parse("2026-11-12T08:06:00Z") + index * 1000).toISOString() })),
+    ];
+
+    it("has the rest of its reports asked for, page after page, and is succeeded at a success beyond its first page", async () => {
+      const client = repoWith({ deployments: [{ id: 7, sha: sha("a"), createdAt: "2026-11-12T08:02:00Z", reports: successThen(249, "inactive") }] });
+      expect(deployOf(await readOne(client), sha("a"))).toEqual({ is: "succeeded", deployment: 7, commit: sha("a"), at: "2026-11-12T08:05:00Z", log: null });
+      expect(client.queries).toEqual([
+        { of: "deployments", variables: expect.objectContaining({ environment: "production" }) },
+        { of: "reports", variables: { id: "DE_7", after: "100" } },
+        { of: "reports", variables: { id: "DE_7", after: "200" } },
+      ]);
+      expect(client.calls).toEqual([]);
+    });
+
+    it("is read by the rule over all its reports: succeeded at a success beyond its first page though it failed before, failed by its latest", async () => {
+      const client = repoWith({
+        deployments: [{ id: 7, sha: sha("a"), createdAt: "2026-11-12T08:02:00Z", reports: [{ state: "failure", at: "2026-11-12T08:04:00Z" }, ...successThen(120, "in_progress")] }],
+      });
+      expect(deployOf(await readOne(client), sha("a"))).toEqual({ is: "succeeded", deployment: 7, commit: sha("a"), at: "2026-11-12T08:05:00Z", log: null });
+      const failing = repoWith({ deployments: [{ id: 8, sha: sha("a"), createdAt: "2026-11-12T08:02:00Z", reports: [...Array.from({ length: 120 }, () => ({ state: "in_progress", at: "2026-11-12T08:03:00Z" })), { state: "error", at: "2026-11-12T08:09:00Z", log: "https://ci.example.com/8" }] }] });
+      expect(deployOf(await readOne(failing), sha("a"))).toEqual({ is: "failed", deployment: 8, commit: sha("a"), at: "2026-11-12T08:09:00Z", log: "https://ci.example.com/8" });
+    });
+
+    it("leaves the merge unread when the rest of its reports can't be read, refused or the Deployment gone", async () => {
+      const client = repoWith({ deployments: [{ id: 7, sha: sha("a"), createdAt: "2026-11-12T08:02:00Z", reports: QUERY_REFUSED }] });
+      expect((await readOne(client)).merges).toEqual({ [sha("a")]: "unread" });
+      const canned = repoWith({ deployments: [{ id: 7, sha: sha("a"), createdAt: "2026-11-12T08:02:00Z", reports: successThen(120, "inactive") }] });
+      const gone = { ...canned, graphql: <T>(query: string, variables: Record<string, unknown>) => ("id" in variables ? Promise.resolve({ node: null } as T) : canned.graphql<T>(query, variables)) };
+      expect((await readOne(gone)).merges).toEqual({ [sha("a")]: "unread" });
     });
   });
 
@@ -380,28 +471,62 @@ describe("The Deployments read", () => {
         return { id: 1000 - index, sha: sha("b"), createdAt, reports: [{ state: "success", at: createdAt }] };
       });
 
-    it("stops listing once the Deployments are older than the earliest merge asked about", async () => {
-      // 250 a minute apart: the first page reaches back to 08:20, the second to 06:40, the third to 05:51.
-      const client = repoWith({ deployments: deploymentsBack(250), compare: { [`${sha("a")}...${sha("b")}`]: "ahead" } });
-      await readDeployments(client, "owner/product", "production", [{ mergeCommit: sha("a"), mergedAt: "2026-11-12T08:00:00Z" }], NOW);
-      expect(client.calls.filter((path) => path.startsWith("/repos/owner/product/deployments?"))).toEqual([
-        "/repos/owner/product/deployments?environment=production&per_page=100&page=1",
-        "/repos/owner/product/deployments?environment=production&per_page=100&page=2",
-      ]);
-      // The reports of only those since the merge, 08:00 to 09:59, are read.
-      expect(client.calls.filter((path) => path.endsWith("/statuses?per_page=100&page=1"))).toHaveLength(120);
+    /** The read of one merge of `sha("a")` at `mergedAt`. */
+    const readSince = (client: Pick<ReadClient, "rest" | "graphql">, mergedAt: string) => readDeployments(client, "owner/product", "production", [{ mergeCommit: sha("a"), mergedAt }], NOW);
+    const AHEAD = { [`${sha("a")}...${sha("b")}`]: "ahead" };
+    /** The cursor of each page of Deployments a read asked for. */
+    const pagesAsked = (client: { readonly queries: readonly Query[] }) => client.queries.filter(({ of }) => of === "deployments").map(({ variables }) => variables["after"]);
+
+    it("makes one query for fewer Deployments than a page, with their reports, and no request for any one Deployment's reports", async () => {
+      const client = repoWith({ deployments: deploymentsBack(99), compare: AHEAD });
+      // The earliest of the 99, at 08:21, is the earliest success.
+      expect(deployOf(await readSince(client, "2026-11-12T06:00:00Z"), sha("a"))).toEqual({ is: "succeeded", deployment: 902, commit: sha("b"), at: "2026-11-12T08:21:00.000Z", log: null });
+      expect(client.queries).toEqual([{ of: "deployments", variables: { owner: "owner", name: "product", environment: "production", after: null } }]);
+      expect(client.calls).toEqual([`/repos/owner/product/compare/${sha("a")}...${sha("b")}?per_page=1`]);
     });
 
     it("reads no second page when the first is not full", async () => {
-      const client = repoWith({ deployments: deploymentsBack(99), compare: { [`${sha("a")}...${sha("b")}`]: "ahead" } });
-      await readDeployments(client, "owner/product", "production", [{ mergeCommit: sha("a"), mergedAt: "2026-11-12T06:00:00Z" }], NOW);
-      expect(client.calls.filter((path) => path.startsWith("/repos/owner/product/deployments?"))).toHaveLength(1);
+      const client = repoWith({ deployments: deploymentsBack(99), compare: AHEAD });
+      await readSince(client, "2026-11-12T06:00:00Z");
+      expect(pagesAsked(client)).toEqual([null]);
+    });
+
+    it("reads no second page when GitHub has none, though the first is full", async () => {
+      const client = repoWith({ deployments: deploymentsBack(100), compare: AHEAD });
+      await readSince(client, "2026-11-12T06:00:00Z");
+      expect(pagesAsked(client)).toEqual([null]);
+    });
+
+    it("stops listing once the Deployments are older than the earliest merge asked about", async () => {
+      // 250 a minute apart: the first page reaches back to 08:20, the second to 06:40, the third to 05:51.
+      const client = repoWith({ deployments: deploymentsBack(250), compare: AHEAD });
+      // The earliest since the merge, at 08:00, is the earliest success.
+      expect(deployOf(await readSince(client, "2026-11-12T08:00:00Z"), sha("a"))).toMatchObject({ is: "succeeded", deployment: 881, at: "2026-11-12T08:00:00.000Z" });
+      expect(pagesAsked(client)).toEqual([null, "100"]);
+      expect(client.queries.filter(({ of }) => of === "reports")).toEqual([]);
+    });
+
+    it.each([
+      ["2026-11-12T08:21:00Z", [null]],
+      ["2026-11-12T08:20:00Z", [null, "100"]],
+      ["2026-11-12T05:00:00Z", [null, "100", "200"]],
+    ])("asks page after page for a merge at %s, and none past the first that reaches before it", async (mergedAt, pages) => {
+      const client = repoWith({ deployments: deploymentsBack(250), compare: AHEAD });
+      await readSince(client, mergedAt);
+      expect(pagesAsked(client)).toEqual(pages);
+    });
+
+    it("gives every merge unread when GitHub refuses a later page of the list, and throws nothing", async () => {
+      const canned = repoWith({ deployments: deploymentsBack(250), compare: AHEAD });
+      const client = { ...canned, graphql: <T>(query: string, variables: Record<string, unknown>) => (variables["after"] === "100" ? Promise.reject(QUERY_REFUSED) : canned.graphql<T>(query, variables)) };
+      expect((await readSince(client, "2026-11-12T05:00:00Z")).merges).toEqual({ [sha("a")]: "unread" });
+      expect(client.calls).toEqual([]);
     });
   });
 
   describe("refused or failing", () => {
     it("gives every merge asked about unread when GitHub refuses the list", async () => {
-      const client = repoWith({ deployments: refusal("/repos/owner/product/deployments") });
+      const client = repoWith({ deployments: QUERY_REFUSED });
       const read = await readDeployments(
         client,
         "owner/product",
@@ -441,7 +566,7 @@ describe("The Deployments read", () => {
     it("leaves unread only the merges a Deployment whose reports failed could count for", async () => {
       const client = repoWith({
         deployments: [
-          { id: 60, sha: sha("b"), createdAt: "2026-11-12T09:02:00Z", reports: refusal("/repos/owner/product/deployments/60/statuses") },
+          { id: 60, sha: sha("b"), createdAt: "2026-11-12T09:02:00Z", reports: QUERY_REFUSED },
           { id: 61, sha: sha("c"), createdAt: "2026-11-12T09:40:00Z", reports: [{ state: "success", at: "2026-11-12T09:45:00Z" }] },
         ],
         compare: { [`${sha("a")}...${sha("b")}`]: "ahead", [`${sha("a")}...${sha("c")}`]: "ahead", [`${sha("d")}...${sha("b")}`]: "diverged", [`${sha("d")}...${sha("c")}`]: "ahead" },
@@ -467,7 +592,7 @@ describe("The Deployments read", () => {
 
   describe("asked for the newest success, as a read of staging is (#855)", () => {
     /** The read of the one merge in the `staging` environment, asked for the newest success. */
-    const readNewest = (client: Pick<ReadClient, "rest">) => readDeployments(client, "owner/product", "staging", [{ mergeCommit: sha("a"), mergedAt: MERGED_AT }], NOW, { newest: true });
+    const readNewest = (client: Pick<ReadClient, "rest" | "graphql">) => readDeployments(client, "owner/product", "staging", [{ mergeCommit: sha("a"), mergedAt: MERGED_AT }], NOW, { newest: true });
     const first = { id: 30, sha: sha("a"), environment: "staging", createdAt: "2026-11-12T08:02:00Z", reports: [{ state: "success", at: "2026-11-12T08:06:00Z" }, { state: "inactive", at: "2026-11-12T08:40:00Z" }] };
     const later = { id: 31, sha: sha("b"), environment: "staging", createdAt: "2026-11-12T08:30:00Z", reports: [{ state: "success", at: "2026-11-12T08:40:00Z" }] };
 
@@ -516,9 +641,9 @@ describe("The Deployments read", () => {
     });
 
     it("leaves the merge unread when a later success's comparison fails, or a later Deployment's reports could not be read and it contains the merge", async () => {
-      const refused = repoWith({ deployments: [first, later], compare: { [`${sha("a")}...${sha("b")}`]: refusal(`/repos/owner/product/compare/${sha("a")}...${sha("b")}`) } });
+      const refused = repoWith({ deployments: [first, later], compare: { [`${sha("a")}...${sha("b")}`]: refusal(`GET /repos/owner/product/compare/${sha("a")}...${sha("b")}`) } });
       expect((await readNewest(refused)).merges).toEqual({ [sha("a")]: "unread" });
-      const unreadable = { id: 35, sha: sha("c"), environment: "staging", createdAt: "2026-11-12T09:30:00Z", reports: refusal("/repos/owner/product/deployments/35/statuses") };
+      const unreadable = { id: 35, sha: sha("c"), environment: "staging", createdAt: "2026-11-12T09:30:00Z", reports: QUERY_REFUSED };
       const within = repoWith({ deployments: [first, later, unreadable], compare: { [`${sha("a")}...${sha("b")}`]: "ahead", [`${sha("a")}...${sha("c")}`]: "ahead" } });
       expect((await readNewest(within)).merges).toEqual({ [sha("a")]: "unread" });
       const without = repoWith({ deployments: [first, later, unreadable], compare: { [`${sha("a")}...${sha("b")}`]: "ahead", [`${sha("a")}...${sha("c")}`]: "diverged" } });
