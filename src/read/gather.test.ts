@@ -36,13 +36,20 @@ interface RawRepo {
   closedCheckIssues?: Record<string, unknown>[];
   /** Fail every query whose text holds this. */
   failing?: string;
-  /** Refuse the read of this file, as GitHub refuses one for want of a permission. */
+  /**
+   * The files of `files` a query will not give whole, read singly instead: a
+   * binary one or one it truncates; and the paths that are a submodule, which
+   * a query finds nothing at.
+   */
+  kinds?: Record<string, "binary" | "truncated" | "submodule">;
+  /** Refuse the single read of this file, as GitHub refuses one for want of a permission. */
   failingFile?: string;
 }
 
-/** Every call a gather made of the client: each query's text, and each file read. */
+/** Every call a gather made of the client: each query's text, each ref a query read a path at, and each file read singly, a REST request with the Kit's own client. */
 interface Calls {
   readonly queries: string[];
+  readonly refs: string[];
   readonly files: string[];
 }
 
@@ -53,10 +60,31 @@ interface Calls {
  * many as it asks for at a time.
  */
 function repoWith(raw: RawRepo): { client: ReadClient; calls: Calls } {
-  const calls: Calls = { queries: [], files: [] };
+  const calls: Calls = { queries: [], refs: [], files: [] };
   const page = (nodes: unknown[] = []) => ({ pageInfo: { hasNextPage: false, endCursor: null }, nodes });
   const branch = raw.branch === undefined ? { name: "main", head: HEAD } : raw.branch;
   const issues = raw.issues ?? [];
+  const files = raw.files ?? {};
+  const kinds = raw.kinds ?? {};
+  /** What GitHub's query gives of `ref:path`: a file, a directory with its entries' modes, or null for nothing there or a submodule. */
+  const objectAt = (expression: string) => {
+    const [ref = "", path = ""] = expression.split(/:(.*)/s);
+    calls.refs.push(ref);
+    if (ref !== branch?.head || kinds[path] === "submodule") return null;
+    const text = files[path];
+    if (text !== undefined) {
+      const kind = kinds[path];
+      return { __typename: "Blob", text: kind === "binary" ? null : kind === "truncated" ? text.slice(0, 5) : text, isBinary: kind === "binary", isTruncated: kind === "truncated" };
+    }
+    const held = [...Object.keys(files), ...Object.keys(kinds)];
+    const under = [...new Set(held.flatMap((at) => (path === "" || at.startsWith(`${path}/`) ? [at.slice(path === "" ? 0 : path.length + 1).split("/")[0] ?? ""] : [])))];
+    if (under.length === 0) return null;
+    const modeOf = (name: string) => {
+      const at = path === "" ? name : `${path}/${name}`;
+      return kinds[at] === "submodule" ? 57344 : files[at] === undefined ? 16384 : 33188;
+    };
+    return { __typename: "Tree", entries: under.map((name) => ({ name, mode: modeOf(name) })) };
+  };
   const client: ReadClient = {
     rest: () => Promise.reject(new Error("The gather reads no REST")),
     async fileText(repo: Repo, path: string, ref: string) {
@@ -64,7 +92,7 @@ function repoWith(raw: RawRepo): { client: ReadClient; calls: Calls } {
       expect(ref).toBe(branch?.head);
       calls.files.push(path);
       if (path === raw.failingFile) throw new GitHubError(`GitHub GET ${path} failed: 403`, 403, { request: `GET ${path}`, body: JSON.stringify({ message: "Resource not accessible by integration" }) });
-      return raw.files?.[path] ?? null;
+      return kinds[path] === "submodule" ? null : (files[path] ?? null);
     },
     async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
       calls.queries.push(query);
@@ -76,6 +104,9 @@ function repoWith(raw: RawRepo): { client: ReadClient; calls: Calls } {
       if (query.includes("defaultBranchRef { name target { oid } }") && !query.includes("issues(")) {
         return answer({ repository: { owner: { login: "jrey8343" }, defaultBranchRef: branch === null ? null : { name: branch.name, target: { oid: branch.head } } } });
       }
+      // The objects a query asks for by a `ref:path` expression, each under an alias of its own, as GitHub gives them at the default branch's head.
+      const objects = [...query.matchAll(/(\w+): object\(expression: \$(\w+)\)/g)];
+      if (objects.length > 0) return answer({ repository: Object.fromEntries(objects.map(([, alias = "", variable = ""]) => [alias, objectAt(String(variables[variable]))])) });
       // A page of as many as the query asks for first, from its cursor, which here is how many came before.
       const paged = (nodes: Record<string, unknown>[]) => {
         const from = Number(variables["after"] ?? 0);
@@ -129,12 +160,14 @@ describe("a gather shaped for Home", () => {
     it.each([
       ["no caller workflow", {}],
       ["a caller workflow that pins no Fabrik release", { files: { [CALLER_PATH]: "jobs:\n  build:\n    runs-on: ubuntu-latest\n" } }],
-    ] as const)("with %s is no Product repo, and nothing but its caller workflow is read", async (_what, raw) => {
+      ["a caller workflow path that is a directory", { files: { [`${CALLER_PATH}/fabrik.yml`]: CALLER } }],
+      ["a caller workflow path that is a submodule", { kinds: { [CALLER_PATH]: "submodule" } }],
+    ] as const)("with %s is no Product repo, and nothing is read past the one query of its caller workflow and Kit files (#895)", async (_what, raw) => {
       const { client, calls } = repoWith(raw);
 
       expect(await gatherRepo(client, "jrey8343/shop", NOW)).toEqual({ repo: "jrey8343/shop", product: false, store: false });
-      expect(calls.files).toEqual([CALLER_PATH]);
-      expect(calls.queries).toHaveLength(1);
+      expect(calls.files).toEqual([]);
+      expect(calls.queries).toHaveLength(2);
     });
 
     it("with no default branch yet is no Product repo, and reads no file", async () => {
@@ -142,6 +175,72 @@ describe("a gather shaped for Home", () => {
 
       expect(await gatherRepo(client, "jrey8343/shop", NOW)).toEqual({ repo: "jrey8343/shop", product: false, store: false });
       expect(calls.files).toEqual([]);
+      expect(calls.queries).toHaveLength(1);
+    });
+  });
+
+  describe("its caller workflow and Kit files (#895)", () => {
+    const SKILLS_LOCK_PATH = ".fabrik/skills.lock.json";
+    const IMPLEMENT_PATH = ".fabrik/implement.md";
+    /** A Product repo whose caller workflow and Kit files are all text. */
+    const TEXT_FILES = {
+      [CALLER_PATH]: CALLER,
+      [CONFIG_PATH]: '{ "operator": "kate", "max_in_flight": 3 }',
+      [SKILLS_LOCK_PATH]: "[]",
+      [IMPLEMENT_PATH]: "Run the tests before you push.",
+    };
+
+    it("are read in one query at the default branch's head the repo query gave, with no REST request, and give the read a file read of each gave", async () => {
+      const { client, calls } = repoWith({ files: TEXT_FILES });
+      // The same repo, whose query gives no file whole, so each is read singly, as every gather read them before. No path is read singly from the first, so every one the Kit config is resolved from was in the query.
+      const singly = repoWith({ files: TEXT_FILES, kinds: Object.fromEntries(Object.keys(TEXT_FILES).map((path) => [path, "truncated"])) });
+
+      const read = await gatherRepo(client, "jrey8343/shop", NOW);
+
+      expect(read).toEqual(await gatherRepo(singly.client, "jrey8343/shop", NOW));
+      expect(read).toMatchObject({ product: true, release: "v3.1.0", operator: "kate", kitConfig: { ok: true, config: { maxInFlight: 3, instructions: { implement: "Run the tests before you push." } } }, unread: null });
+      expect(singly.calls.files.toSorted()).toEqual(Object.keys(TEXT_FILES).toSorted());
+      expect(calls.files).toEqual([]);
+      expect(calls.queries.filter((query) => query.includes("object(expression:"))).toHaveLength(1);
+      expect(new Set(calls.refs)).toEqual(new Set([HEAD]));
+    });
+
+    it.each([
+      ["a path with nothing at it", {}, {}],
+      ["a directory", { [`${IMPLEMENT_PATH}/notes.md`]: "Not an instruction." }, {}],
+      ["a submodule", {}, { [IMPLEMENT_PATH]: "submodule" }],
+    ] as const)("read a Kit file at %s as no file, and read it not singly", async (_what, files, kinds) => {
+      const { [IMPLEMENT_PATH]: _implement, ...others } = TEXT_FILES;
+      const { client, calls } = repoWith({ files: { ...others, ...files }, kinds });
+
+      const read = await gatherRepo(client, "jrey8343/shop", NOW);
+
+      expect(read.product && read.kitConfig).toEqual({ ok: true, config: expect.objectContaining({ operator: "kate", instructions: expect.objectContaining({ implement: null }) }) });
+      expect(calls.files).toEqual([]);
+    });
+
+    it.each([
+      ["a binary", "binary"],
+      ["a truncated", "truncated"],
+    ] as const)("read %s caller workflow or Kit file singly, at the same head, and give the text the single read gives", async (_what, kind) => {
+      const { client, calls } = repoWith({ files: TEXT_FILES, kinds: { [CALLER_PATH]: kind, [CONFIG_PATH]: kind } });
+
+      const read = await gatherRepo(client, "jrey8343/shop", NOW);
+
+      expect(read).toMatchObject({ product: true, release: "v3.1.0", operator: "kate", kitConfig: { ok: true, config: { maxInFlight: 3 } }, unread: null });
+      expect(calls.files.toSorted()).toEqual([CALLER_PATH, CONFIG_PATH].toSorted());
+    });
+
+    it.each([
+      ["their query", { failing: "object(expression:" }, { status: 502, request: "POST /graphql" }, []],
+      // As every gather failed when GitHub refused its read of the caller workflow.
+      ["the single read of a caller workflow it gives whole in no query", { kinds: { [CALLER_PATH]: "truncated" }, failingFile: CALLER_PATH }, { status: 403, request: `GET ${CALLER_PATH}` }, [CALLER_PATH]],
+    ] as const)("fail the gather with GitHub's refusal when it refuses %s, and nothing more is read", async (_what, raw, refusal, singly) => {
+      const { client, calls } = repoWith({ files: TEXT_FILES, ...raw });
+
+      await expect(gatherRepo(client, "jrey8343/shop", NOW)).rejects.toMatchObject({ name: "GitHubError", ...refusal });
+      expect(calls.files).toEqual(singly);
+      expect(calls.queries).toHaveLength(2);
     });
   });
 
@@ -197,7 +296,8 @@ describe("a gather shaped for Home", () => {
     });
 
     it("is unknown when the Kit config could not be read, with no facts and why, and the read does not throw", async () => {
-      const { client } = repoWith({ files: { [CALLER_PATH]: CALLER }, failingFile: CONFIG_PATH });
+      // GitHub gives the Kit config whole in no query, and refuses the single read of it.
+      const { client } = repoWith({ files: { [CALLER_PATH]: CALLER, [CONFIG_PATH]: '{ "operator": "kate" }' }, kinds: { [CONFIG_PATH]: "truncated" }, failingFile: CONFIG_PATH });
 
       const read = await gatherRepo(client, "jrey8343/shop", NOW);
 

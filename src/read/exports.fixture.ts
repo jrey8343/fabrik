@@ -232,6 +232,27 @@ function clientWithFiles(files: Readonly<Record<string, string>>): ReadClient {
   };
 }
 
+/**
+ * GitHub's answer to a query of objects by `ref:path` expressions, as the
+ * files read asks (#895), over these files of `owner/product` at `ref`: each
+ * a file, a directory any of them is in, with its entries, or nothing.
+ * Null for any other query.
+ */
+function filesQueryAnswer(files: Readonly<Record<string, string>>, ref: string, query: string, variables: Record<string, unknown>): unknown {
+  const objects = [...query.matchAll(/(\w+): object\(expression: \$(\w+)\)/g)];
+  if (objects.length === 0 || variables["owner"] !== "owner" || variables["name"] !== "product") return null;
+  const objectAt = (expression: string) => {
+    const [at = "", path = ""] = expression.split(/:(.*)/s);
+    const text = files[path];
+    if (at !== ref) return null;
+    if (text !== undefined) return { __typename: "Blob", text, isBinary: false, isTruncated: false };
+    const under = Object.keys(files).flatMap((held) => (path === "" || held.startsWith(`${path}/`) ? [held.slice(path === "" ? 0 : path.length + 1)] : []));
+    const names = [...new Set(under.map((rest) => rest.split("/")[0] ?? ""))];
+    return names.length === 0 ? null : { __typename: "Tree", entries: names.map((name) => ({ name, mode: under.includes(name) ? 33188 : 16384 })) };
+  };
+  return { repository: Object.fromEntries(objects.map(([, alias = "", variable = ""]) => [alias, objectAt(String(variables[variable]))])) };
+}
+
 const NOW = "2026-11-09T12:00:00Z";
 
 /** Agent pull request 50 for Ticket 7, merged on 2026-11-04, as GitHub's GraphQL answers it. */
@@ -546,10 +567,14 @@ function aSchema7Record(): unknown {
  */
 const A_PRODUCT_REPO_REFUSING_ITS_FACTS: ReadClient = {
   rest: () => Promise.reject(REFUSAL),
-  graphql: <T,>(query: string) =>
-    query.includes("defaultBranchRef { name target { oid } }") && !query.includes("issues(")
-      ? Promise.resolve({ repository: { owner: { login: "owner" }, defaultBranchRef: { name: "main", target: { oid: "d".repeat(40) } } } } as T)
-      : Promise.reject(REFUSAL),
+  graphql: <T,>(query: string, variables: Record<string, unknown>) => {
+    if (query.includes("defaultBranchRef { name target { oid } }") && !query.includes("issues(")) {
+      return Promise.resolve({ repository: { owner: { login: "owner" }, defaultBranchRef: { name: "main", target: { oid: "d".repeat(40) } } } } as T);
+    }
+    // Its caller workflow and Kit files, read in one query at that head.
+    const files = filesQueryAnswer({ ".github/workflows/fabrik.yml": "jobs:\n  loop:\n    uses: jrey8343/fabrik/.github/workflows/loop.yml@v3.1.0\n" }, "d".repeat(40), query, variables);
+    return files === null ? Promise.reject(REFUSAL) : Promise.resolve(files as T);
+  },
   fileText: (_repo, path) =>
     Promise.resolve(path === ".github/workflows/fabrik.yml" ? "jobs:\n  loop:\n    uses: jrey8343/fabrik/.github/workflows/loop.yml@v3.1.0\n" : null),
 };

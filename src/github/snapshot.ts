@@ -3454,6 +3454,9 @@ async function workflowRunsListed(github: Pick<ReadClient, "rest">, path: string
   return pages.flat();
 }
 
+/** The paths of the Kit config folder's files readKitConfigSources reads: the Kit config, the skills lock and each role's instructions. */
+export const KIT_CONFIG_SOURCE_PATHS: readonly string[] = [KIT_CONFIG_PATH, SKILLS_SOURCES_LOCK_PATH, ...INSTRUCTED_ROLES.map(instructionsPath)];
+
 /** Reads the Kit config folder's files from the Product repo at `ref`, through the API. */
 export async function readKitConfigSources(
   github: Pick<ReadClient, "fileText">,
