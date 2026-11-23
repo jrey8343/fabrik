@@ -369,12 +369,12 @@ export interface Facts {
  * its own few facts instead (./store.ts). For any other repo, first its
  * caller workflow and the Kit's files at its default branch's head, in one
  * GraphQL query and no REST request but for a file GitHub will not give whole
- * in a query (./files.ts, #895): with no caller that pins the Kit it is no
- * Product repo, and nothing more is read. A refusal of that query fails the
- * gather, as a refused read of the caller did. Otherwise the release it
- * pins, its Operator, its Kit config and whether that has a `ui` block,
- * whatever happens to the rest; then its facts, null with why when a query of
- * them fails or the Kit config could not be read. `appLogin`, the Fabrik
+ * in a query or a symbolic link (./files.ts, #895): with no caller that pins
+ * the Kit it is no Product repo, and nothing more is read. A refusal of that
+ * query fails the gather, as a refused read of the caller did. Otherwise the
+ * release it pins, its Operator, its Kit config and whether that has a `ui`
+ * block, whatever happens to the rest; then its facts, null with why when a
+ * query of them fails or the Kit config could not be read. `appLogin`, the Fabrik
  * App's bot login, may be left out: any bot's text is then taken for the
  * App's, as the Kit job does.
  */
