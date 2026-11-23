@@ -34,8 +34,10 @@ interface RawRepo {
   deployments?: Record<string, Record<string, unknown>[]>;
   /** The closed issues labelled as a Check's issue, updated in the last week. */
   closedCheckIssues?: Record<string, unknown>[];
-  /** Fail every query whose text holds this. */
+  /** Fail every query whose text holds this, as GitHub fails one when it is down. */
   failing?: string;
+  /** Refuse every query whose text holds this, as GitHub refuses one for want of a permission. */
+  refusing?: string;
   /**
    * The files of `files` a query will not give whole, read singly instead: a
    * binary one or one it truncates; and the paths that are a submodule, which
@@ -98,6 +100,9 @@ function repoWith(raw: RawRepo): { client: ReadClient; calls: Calls } {
       calls.queries.push(query);
       expect(variables).toMatchObject({ owner: "jrey8343", name: "shop" });
       if (raw.failing !== undefined && query.includes(raw.failing)) throw new GitHubError("GitHub GraphQL failed: 502", 502, { request: "POST /graphql", body: "Bad Gateway" });
+      if (raw.refusing !== undefined && query.includes(raw.refusing)) {
+        throw new GitHubError("GitHub POST /graphql failed: 403", 403, { request: "POST /graphql", body: JSON.stringify({ message: "Resource not accessible by integration" }) });
+      }
       const answer = (data: unknown) => data as T;
       const asked = (nodes: Record<string, unknown>[]) => (/states: OPEN/.test(query) ? nodes.filter(({ state }) => state === undefined || state === "OPEN") : nodes);
       const labelled = (label: unknown) => asked(issues).filter((issue) => ((issue["labels"] as { nodes: { name: string }[] } | undefined)?.nodes ?? []).some(({ name }) => name === label));
@@ -232,7 +237,7 @@ describe("a gather shaped for Home", () => {
     });
 
     it.each([
-      ["their query", { failing: "object(expression:" }, { status: 502, request: "POST /graphql" }, []],
+      ["their query", { refusing: "object(expression:" }, { status: 403, request: "POST /graphql", body: expect.stringContaining("Resource not accessible by integration") }, []],
       // As every gather failed when GitHub refused its read of the caller workflow.
       ["the single read of a caller workflow it gives whole in no query", { kinds: { [CALLER_PATH]: "truncated" }, failingFile: CALLER_PATH }, { status: 403, request: `GET ${CALLER_PATH}` }, [CALLER_PATH]],
     ] as const)("fail the gather with GitHub's refusal when it refuses %s, and nothing more is read", async (_what, raw, refusal, singly) => {
