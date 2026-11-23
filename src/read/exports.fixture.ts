@@ -89,6 +89,7 @@ import {
   readCaller,
   readDeployments,
   readDigestPlaces,
+  readFiles,
   readOutcomes,
   readIssuesToRollIn,
   readKitConfigSources,
@@ -148,6 +149,7 @@ import type {
   CostFigure,
   DeploymentsRead,
   DeployOf,
+  FilesRead,
   DigestData,
   DigestRead,
   DropReason,
@@ -1148,6 +1150,19 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
     ),
   ],
 
+  // The files read
+
+  readFiles: () =>
+    readFiles(
+      {
+        ...clientWithFiles({}),
+        graphql: <T,>(query: string, variables: Record<string, unknown>) => Promise.resolve(filesQueryAnswer({ ".fabrik/config.json": '{ "max_in_flight": 3 }', ".fabrik/implement.md": "Run the tests before you push." }, "d".repeat(40), query, variables) as T),
+      },
+      "owner/product",
+      "d".repeat(40),
+      [".fabrik/config.json", ".fabrik/review.md", ".fabrik"],
+    ),
+
   // The join with runs
 
   joinRuns: () =>
@@ -1678,6 +1693,10 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     failedSummaryIssues: [{ number: 11, title: "Weekly summary failed", createdAt: "2026-11-02T07:00:00Z", appComments: [] }],
     readyForHuman: [anOpenIssue({ number: 12, labels: ["ready-for-human"] })],
   } satisfies StoreFacts,
+
+  // The files read
+
+  FilesRead: { ".fabrik/config.json": '{ "max_in_flight": 3 }', ".fabrik/review.md": null } satisfies FilesRead,
 
   // The join with runs
 

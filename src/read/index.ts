@@ -92,6 +92,11 @@ export type { Facts, RepoRead } from "./gather.ts";
 export type { Row } from "./rows.ts";
 export type { StoreFacts } from "./store.ts";
 
+// The files read
+
+export { readFiles } from "./files.ts";
+export type { FilesRead } from "./files.ts";
+
 // The join with runs
 
 export { joinRuns } from "./joinRuns.ts";
