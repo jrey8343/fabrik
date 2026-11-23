@@ -103,6 +103,13 @@ export async function filesAt(client: Pick<ReadClient, "graphql" | "fileText">, 
  * REST request with the Kit's own client, only for each file GitHub will not
  * give as that read does in a query (filesAt). None at all for no path. It
  * throws a refusal of the query or of a file read, as a file read does.
+ *
+ * What it asks costs more than the paths alone: to know a symbolic link, the
+ * query also asks for the whole listing of each directory the paths are in,
+ * every entry's name and mode, so its answer grows with how many entries sit
+ * in those directories, not only with how many paths were asked. A reader
+ * that reads one large directory's files in batches is given that
+ * directory's whole listing with every batch.
  */
 export async function readFiles(client: Pick<ReadClient, "graphql" | "fileText">, repo: string, ref: string, paths: readonly string[]): Promise<FilesRead> {
   const [owner = "", name = ""] = repo.split("/");
