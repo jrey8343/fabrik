@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GitHubError, type ReadClient } from "../github/client.ts";
 import { readProductTicks } from "../github/tickFacts.ts";
 import { anOpenPullRequest, factsOf, standingFactsOf } from "./builders.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { standingsOf } from "../kit/standing.ts";
-import { readRuns, type RunInFlight, type RunsRead, runsInFlightFactOf } from "./runs.ts";
+import { foldNamedRuns, type NamedRunsRead, readNamedRuns, readRuns, type RunInFlight, type RunsRead, runsInFlightFactOf } from "./runs.ts";
 
 const NOW = "2026-11-12T10:00:00Z";
 const RUN_PAGE = (id: number) => `https://github.com/owner/product/actions/runs/${id}`;
@@ -40,11 +40,22 @@ interface CannedTick {
   readonly startedAt: string;
 }
 
-/** A made-up `owner/product` whose Actions holds these workflow runs, each with its jobs, and these scheduled runs of `fabrik.yml`, newest first. */
-function actionsOf(runs: readonly CannedRun[], ticks: readonly CannedTick[] = [], refuse: { runs?: boolean; tick?: boolean } = {}): Pick<ReadClient, "rest"> & { readonly calls: string[] } {
+/**
+ * A made-up `owner/product` whose Actions holds these workflow runs, each with
+ * its jobs, and these scheduled runs of `fabrik.yml`, newest first. Its
+ * listing honours its `created` bound, as GitHub's does, and it answers a
+ * read of one run by its id.
+ */
+function actionsOf(
+  runs: readonly CannedRun[],
+  ticks: readonly CannedTick[] = [],
+  refuse: { runs?: boolean; tick?: boolean } = {},
+): Pick<ReadClient, "rest"> & { readonly calls: string[] } {
   const calls: string[] = [];
-  const refusal = (path: string) =>
-    new GitHubError(`GitHub GET ${path} failed: 403`, 403, { body: JSON.stringify({ message: "Resource not accessible by integration" }), request: `GET ${path}` });
+  const refusal = (path: string, status = 403) =>
+    new GitHubError(`GitHub GET ${path} failed: ${status}`, status, { body: JSON.stringify({ message: "Resource not accessible by integration" }), request: `GET ${path}` });
+  const createdAt = (run: CannedRun) => run.createdAt ?? "2026-11-12T09:00:00Z";
+  const listedRun = (run: CannedRun) => ({ id: run.id, run_attempt: run.attempt ?? 1, status: run.status, created_at: createdAt(run), html_url: RUN_PAGE(run.id) });
   return {
     calls,
     async rest(method: string, path: string): Promise<unknown> {
@@ -65,20 +76,22 @@ function actionsOf(runs: readonly CannedRun[], ticks: readonly CannedTick[] = []
         };
       }
       if (refuse.runs === true) throw refusal(path);
-      // Every run here is in the runs read's window (#725), which keeps the unfinished ones by their status.
-      const listed = new RegExp(`^${base}/runs\\?created=[^&]+&exclude_pull_requests=true&per_page=100&page=(\\d+)$`).exec(path);
+      // The runs read keeps the unfinished ones by their status, of those its listing gives.
+      const listed = new RegExp(`^${base}/runs\\?created=([^&]+)&exclude_pull_requests=true&per_page=100&page=(\\d+)$`).exec(path);
       if (listed !== null) {
+        const since = Date.parse(decodeURIComponent(listed[1] ?? "").replace(/^>=/, ""));
         return {
           workflow_runs: runs
-            .slice((Number(listed[1]) - 1) * 100, Number(listed[1]) * 100)
-            .map((run) => ({
-              id: run.id,
-              run_attempt: run.attempt ?? 1,
-              status: run.status,
-              created_at: run.createdAt ?? "2026-11-12T09:00:00Z",
-              html_url: RUN_PAGE(run.id),
-            })),
+            .filter((run) => Date.parse(createdAt(run)) >= since)
+            .slice((Number(listed[2]) - 1) * 100, Number(listed[2]) * 100)
+            .map(listedRun),
         };
+      }
+      const one = new RegExp(`^${base}/runs/(\\d+)$`).exec(path);
+      if (one !== null) {
+        const run = runs.find(({ id }) => id === Number(one[1]));
+        if (run === undefined) throw refusal(path, 404);
+        return { ...listedRun(run), name: "fabrik", event: "issues" };
       }
       const jobs = new RegExp(`^${base}/runs/(\\d+)/jobs\\?filter=latest&per_page=100$`).exec(path);
       if (jobs !== null) {
@@ -743,5 +756,282 @@ describe("The runs read", () => {
 
       expect((await readRuns(actions, "owner/product", NOW)).runs).toEqual([]);
     });
+  });
+});
+
+/** The paths a canned client was asked, each without its method. */
+const pathsOf = (calls: readonly string[]) => calls.map((call) => call.replace(/^GET /, ""));
+
+/** The address of the runs listing a read asked for, by its first page. */
+const listingsOf = (calls: readonly string[]) => pathsOf(calls).filter((path) => /\/actions\/runs\?created=/.test(path) && path.endsWith("&page=1"));
+
+describe("The whole runs read's listing (#898)", () => {
+  const running = (id: number, createdAt: string): CannedRun => ({ id, status: "in_progress", createdAt, jobs: [kitJob(IMPLEMENT_ON_12), { name: "fabrik / Implement #12 (Retry 2)", status: "in_progress" }] });
+
+  it("is asked at one address within the hour, its bound the hour a day before, and at another in the next hour", async () => {
+    const actions = actionsOf([]);
+
+    await readRuns(actions, "owner/product", "2026-11-12T10:05:00Z");
+    await readRuns(actions, "owner/product", "2026-11-12T10:59:59Z");
+    await readRuns(actions, "owner/product", "2026-11-12T11:00:00Z");
+
+    const [first, second, third] = listingsOf(actions.calls);
+    expect(first).toBe(second);
+    expect(third).not.toBe(first);
+    expect(decodeURIComponent(first ?? "")).toContain("created=>=2026-11-11T10:00:00Z&");
+    expect(decodeURIComponent(third ?? "")).toContain("created=>=2026-11-11T11:00:00Z&");
+  });
+
+  it("leaves out a run created before the window, a day to the second, though after the listing's bound", async () => {
+    const actions = actionsOf([running(7, "2026-11-11T10:15:00Z"), running(8, "2026-11-11T10:30:00Z"), running(9, "2026-11-12T09:00:00Z")]);
+
+    const read = await readRuns(actions, "owner/product", "2026-11-12T10:30:00Z");
+
+    expect(decodeURIComponent(listingsOf(actions.calls)[0] ?? "")).toContain("created=>=2026-11-11T10:00:00Z&");
+    expect(read.runs).toMatchObject([{ run: 8 }, { run: 9 }]);
+    // A run left out is not read further.
+    expect(pathsOf(actions.calls).filter((path) => path.includes("/runs/7/"))).toEqual([]);
+  });
+
+  it("is bounded by the clock, as it was before, when the time it is handed is no time, and the runs are still read", async () => {
+    const actions = actionsOf([running(7, "2026-11-12T09:00:00Z")]);
+    vi.useFakeTimers({ now: Date.parse("2026-11-12T10:30:00Z"), toFake: ["Date"] });
+    try {
+      const read = await readRuns(actions, "owner/product", "not a time");
+
+      expect(read).toMatchObject({ readAt: "not a time", runs: [{ run: 7, issue: 12 }] });
+      expect(decodeURIComponent(listingsOf(actions.calls)[0] ?? "")).toContain("created=>=2026-11-11T10:00:00Z&");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("The named runs read (#898)", () => {
+  const implementRun: CannedRun = {
+    id: 7,
+    status: "in_progress",
+    attempt: 2,
+    createdAt: "2026-11-12T09:00:00Z",
+    jobs: [
+      kitJob(IMPLEMENT_ON_12),
+      { id: 2, name: "fabrik / Claim the work", status: "completed", conclusion: "success", startedAt: "2026-11-12T09:01:00Z" },
+      { id: 3, name: "fabrik / Implement #12 (Retry 2)", status: "in_progress", startedAt: "2026-11-12T09:02:00Z" },
+    ],
+  };
+  const reviewRun: CannedRun = {
+    id: 8,
+    status: "in_progress",
+    createdAt: "2026-11-12T09:10:00Z",
+    jobs: [kitJob(routed({ role: "review", issue: 12, pullRequest: 50, kind: null, retry: 0, model: "claude-sonnet-4-5" })), { name: "fabrik / Review checks", status: "in_progress" }],
+  };
+
+  it("gives a run with an agent job in flight as the whole read gives it", async () => {
+    const actions = actionsOf([implementRun, reviewRun]);
+
+    const whole = await readRuns(actions, "owner/product", NOW);
+    const named = await readNamedRuns(actions, "owner/product", [7], NOW);
+
+    expect(named).toEqual({
+      repo: "owner/product",
+      readAt: NOW,
+      named: [
+        {
+          run: 7,
+          inFlight: [
+            {
+              run: 7,
+              attempt: 2,
+              exact: true,
+              role: "implement",
+              issue: 12,
+              pullRequest: 40,
+              kind: "retry",
+              retry: 2,
+              model: "claude-opus-4-1",
+              job: "running",
+              createdAt: "2026-11-12T09:00:00Z",
+              startedAt: "2026-11-12T09:02:00Z",
+              url: JOB_PAGE(7, 3),
+            },
+          ],
+        },
+      ],
+    } satisfies NamedRunsRead);
+    expect(whole.runs).not.toBe("unread");
+    expect(named.named[0]?.inFlight).toEqual((whole.runs as readonly RunInFlight[]).filter(({ run }) => run === 7));
+  });
+
+  it.each([
+    ["that has ended", { ...implementRun, status: "completed" }],
+    ["whose push job has finished", { ...implementRun, jobs: [...implementRun.jobs, { name: "fabrik / Push", status: "completed", conclusion: "success" }] }],
+    ["with no agent job, the Kit having declined", { ...implementRun, jobs: [kitJob({ fabrik: 1, route: "none", run: null, held: [], replay: null })] }],
+    ["created before the window, a day to the second", { ...implementRun, createdAt: "2026-11-11T09:59:59Z" }],
+  ])("gives a run %s no run in flight", async (_, run) => {
+    const actions = actionsOf([run]);
+
+    expect(await readNamedRuns(actions, "owner/product", [7], NOW)).toEqual({ repo: "owner/product", readAt: NOW, named: [{ run: 7, inFlight: [] }] });
+  });
+
+  it("reads no jobs of a run that has ended or is older than the window: one request for it", async () => {
+    const ended = actionsOf([{ ...implementRun, status: "completed" }]);
+    const old = actionsOf([{ ...implementRun, createdAt: "2026-11-11T09:00:00Z" }]);
+
+    await readNamedRuns(ended, "owner/product", [7], NOW);
+    await readNamedRuns(old, "owner/product", [7], NOW);
+
+    expect(pathsOf(ended.calls)).toEqual(["/repos/owner/product/actions/runs/7"]);
+    expect(pathsOf(old.calls)).toEqual(["/repos/owner/product/actions/runs/7"]);
+  });
+
+  it.each([
+    ["the run", (path: string) => path.endsWith("/runs/8")],
+    ["its jobs", (path: string) => path.includes("/runs/8/jobs")],
+  ])("gives a run unread when GitHub refuses %s, that run alone, and throws nothing", async (_, refused) => {
+    const base = actionsOf([implementRun, reviewRun]);
+    const actions = {
+      rest: async (method: string, path: string) => {
+        if (refused(path)) throw new GitHubError(`GitHub GET ${path} failed: 403`, 403, { request: `GET ${path}` });
+        return base.rest(method, path);
+      },
+    };
+
+    const named = await readNamedRuns(actions, "owner/product", [7, 8], NOW);
+
+    expect(named.named.map(({ run, inFlight }) => [run, inFlight === "unread" ? "unread" : inFlight.length])).toEqual([
+      [7, 1],
+      [8, "unread"],
+    ]);
+  });
+
+  it("gives a run GitHub no longer holds unread, and every run unread when GitHub fails some other way, never throwing", async () => {
+    const failing = { rest: () => Promise.reject(new TypeError("fetch failed")) };
+
+    expect((await readNamedRuns(actionsOf([implementRun]), "owner/product", [99], NOW)).named).toEqual([{ run: 99, inFlight: "unread" }]);
+    expect((await readNamedRuns(failing, "owner/product", [7, 8], NOW)).named).toEqual([
+      { run: 7, inFlight: "unread" },
+      { run: 8, inFlight: "unread" },
+    ]);
+  });
+
+  it("asks at most two requests for each run named, and none for a run not named, the Tick, or the listing", async () => {
+    const actions = actionsOf([implementRun, reviewRun, { ...implementRun, id: 9 }, { ...implementRun, id: 10, status: "completed" }]);
+
+    const named = await readNamedRuns(actions, "owner/product", [7, 10, 9, 7], NOW);
+
+    expect(named.named.map(({ run }) => run)).toEqual([7, 10, 9]);
+    expect(pathsOf(actions.calls).toSorted()).toEqual([
+      "/repos/owner/product/actions/runs/10",
+      "/repos/owner/product/actions/runs/7",
+      "/repos/owner/product/actions/runs/7/jobs?filter=latest&per_page=100",
+      "/repos/owner/product/actions/runs/9",
+      "/repos/owner/product/actions/runs/9/jobs?filter=latest&per_page=100",
+    ]);
+  });
+
+  it("gives every run unread, asking nothing, when the time it is handed is no time", async () => {
+    const actions = actionsOf([implementRun]);
+
+    expect((await readNamedRuns(actions, "owner/product", [7], "not a time")).named).toEqual([{ run: 7, inFlight: "unread" }]);
+    expect(actions.calls).toEqual([]);
+  });
+
+  it("asks nothing when named no run", async () => {
+    const actions = actionsOf([implementRun]);
+
+    expect(await readNamedRuns(actions, "owner/product", [], NOW)).toEqual({ repo: "owner/product", readAt: NOW, named: [] });
+    expect(actions.calls).toEqual([]);
+  });
+
+  it("folded, of every unfinished run, into a runs read kept with no runs, gives the whole read's runs", async () => {
+    const releasedKit: CannedJob = { name: "fabrik / Kit", status: "completed", conclusion: "success", steps: [{ name: "Route", status: "completed", conclusion: "success" }] };
+    const REPLAY = { fabrik: 1, route: "replay", run: null, held: [], replay: { issue: 30, ticket: 12 } };
+    const DIGEST = routed({ role: "digest", issue: 12, pullRequest: 50, kind: null, retry: 0, model: "claude-sonnet-4-5" });
+    const runs: CannedRun[] = [
+      implementRun,
+      reviewRun,
+      { id: 9, status: "queued", createdAt: "2026-11-12T09:20:00Z", jobs: [kitJob(DIGEST)] },
+      { id: 10, status: "in_progress", jobs: [kitJob(DIGEST), { id: 6, name: "fabrik / Digest PR #50", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "in_progress" }] },
+      { id: 11, status: "in_progress", createdAt: "2026-11-12T08:00:00Z", jobs: [kitJob(REPLAY), { name: "fabrik / Replay implement (baseline)", status: "in_progress", startedAt: "2026-11-12T08:02:00Z" }] },
+      { id: 12, status: "in_progress", jobs: [releasedKit, { id: 3, name: "fabrik / Implement #14 (Retry 1)", status: "in_progress", startedAt: "2026-11-12T09:02:00Z" }] },
+      { id: 13, status: "in_progress", jobs: [releasedKit, { name: "fabrik / Review checks", status: "in_progress" }] },
+      { id: 14, status: "in_progress", jobs: [kitJob({ fabrik: 1, route: "none", run: null, held: [], replay: null })] },
+      { id: 15, status: "in_progress", jobs: [kitJob(IMPLEMENT_ON_12), { name: "fabrik / Implement #12 (Retry 2)", status: "completed", conclusion: "success" }, { name: "fabrik / Push", status: "completed", conclusion: "success" }] },
+      { id: 16, status: "in_progress", jobs: [{ name: "fabrik / Kit", status: "in_progress", steps: [{ name: "Route", status: "in_progress" }] }] },
+      { id: 17, status: "completed", jobs: [kitJob(IMPLEMENT_ON_12), { name: "fabrik / Implement #12 (Retry 2)", status: "in_progress" }] },
+      { id: 18, status: "in_progress", createdAt: "2026-11-11T09:30:00Z", jobs: [kitJob(IMPLEMENT_ON_12), { name: "fabrik / Implement #12 (Retry 2)", status: "in_progress" }] },
+      { id: 19, status: "waiting", jobs: [] },
+    ];
+    const actions = actionsOf(runs);
+    const kept: RunsRead = { repo: "owner/product", readAt: "2026-11-12T09:00:00Z", runs: [], tick: { lastStartedAt: "2026-11-12T09:00:00Z" } };
+
+    const whole = await readRuns(actions, "owner/product", NOW);
+    const named = await readNamedRuns(
+      actions,
+      "owner/product",
+      runs.filter(({ status }) => status !== "completed").map(({ id }) => id),
+      NOW,
+    );
+
+    expect(whole.runs).toHaveLength(7);
+    expect(foldNamedRuns(kept, named).runs).toEqual(whole.runs);
+  });
+});
+
+describe("The fold of a named runs read into the runs read kept (#898)", () => {
+  const run = (id: number, overrides: Partial<RunInFlight> = {}): RunInFlight => ({
+    run: id,
+    attempt: 1,
+    exact: true,
+    role: "implement",
+    issue: id,
+    pullRequest: null,
+    kind: "first",
+    retry: null,
+    model: "claude-opus-4-1",
+    job: "waiting-for-runner",
+    createdAt: "2026-11-12T09:00:00Z",
+    startedAt: null,
+    url: RUN_PAGE(id),
+    ...overrides,
+  });
+  const kept: RunsRead = Object.freeze({
+    repo: "owner/product",
+    readAt: "2026-11-12T09:30:00Z",
+    runs: Object.freeze([run(5), run(7), run(9)]),
+    tick: Object.freeze({ lastStartedAt: "2026-11-12T09:00:00Z" }),
+  });
+  const namedOf = (named: NamedRunsRead["named"]): NamedRunsRead => ({ repo: "owner/product", readAt: NOW, named });
+
+  it("replaces a named run's entries with the answer's, leaving every other run's entries, the Tick and when it was read as kept", () => {
+    const running = run(7, { job: "running", startedAt: "2026-11-12T09:35:00Z", url: JOB_PAGE(7, 3) });
+
+    expect(foldNamedRuns(kept, namedOf([{ run: 7, inFlight: [running] }]))).toEqual({ ...kept, runs: [run(5), running, run(9)] });
+  });
+
+  it("removes the entries of a run that ended", () => {
+    expect(foldNamedRuns(kept, namedOf([{ run: 7, inFlight: [] }])).runs).toEqual([run(5), run(9)]);
+  });
+
+  it("leaves an unread run's entries as kept", () => {
+    expect(foldNamedRuns(kept, namedOf([{ run: 7, inFlight: "unread" }, { run: 9, inFlight: [] }])).runs).toEqual([run(5), run(7)]);
+  });
+
+  it("adds a run never kept in its place by run, and adds nothing for a run never kept that is not in flight", () => {
+    expect(foldNamedRuns(kept, namedOf([{ run: 8, inFlight: [run(8)] }, { run: 20, inFlight: [] }, { run: 3, inFlight: [run(3)] }])).runs).toEqual([run(3), run(5), run(7), run(8), run(9)]);
+  });
+
+  it("changes nothing for a named read of no runs", () => {
+    expect(foldNamedRuns(kept, namedOf([]))).toEqual(kept);
+  });
+
+  it("keeps runs kept unread unread, since a named read never says which other runs are in flight", () => {
+    const unread: RunsRead = { ...kept, runs: "unread" };
+
+    expect(foldNamedRuns(unread, namedOf([{ run: 7, inFlight: [run(7)] }]))).toEqual(unread);
+  });
+
+  it("refuses a named read of another repo", () => {
+    expect(() => foldNamedRuns(kept, { ...namedOf([]), repo: "owner/other" })).toThrow(/owner\/other.*owner\/product|owner\/product.*owner\/other/);
   });
 });

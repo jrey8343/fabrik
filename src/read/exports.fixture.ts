@@ -60,6 +60,7 @@ import {
   DROP_REASONS,
   droppedShotSentence,
   evidenceMarkerIn,
+  foldNamedRuns,
   gatherRepo,
   GitHub,
   GitHubError,
@@ -94,6 +95,7 @@ import {
   readIssuesToRollIn,
   readKitConfigSources,
   readMainChecks,
+  readNamedRuns,
   readRunRecord,
   readRequiredChecks,
   readRound,
@@ -171,6 +173,8 @@ import type {
   MergedInWeek,
   MergedLastDayFacts,
   MergeToRead,
+  NamedRun,
+  NamedRunsRead,
   NamedShot,
   NamedShotAnswer,
   NamedShots,
@@ -355,6 +359,16 @@ const A_RUNS_READ = {
   runs: [A_RUN_IN_FLIGHT],
   tick: { lastStartedAt: "2026-11-09T11:55:00Z" },
 } as const satisfies RunsRead;
+
+/** A read of `owner/product`'s Actions runs 7 and 8 at NOW: run 7 that run in flight, and run 8 ended. */
+const A_NAMED_RUNS_READ = {
+  repo: "owner/product",
+  readAt: NOW,
+  named: [
+    { run: 7, inFlight: [A_RUN_IN_FLIGHT] },
+    { run: 8, inFlight: [] },
+  ],
+} as const satisfies NamedRunsRead;
 
 /** `owner/product`'s Required checks read at NOW: `main` holds admins to its rules and requires `test`, which passed on Plain pull request 70's head. */
 const A_CHECKS_READ = {
@@ -1120,6 +1134,21 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
     ),
   TICK_DEAD_MINUTES: () => TICK_DEAD_MINUTES,
 
+  // The named runs read and its fold
+
+  foldNamedRuns: () =>
+    foldNamedRuns(
+      { ...A_RUNS_READ, runs: [{ ...A_RUN_IN_FLIGHT, job: "waiting-for-runner", startedAt: null }, { ...A_RUN_IN_FLIGHT, run: 8 }] },
+      A_NAMED_RUNS_READ,
+    ),
+  readNamedRuns: () =>
+    readNamedRuns(
+      REFUSING_CLIENT,
+      "owner/product",
+      [7, 8],
+      NOW,
+    ),
+
   // The gather and the rows
 
   gatherRepo: () =>
@@ -1619,6 +1648,11 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   RunKind: "retry" satisfies RunKind,
   RunInFlight: A_RUN_IN_FLIGHT satisfies RunInFlight,
   RunsRead: A_RUNS_READ satisfies RunsRead,
+
+  // The named runs read and its fold
+
+  NamedRun: A_NAMED_RUNS_READ.named[0] satisfies NamedRun,
+  NamedRunsRead: A_NAMED_RUNS_READ satisfies NamedRunsRead,
 
   // The gather and the rows
 

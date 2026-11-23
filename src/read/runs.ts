@@ -3,13 +3,17 @@
 // (#616), and when the repo's Tick last started. A run with no closing line,
 // from a release before the step, is told by its jobs' names as the Standing
 // tells it. It never throws: each half GitHub refuses or fails is "unread".
+// The named runs read (#898) asks the same of named workflow runs alone, and
+// its fold puts the answer into a runs read kept; what a workflow run's jobs
+// tell is one rule for both (inFlightOf).
 import type { ReadClient, Repo } from "../github/client.ts";
 import {
   type ActionsJob,
   isAgentJobNamed,
   isJobNamed,
   jobOf,
-  jobsOfUnfinishedRuns,
+  jobsOfRun,
+  jobsOfUnfinishedRunsAt,
   KIT_JOB_NAME,
   PUSH_JOB_NAME,
   REPLAY_ARM_JOB_NAMES,
@@ -58,11 +62,83 @@ export interface RunInFlight {
   readonly url: string;
 }
 
-/** What `owner/product` reads in Actions: its runs in flight, and when its Tick last started; never throws. */
+/**
+ * What `owner/product` reads in Actions at `now`, ISO 8601: its runs in
+ * flight, and when its Tick last started; never throws. It asks a listing of
+ * every workflow run created in the last 24 hours, a page for each hundred,
+ * at an address that stays the same within the hour (#898); one listing of
+ * each unfinished run's jobs; and one of the Tick's scheduled runs. Its
+ * window is the 24 hours before `now`, or before the clock when `now` is no
+ * time, so such a read still reads the runs, as it did before.
+ */
 export async function readRuns(client: Pick<ReadClient, "rest">, repo: string, now: string): Promise<RunsRead> {
   const target = repoOf(repo);
-  const [runs, tick] = await Promise.all([readInFlight(client, target), readTick(client, target)]);
+  const at = Date.parse(now);
+  const [runs, tick] = await Promise.all([readInFlight(client, target, Number.isFinite(at) ? at : Date.now()), readTick(client, target)]);
   return { repo, readAt: now, runs, tick };
+}
+
+/** What a read of named workflow runs says: for each, the runs in flight it tells of. */
+export interface NamedRunsRead {
+  /** The repo read, `owner/name`. */
+  readonly repo: string;
+  /** When it was read, ISO 8601. */
+  readonly readAt: string;
+  /** Each run named, once, in the order first named. */
+  readonly named: readonly NamedRun[];
+}
+
+/** One workflow run a named runs read was asked about. */
+export interface NamedRun {
+  /** The Actions run. */
+  readonly run: number;
+  /** The runs in flight it tells of, as the whole runs read gives them: none once it has ended, routed no agent run, or is older than that read's window; unread when GitHub refused or failed. */
+  readonly inFlight: readonly RunInFlight[] | "unread";
+}
+
+/**
+ * What `owner/product` reads in Actions at `now`, ISO 8601, of these workflow
+ * runs alone (#898): for each, the runs in flight it tells of, by the rule
+ * the whole runs read tells them by, so a run the whole read would give is
+ * given the same. It asks two requests at most for each run, the run and its
+ * jobs, the jobs only of one not completed and in the whole read's window,
+ * side by side, and nothing else: no listing, and no Tick. It never throws:
+ * a run GitHub refuses or fails is unread, and that run alone.
+ */
+export async function readNamedRuns(client: Pick<ReadClient, "rest">, repo: string, runs: readonly number[], now: string): Promise<NamedRunsRead> {
+  const target = repoOf(repo);
+  const at = Date.parse(now);
+  const named = await Promise.all(
+    [...new Set(runs)].map(async (run): Promise<NamedRun> => {
+      try {
+        return { run, inFlight: inFlightOf(await jobsOfRun(client, target, run, at)) };
+      } catch {
+        return { run, inFlight: "unread" };
+      }
+    }),
+  );
+  return { repo, readAt: now, named };
+}
+
+/**
+ * A runs read kept, with a named runs read of the same repo folded in
+ * (#898): each run the named read read has its entries replaced by the
+ * answer's, so one that ended has none, and one never kept is added in its
+ * place by run, as the whole read orders them. An unread run's entries, every
+ * run's not named, the Tick and when the kept read was made are left as
+ * kept. Runs kept unread stay unread, since a named read never says which
+ * other runs are in flight. The answer folded in last wins, whenever it was
+ * read, so a reader folds its named reads in the order it made them: a read
+ * made before another of the same run, folded after it, puts back what that
+ * one said. Pure; throws on a named read of another repo.
+ */
+export function foldNamedRuns(kept: RunsRead, named: NamedRunsRead): RunsRead {
+  if (named.repo !== kept.repo) throw new Error(`A named runs read of ${named.repo} can't be folded into the runs read of ${kept.repo}.`);
+  if (kept.runs === "unread") return kept;
+  const read = named.named.flatMap(({ run, inFlight }) => (inFlight === "unread" ? [] : [{ run, inFlight }]));
+  const answered = new Set(read.map(({ run }) => run));
+  const runs = [...kept.runs.filter(({ run }) => !answered.has(run)), ...read.flatMap(({ inFlight }) => inFlight)].toSorted((a, b) => a.run - b.run);
+  return { ...kept, runs };
 }
 
 /**
@@ -127,10 +203,10 @@ function repoOf(repo: string): Repo {
   return { owner, name };
 }
 
-async function readInFlight(client: Pick<ReadClient, "rest">, repo: Repo): Promise<readonly RunInFlight[] | "unread"> {
+async function readInFlight(client: Pick<ReadClient, "rest">, repo: Repo, now: number): Promise<readonly RunInFlight[] | "unread"> {
   let jobs: ActionsJob[];
   try {
-    jobs = await jobsOfUnfinishedRuns(client, repo);
+    jobs = await jobsOfUnfinishedRunsAt(client, repo, now);
   } catch {
     return "unread";
   }
@@ -139,7 +215,7 @@ async function readInFlight(client: Pick<ReadClient, "rest">, repo: Repo): Promi
   return [...runs.keys()].sort((a, b) => a - b).flatMap((run) => inFlightOf(runs.get(run) ?? []));
 }
 
-/** The run in flight one workflow run's jobs say, if any. */
+/** The run in flight one workflow run's jobs say, if any: the one rule the whole runs read and the named one tell a run by. */
 function inFlightOf(jobs: readonly ActionsJob[]): RunInFlight[] {
   const named = (jobName: string) => jobs.find((job) => job.conclusion !== "skipped" && isJobNamed(job.name, jobName));
   const kit = named(KIT_JOB_NAME);
