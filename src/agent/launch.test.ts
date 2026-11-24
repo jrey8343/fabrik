@@ -252,6 +252,44 @@ describe("A run's reply", () => {
     },
   );
 
+  it.each(Object.keys(IMPLEMENT_REPLIES) as ImplementRunKind[])(
+    "of a %s Implement run that gives Trial steps has them read alike on the agent side and by its push job (#963)",
+    async (kind) => {
+      const trial = {
+        summary: " Patients can join a waitlist for a full day. ",
+        steps: [
+          { route: "/patients/[patientId]", do: "Open any patient from the list.", expect: "Their waitlist days show under their name." },
+          { route: "/book", do: "Pick a day with no free slots.", expect: "A waitlist button shows." },
+        ],
+      };
+      const read = IMPLEMENT_OUTPUT_READERS[kind];
+      const { output, saved } = settleReply({ read }, await validated(read, { ...IMPLEMENT_REPLIES[kind], trial }));
+      const pushed = parseImplementOutput(saved, kind);
+
+      expect(output.trial).toEqual({
+        summary: "Patients can join a waitlist for a full day.",
+        steps: [
+          { do: "Open any patient from the list.", expect: "Their waitlist days show under their name." },
+          { route: "/book", do: "Pick a day with no free slots.", expect: "A waitlist button shows." },
+        ],
+      });
+      expect(pushed.ok && pushed.output.trial).toEqual(output.trial);
+    },
+  );
+
+  it.each(Object.keys(IMPLEMENT_REPLIES) as ImplementRunKind[])(
+    "of a %s Implement run whose Trial steps are malformed passes both checks with them left out, so the run lands (#963)",
+    async (kind) => {
+      const read = IMPLEMENT_OUTPUT_READERS[kind];
+      const { output, saved } = settleReply({ read }, await validated(read, { ...IMPLEMENT_REPLIES[kind], trial: { summary: "Patients can join a waitlist.", steps: [{ do: "Pick a full day." }] } }));
+      const pushed = parseImplementOutput(saved, kind);
+
+      expect("trial" in output).toBe(false);
+      expect(pushed).toMatchObject({ ok: true });
+      expect(pushed.ok && "trial" in pushed.output).toBe(false);
+    },
+  );
+
   it("is saved as the agent wrote it", async () => {
     const reply = IMPLEMENT_REPLIES["request-changes"];
     const { saved } = settleReply({ read: readRequestChangesRunOutput }, await validated(readRequestChangesRunOutput, reply));

@@ -232,6 +232,28 @@ export function isRoute(value: unknown): value is string {
   return typeof value === "string" && value.startsWith("/") && !value.startsWith("//");
 }
 
+/**
+ * A path segment that stands for a value rather than names a page, as a
+ * framework's route files spell one: `[patientId]` (or `[...slug]`),
+ * `<patientId>`, or `:patientId`.
+ */
+const DYNAMIC_SEGMENT = /\[[^\]/]*\]|<[^>/]*>|^:[A-Za-z_]/;
+
+/**
+ * Whether a route has a dynamic segment (DYNAMIC_SEGMENT) in its path, its
+ * query and fragment left out: a route no page answers as written, which
+ * capture resolves through `ui.resolve_route` (ADR-0024) or misses, and
+ * which a Trial step never starts on (src/loop/implementOutput.ts). It is
+ * beside isRoute, below the modules that ask it, and UI evidence's module
+ * passes it on to its readers (src/evidence/uiEvidence.ts).
+ */
+export function hasDynamicSegment(route: string): boolean {
+  return route
+    .replace(/[?#].*$/s, "")
+    .split("/")
+    .some((segment) => DYNAMIC_SEGMENT.test(segment));
+}
+
 /** A browser viewport UI evidence is captured at. */
 export interface Viewport {
   readonly name: "mobile" | "desktop";

@@ -1,7 +1,7 @@
 // The Implementer output contract: alongside its commits (passed out as a git
 // bundle), an Implement agent job emits the title and summary of the draft PR
 // its push job opens. Both sides check it, so a malformed output never half-applies.
-import { isRoute } from "../kit/config.ts";
+import { hasDynamicSegment, isRoute } from "../kit/config.ts";
 import { isCommentIdList } from "./considered.ts";
 
 export interface ImplementOutput {
@@ -42,6 +42,14 @@ export interface ImplementOutput {
    */
   readonly nothingVisible?: string;
   /**
+   * On a Product repo that declares `staging` (#963), for a pull request that
+   * will ask for a Staging trial: its Trial steps, written for the pull
+   * request as it now stands, which the push job keeps on it
+   * (trialStepsMarker, src/loop/markers.ts). Left out when the run gave
+   * anything but Trial steps (trialStepsOf): a bad `trial` never fails the run.
+   */
+  readonly trial?: TrialSteps;
+  /**
    * For a Request-changes run alone: its two answers about the review it was
    * started for, which the Kit records on the PR (#369). Every other run
    * leaves them out.
@@ -75,6 +83,34 @@ export interface ImplementOutput {
    * `true`: anything else is no statement, and never fails the run.
    */
   readonly onlySpinOffs?: true;
+}
+
+/**
+ * A pull request's Trial steps (GLOSSARY.md), as the Implementer writes them
+ * (#963): what the Operator checks in its Staging trial. Each text is the
+ * agent's, so a reader shows it as text and builds no link from it but the
+ * one to a step's `route` on the staging site.
+ */
+export interface TrialSteps {
+  /** One short paragraph, in plain language, of what changed for a person using the product. */
+  readonly summary: string;
+  /** What to do and what to see, in the order to do it: one step at least. */
+  readonly steps: readonly TrialStep[];
+}
+
+/** One of a pull request's Trial steps. */
+export interface TrialStep {
+  /**
+   * The page the step starts on: a route (isRoute) with no dynamic segment
+   * (hasDynamicSegment), so it is a page of the staging site as written. A
+   * step on a record's page gives the nearest page with a fixed address, and
+   * its `do` says how to reach the record. Left out where the step gave none.
+   */
+  readonly route?: string;
+  /** What the person does, in plain words. */
+  readonly do: string;
+  /** What they should then see, concrete enough to check by looking. */
+  readonly expect: string;
 }
 
 /**
@@ -137,12 +173,39 @@ function isText(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
+/**
+ * A value as Trial steps, or null when it isn't them. The one rule for their
+ * shape: both sides of the contract read a run's `trial` by it, and so does
+ * the reader of the marker that keeps them on the pull request
+ * (trialStepsIn, src/loop/markers.ts).
+ */
+export function trialStepsOf(value: unknown): TrialSteps | null {
+  if (!isRecord(value)) return null;
+  const { summary, steps: written } = value;
+  if (!isText(summary) || !Array.isArray(written) || written.length === 0) return null;
+  const steps: TrialStep[] = [];
+  for (const step of written as unknown[]) {
+    // One step that isn't a step leaves the whole of them out: the rest would read as steps nobody wrote in that order.
+    if (!isRecord(step) || !isText(step.do) || !isText(step.expect)) return null;
+    const { route } = step;
+    // A route that is no page of the staging site as written is left off, and its step kept: the step still says what to do.
+    steps.push({ ...(isRoute(route) && !hasDynamicSegment(route) ? { route } : {}), do: step.do.trim(), expect: step.expect.trim() });
+  }
+  return { summary: summary.trim(), steps };
+}
+
+/** Whether a value is an object with keys to read, and no list. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** Checks an already-parsed value against the contract, naming every problem. */
 export function readImplementOutput(value: unknown): ImplementOutputResult {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return { ok: false, errors: ["Implementer output must be a JSON object"] };
   }
   const { title, summary, fix, operatorCommentsConsidered: considered, routes, shots, nothingVisible, supersededBy } = value as Record<string, unknown>;
+  const trial = trialStepsOf((value as Record<string, unknown>).trial);
   const errors: string[] = [];
   if (!isText(title) || title.includes("\n") || title.length > MAX_TITLE) {
     errors.push(`title must be one non-empty line of at most ${MAX_TITLE} characters`);
@@ -163,6 +226,8 @@ export function readImplementOutput(value: unknown): ImplementOutputResult {
       // Nor do malformed shots, or a sentence that isn't text: each reads as not given.
       ...(isShotList(shots) ? { shots } : {}),
       ...(isText(nothingVisible) ? { nothingVisible: nothingVisible.trim() } : {}),
+      // Nor does a `trial` that isn't Trial steps: it reads as left out.
+      ...(trial === null ? {} : { trial }),
       // Nor does a superseding PR that isn't a number: it reads as none named.
       ...(Number.isInteger(supersededBy) && (supersededBy as number) > 0 ? { supersededBy: supersededBy as number } : {}),
     },
