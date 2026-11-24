@@ -59,13 +59,32 @@ describe("the README's section on reading the Kit from another program, on Stagi
     for (const key of Object.keys(EXPORT_SHAPES["PromoteList"] as object)) expect(staging, key).toContain(`\`${key}\``);
   });
 
+  it("says what a row's staging carries of its Trial steps (#965): the summary and each step with its page on staging or none, null with no marker, the same on an agent entry of the Promote list, text an agent wrote, and the marker's writer and reader", () => {
+    const trial = staging.split("\n").find((line) => line.startsWith("  - **Its Trial steps.**")) ?? "";
+    const entry = (EXPORT_SHAPES["PromoteEntry"] as readonly { readonly is: string; readonly staging?: { readonly trial: { readonly steps: readonly object[] } | null } }[])[0];
+
+    expect(staging.indexOf("  - **Its Trial steps.**")).toBeGreaterThan(staging.indexOf("  - **On the row.**"));
+    expect(staging.indexOf("  - **Its Trial steps.**")).toBeLessThan(staging.indexOf("  - **The joins.**"));
+    expect(trial).toContain("(ADR-0040)");
+    // Every key the fixture's entry has under `staging.trial`, and on each of its steps.
+    for (const key of [...Object.keys(entry?.staging?.trial ?? {}), ...Object.keys(entry?.staging?.trial?.steps[0] ?? {})]) expect(trial, key).toContain(`\`${key}\``);
+    expect(Object.keys(entry?.staging?.trial?.steps[0] ?? {}).toSorted()).toEqual(["do", "expect", "route", "url"]);
+    for (const named of ["trial", "pages", "shots", "toTry", "PromoteEntry", "TrialSteps", "trialStepsMarker", "trialStepsIn"]) expect(trial, named).toContain(`\`${named}\``);
+    expect(trial).toContain("built as a captured route's page in `pages` is");
+    expect(trial).toContain("`trial` is null for a pull request that keeps none");
+    expect(trial).toContain("`pages`, `shots` and `toTry` are what they are without it");
+    expect(trial).toContain("show it as text, never as markup");
+    expect(trial).toContain("only a body the Fabrik App wrote");
+    expect(bullet("Staging.").split("\n").find((line) => line.startsWith("  - **Fake data.**"))).toContain("`trialStepsMarkers`");
+  });
+
   it("names every export the entry has for Staging, and no export the entry lacks", () => {
-    const forStaging = ["aStagingFacts", "aStagingRead", "aMainChecksRead", "readMainChecks", "joinStaging", "stagingMergesToRead", "commitsToCheck", "MainChecksRead", "MainCheckOf", "CommitToCheck", "StagingRead", "TRIAL_ACCEPTED_LABEL", "TRIAL_PROBLEM_LABEL", "trialProblemLine", "trialProblemIn", "promoteListOf", "PromoteList", "PromoteEntry"];
+    const forStaging = ["aStagingFacts", "aStagingRead", "aMainChecksRead", "readMainChecks", "joinStaging", "stagingMergesToRead", "commitsToCheck", "MainChecksRead", "MainCheckOf", "CommitToCheck", "StagingRead", "TRIAL_ACCEPTED_LABEL", "TRIAL_PROBLEM_LABEL", "trialProblemLine", "trialProblemIn", "promoteListOf", "PromoteList", "PromoteEntry", "trialStepsMarker", "trialStepsIn", "TrialSteps", "TrialStep"];
 
     expect(forStaging.filter((name) => !EXPORTED.includes(name))).toEqual([]);
     expect(forStaging.filter((name) => !staging.includes(`\`${name}\``))).toEqual([]);
     // Every name the bullet writes with a capital in it is an export of the entry, or one of these fields of what an export gives.
-    const fields = ["deployments", "mainChecks", "newest", "site", "pages", "shots", "toTry", "notAccepted", "leftOut", "dispatchPage", "checksUnread", "standsUntil"];
+    const fields = ["deployments", "mainChecks", "newest", "site", "pages", "shots", "toTry", "notAccepted", "leftOut", "dispatchPage", "checksUnread", "standsUntil", "trialStepsMarkers"];
     const names = written(staging).filter((name) => /^[A-Za-z_]+$/.test(name) && /[A-Z]/.test(name));
     expect(names.filter((name) => !EXPORTED.includes(name) && !fields.includes(name))).toEqual([]);
   });
@@ -104,6 +123,14 @@ describe("what a reader kept, as the README and ADR-0020 say it once Staging has
 
     expect(readRow).toContain("`shots` is null on a row kept before v4.1.0");
     expect(readRow).toContain("`staging` is an optional key, on a row only in a repo whose Kit config declares `staging`, so a row kept before it has none and reads as it was kept");
+  });
+
+  it("says a row kept with staging before it had trial reads with no Trial steps, and has the releasing guide say where that step goes (#965)", () => {
+    const readRow = kept.split("\n").find((line) => line.startsWith("  - **`readRow`**")) ?? "";
+    const releasing = read("docs/releasing.md").split("\n").find((line) => line.startsWith("  - A release that adds a field to `Row`")) ?? "";
+
+    expect(readRow).toContain("A `staging` kept before it had `trial` reads with `trial` null, no Trial steps (#965)");
+    expect(releasing).toContain("So is a field added to what a key of a row holds: a `staging` kept before it had `trial` reads with `trial` null ([#965](https://github.com/jrey8343/fabrik/issues/965)).");
   });
 
   it("has ADR-0020 amended to name the three, beside the ones its amendment for kept Standings names", () => {

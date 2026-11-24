@@ -13,6 +13,7 @@
 import { posix } from "node:path";
 import {
   type CaptureIdentity,
+  hasDynamicSegment,
   isCaptureIdentity,
   isRoute,
   REVIEWER_IMAGE_CAP,
@@ -95,24 +96,8 @@ function onceEach(routes: readonly ChosenRoute[]): ChosenRoute[] {
   return routes.filter(({ route }, index) => routes.findIndex((other) => other.route === route) === index);
 }
 
-/**
- * A path segment that stands for a value rather than names a page, as a
- * framework's route files spell one: `[patientId]` (or `[...slug]`),
- * `<patientId>`, or `:patientId`.
- */
-const DYNAMIC_SEGMENT = /\[[^\]/]*\]|<[^>/]*>|^:[A-Za-z_]/;
-
-/**
- * Whether a route has a dynamic segment (DYNAMIC_SEGMENT) in its path, its
- * query and fragment left out: a route no page answers as written, which
- * capture resolves through `ui.resolve_route` (ADR-0024) or misses.
- */
-export function hasDynamicSegment(route: string): boolean {
-  return route
-    .replace(/[?#].*$/s, "")
-    .split("/")
-    .some((segment) => DYNAMIC_SEGMENT.test(segment));
-}
+// Whether a route has a dynamic segment is asked beside isRoute, where the Implementer output contract can ask it too (#963).
+export { hasDynamicSegment };
 
 /** Which site a capture is of: the production site at `ui.before_url`, or the branch served in the Sandbox. */
 export const CAPTURE_SIDES = ["before", "after"] as const;

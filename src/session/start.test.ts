@@ -97,6 +97,30 @@ describe("The SessionStart hook in a cloud or local session", () => {
     );
   });
 
+  it("installs the release's Trial session skill, and tells Claude how the Operator starts one, for the untried queue or for one pull request", async () => {
+    const kit = resolve(import.meta.dirname, "..", "..");
+    const product = await aProduct(callerAt("v1.2.3"));
+
+    const output = await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", download: serving(await aSkillsArchive()).download });
+
+    expect(await readFile(join(product, ".claude/skills/fabrik-trial/SKILL.md"), "utf8")).toBe(await readFile(join(kit, "skills/fabrik-trial/SKILL.md"), "utf8"));
+    expect(output.hookSpecificOutput.additionalContext.split("\n")).toContain(
+      "To try the merged changes untried on staging with an agent driving their own Chrome (a Trial session), the Operator runs /fabrik-trial, or /fabrik-trial <pull request number> for one, in a local session with Claude in Chrome connected.",
+    );
+  });
+
+  it("doesn't mention the Trial session skill when the release has none", async () => {
+    const output = await sessionStart({
+      kitDir: await aKitCheckout(LOCKED_SHA, { "skills/fabrik-pair/SKILL.md": "---\nname: fabrik-pair\n---\n# Pair" }),
+      productDir: await aProduct(callerAt("v1.2.3")),
+      release: "v1.2.3",
+      download: serving(await aSkillsArchive()).download,
+    });
+
+    expect(output.hookSpecificOutput.additionalContext).not.toContain("/fabrik-trial");
+    expect(output.hookSpecificOutput.additionalContext).not.toContain("Trial session");
+  });
+
   it("doesn't mention the Pairing session skill when the release has none", async () => {
     const output = await sessionStart({
       kitDir: await kitWithLiveSkill(),

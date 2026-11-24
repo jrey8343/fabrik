@@ -170,6 +170,11 @@ export { trialProblemIn, trialProblemLine } from "../loop/markers.ts";
 export { promoteListOf } from "./promoteList.ts";
 export type { PromoteEntry, PromoteList } from "./promoteList.ts";
 
+// Trial steps
+
+export { trialStepsIn, trialStepsMarker } from "../loop/markers.ts";
+export type { TrialStep, TrialSteps } from "../loop/implementOutput.ts";
+
 // The Round read
 
 export { readRound } from "./roundRead.ts";

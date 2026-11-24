@@ -206,7 +206,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Staging trials release notes, wh
       expect(Object.keys(list).toSorted()).toEqual([...PROMOTE_LIST].toSorted());
       expect(missingFrom(bullet("The Promote list.**"), [...PROMOTE_LIST, ...ENTRY, ...RESULTS, ...NOT_ON_STAGING])).toEqual([]);
       expect([...new Set(agent.map(({ result }) => result.is))].toSorted()).toEqual([...RESULTS].toSorted());
-      expect(Object.keys(agent[0]?.staging ?? {}).toSorted()).toEqual([...ROW_STAGING].toSorted());
+      expect(Object.keys(agent[0]?.staging ?? {}).toSorted()).toEqual([...ROW_STAGING, ...ROW_STAGING_SINCE].toSorted());
       expect(missingFrom(bullet("The rows."), [...ROW_STAGING, ...STAGING_READ, "rowsOf", "Row", "staging"])).toEqual([]);
       expect(Object.keys(EXPORT_SHAPES["StagingRead"] as StagingRead).toSorted()).toEqual([...STAGING_READ].toSorted());
       expect(missingFrom(bullet("The staging reads."), [...CHECK_STATES, ...UNREAD, ...NEWEST, "{ newest: true }"])).toEqual([]);
@@ -306,6 +306,8 @@ const STAGING_DETAIL = keysOf<StagingDetail>()("environment", "productionEnviron
 const TRIAL = keysOf<StagingDetail["trial"]>()("needed", "why");
 const TRIAL_WHYS = valuesOf<StagingDetail["trial"]["why"]>()("ui-evidence", "closes-trial-problem", "no-screen");
 const ROW_STAGING = keysOf<NonNullable<Row["staging"]>>()("site", "pages", "shots", "toTry");
+/** What a row's `staging` has gained since this release, which that release's own notes name: its Trial steps (#965). */
+const ROW_STAGING_SINCE = keysOf<NonNullable<Row["staging"]>>()("trial");
 const STAGING_READ = keysOf<StagingRead>()("deployments", "mainChecks");
 const NEWEST = keysOf<DeployOf>()("newest");
 const A_NEWEST_READ = { newest: true } satisfies NonNullable<Parameters<typeof readDeployments>[5]>;

@@ -267,7 +267,7 @@ An Implementer run that fixes an Execution flaw on its Ticket's open pull reques
 _Avoid_: rerun, attempt
 
 **Touch-up**:
-An Implementer run that fixes an Execution flaw whose findings are all Small findings or marked missed earlier, on the same model as the run whose push it judged. It isn't a Retry and uses none of a Ticket's two; a Ticket gets two Touch-ups, and a third such flaw counts like any other. A Touch-up whose findings are all about the body may commit nothing: the Kit replaces the body with its summary, and the Review of the same head may give it a second Verdict.
+An Implementer run that fixes an Execution flaw whose findings are all Small findings or marked missed earlier, on the same model as the run whose push it judged. It isn't a Retry and uses none of a Ticket's two; a Ticket gets two Touch-ups, and a third such flaw counts like any other. A Touch-up whose findings are all about the body may commit nothing: the Kit replaces the body with its summary, and the Review of the same head may give it a second Verdict. So may the Retry a third flaw of such findings calls for, which still counts as a Retry.
 _Avoid_: free retry, nit fix, polish run
 
 **Design flaw**:
@@ -449,6 +449,14 @@ _Avoid_: Follow-up (the Reviewer's), bug report, defect
 **Promote list**:
 Every pull request a production deployment of a Product repo would take, agent or Plain, each with its Staging trial's result, and a count of those not yet accepted. A pull request is on it from its merge until production takes it, which is when a production deployment that contains it has succeeded: it is promoted then, and unpromoted until. The list only tells the Operator what that deploy holds, and nothing deploys or refuses a deploy for it.
 _Avoid_: release list, changelog, deploy queue, release candidates
+
+**Trial steps**:
+The summary and ordered steps an Implementer writes for a pull request that asks for a Staging trial, each saying where to go, what to do and what should be seen.
+_Avoid_: test plan, test script, QA checklist, acceptance criteria (a Ticket's)
+
+**Trial session**:
+A Staging trial the Operator runs with an agent driving their own browser, which ends in the Operator's verdict.
+_Avoid_: Pairing session (works an issue, not a merged change), QA session, test run
 
 ## Measuring the factory
 

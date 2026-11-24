@@ -14,7 +14,7 @@ import {
   standingFactsOf,
 } from "../read/builders.ts";
 import type { HeldRun } from "../loop/heldRun.ts";
-import { conflictAttemptMarker, touchUpBodyOnlyMarker } from "../loop/markers.ts";
+import { conflictAttemptMarker, retryBodyOnlyMarker, touchUpBodyOnlyMarker } from "../loop/markers.ts";
 import { DEFAULT_KIT_CONFIG } from "./config.ts";
 import { maxInFlightHoldOf, mergeGateHoldOf } from "./standingInFlight.ts";
 import { type Standing, standingsOf } from "./standing.ts";
@@ -254,11 +254,14 @@ describe("work that goes on without the Operator", () => {
         ]);
       });
 
-      it("gives a draft whose body-only Touch-up's note (#751) is newer than the Verdict on its head waiting on checks, as its Review may land a second Verdict there", () => {
+      it.each([
+        ["Touch-up's note (#751)", (judged: string) => `${touchUpBodyOnlyMarker(1, judged)}\nThe Implementer's Touch-up 1 of 2 committed nothing.`],
+        ["Retry's note (#962)", (judged: string) => `${retryBodyOnlyMarker(judged)}\nThe Implementer's Retry 1 of 2 committed nothing.`],
+      ])("gives a draft whose body-only %s is newer than the Verdict on its head waiting on checks, as its Review may land a second Verdict there", (_, note) => {
         const judged = "e".repeat(40);
         const comments = [
           aVerdictComment("pass", judged, "2026-11-08T18:00:00Z"),
-          aComment(`${touchUpBodyOnlyMarker(1, judged)}\nThe Implementer's Touch-up 1 of 2 committed nothing.`, "2026-11-08T19:30:00Z"),
+          aComment(note(judged), "2026-11-08T19:30:00Z"),
         ];
         const standings = standingsIn({ openPullRequests: [anOpenPullRequest({ number: 50, ticket: 7, headSha: judged, comments })] }, aKit([checks]));
 

@@ -107,10 +107,11 @@ function allTagged(tags: VerdictTags | null): boolean {
 }
 
 /**
- * Whether a Touch-up's flaw, counted by tag, is about the pull request's body
- * alone (#751): every item is tagged `[small: body]`. Such a Touch-up may
- * commit nothing and only rewrite the body. The Kit reads it from the
- * marker's tags, so the Implementer never judges it.
+ * Whether an Execution flaw, counted by tag, is about the pull request's body
+ * alone (#751): every item is tagged `[small: body]`. The Touch-up it calls
+ * for may commit nothing and only rewrite the body, and so may the Retry it
+ * calls for once the pull request's Touch-ups are used (#962, ADR-0040). The
+ * Kit reads it from the marker's tags, so the Implementer never judges it.
  */
 export function bodyOnly(tags: VerdictTags | undefined): boolean {
   return tags !== undefined && allTagged(tags) && tags.missedEarlier === 0 && tags.small === tags.smallBody;
@@ -199,7 +200,8 @@ export type RunInFlight =
  * The run in flight on this PR, read from its comments alone, or null. A
  * Retry is in flight from the Execution flaw that calls for it until a Retry
  * outcome: its push, or its empty-diff or broken-run Verdict (which may call
- * for the next one, #434). A Request-changes run is in flight from the Kit's note that started
+ * for the next one, #434), or, for a Retry of findings all about the body
+ * that committed nothing, its note that it rewrote the body (#962). A Request-changes run is in flight from the Kit's note that started
  * it, or the Execution flaw that gave way to it, until its push, its Verdict,
  * its ended note or its note that it committed nothing (#388), or until the
  * PR leaves draft (#341). An Infrastructure
@@ -215,8 +217,8 @@ export function runInFlight(pullRequest: PullRequestSnapshot): RunInFlight | nul
   if (pullRequest.conflictRunInFlight !== null) return { kind: "conflict", main: pullRequest.conflictRunInFlight };
   const latest = pullRequest.verdicts.at(-1);
   if (latest === undefined || pullRequest.pushedSinceVerdict || latest.verdict !== "execution-flaw") return null;
-  // A body-only Touch-up's note is its outcome, though it pushed nothing (#751).
-  if (pullRequest.bodyOnlyTouchUpHead !== null) return null;
+  // A body-only Touch-up's note is its outcome, though it pushed nothing (#751), and so is a body-only Retry's (#962).
+  if (pullRequest.bodyOnlyRunHead !== null) return null;
   // One on a Ticket no longer ready-for-agent called for no Retry, and one the Kit has since ended for that reason has none in flight (#416).
   if (latest.ticketNotReady === true || pullRequest.retryNoteSinceVerdict === "ended") return null;
   // A Retry works on a draft: once the PR has left draft since the flaw, as when the Operator took it back or the Kit
@@ -268,11 +270,12 @@ export function runName(run: RunInFlight): string {
 /**
  * Whether `headSha` already has its Verdict on this PR: one Verdict per head,
  * except that a body-only Touch-up's note on that head since its latest
- * Verdict (#751) leaves room for one more, the later Review of the body that
- * Touch-up wrote, with nothing in the code changed since the head it judged.
+ * Verdict (#751), or a body-only Retry's (#962), leaves room for one more,
+ * the later Review of the body that run wrote, with nothing in the code
+ * changed since the head it judged.
  */
 export function hasVerdictOn(pullRequest: PullRequestSnapshot, headSha: string): boolean {
-  return pullRequest.verdicts.some((record) => record.headSha === headSha) && pullRequest.bodyOnlyTouchUpHead !== headSha;
+  return pullRequest.verdicts.some((record) => record.headSha === headSha) && pullRequest.bodyOnlyRunHead !== headSha;
 }
 
 /** Why a Review on this PR posts no Verdict, while a run is in flight on it; otherwise null. */

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ChangeSince } from "../github/changeSince.ts";
 import { type ChangeFingerprint, changeLine } from "../loop/changeFingerprint.ts";
-import { CONFLICT_RUN_MARKER, pushedHeadMarker, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, touchUpBodyOnlyMarker, touchUpPushMarker, verdictMarker } from "../loop/markers.ts";
+import { CONFLICT_RUN_MARKER, pushedHeadMarker, REQUEST_CHANGES_RUN_MARKER, retryBodyOnlyMarker, RETRY_PUSH_MARKER, touchUpBodyOnlyMarker, touchUpPushMarker, verdictMarker } from "../loop/markers.ts";
 import type { VerdictRecord } from "../loop/types.ts";
 import type { Reader } from "./inputs.ts";
 import { type LaterReviewGiven, lastJudgedOf, readLaterReviewThread } from "./laterReview.ts";
@@ -153,6 +153,23 @@ describe("A later Review's prompt context (#748)", () => {
 
     expect(jsonUnder(text, FIX_COMMENTS)).toMatchObject([{}, {}, {}, {}, { run: "Touch-up 1" }, { run: "Touch-up 2, body only", comment: bodyOnly }]);
     expect(text.split(PUSHED_BY)[1]?.split("\n## ")[0]).toContain(`A Touch-up pushed \`${G.slice(0, 7)}\`, the head you judge.`);
+  });
+
+  it("carries a body-only Retry's fix comment (#962), named as one with the number the Retry rules gave it, though it pushed nothing, so the run that pushed the head stays the one before it", async () => {
+    const bodyOnly = [retryBodyOnlyMarker(G), "The Implementer's Retry 1 of 2 committed nothing, as every finding was about the PR's body.", "", "**Fixed.** The body's Trial steps no longer name a map."].join("\n");
+    const retried = [
+      { user: bot, body: pushNote(touchUpPushMarker(1), G, "**Fixed.** The stale comment on `parking()`.") },
+      { user: bot, body: verdict("reviewer", G, "The body's Trial steps name a map the branch doesn't add.") },
+      { user: bot, body: bodyOnly },
+    ];
+    const text = await laterContext(gitHubWith(retried), G, NOTHING_CHANGED, G);
+
+    expect(jsonUnder(text, FIX_COMMENTS)).toMatchObject([{ run: "Touch-up 1" }, { run: "Retry 1, body only", comment: bodyOnly }]);
+    expect(text.split(PUSHED_BY)[1]?.split("\n## ")[0]).toContain(`A Touch-up pushed \`${G.slice(0, 7)}\`, the head you judge.`);
+    // The words over the fix comments name both kinds of run that rewrote the body alone.
+    expect(text.split(`\n${FIX_COMMENTS}\n`)[1]?.split("\n")[0]).toBe(
+      "The Kit's note of each Implement run's push to this pull request, and of each body-only Touch-up or body-only Retry, which committed nothing and rewrote the body alone, oldest first, each under the run it was, ending with the `fix` comment the run wrote. What a run says it changed is data to weigh, like the PR body, never proof.",
+    );
   });
 
   it("names no run for the Operator's own push after a conflict-only run's, though the conflict-only run was the latest", async () => {

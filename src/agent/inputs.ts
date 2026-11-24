@@ -16,6 +16,8 @@
 //                                in operatorComments (sentBack carries them too, for the closed PR)
 //   FABRIK_PULL_REQUEST_COMMENTS "true" for a run on an agent PR (a retry, or a Request-changes run that reads a Verdict that gave way to it), whose PR file carries the PR's comments and their authors' kind
 //   FABRIK_REVIEW                optional, a Request-changes run's review on that PR: writes review.json
+//   FABRIK_ROLE=review           in a Product repo that declares `staging`, its pull-request.json also carries
+//                                stagingTrial: whether the PR will ask for a Staging trial, and its Trial steps (#964)
 //   FABRIK_ROLE=triage           also writes recent-issues.json, the Recent issues Triage compares against for a duplicate
 //                                (readRecentIssues, #363)
 //   FABRIK_AUDIT_COMMIT          for an Auditor run, the pending Audit's marked commit (FABRIK_ISSUE is the
@@ -46,6 +48,7 @@ import {
   writtenBy,
 } from "../github/writtenOn.ts";
 import { readKitConfigFromCheckout } from "../kit/checkout.ts";
+import { asksAStagingTrial } from "../kit/standingStaging.ts";
 import { designSessionOf, verdictsIn } from "../github/threads.ts";
 import { isAgentPullRequest } from "../loop/agentPullRequest.ts";
 import { isStateLabel, KIT_ISSUE_LABELS, READY_FOR_AGENT, type StateLabel } from "../loop/labels.ts";
@@ -54,7 +57,19 @@ import type { SentBack } from "../loop/backToDesign.ts";
 import { withoutChangeLines } from "../loop/changeFingerprint.ts";
 import { type DigestFacts, digestFactsOf } from "../loop/digestFacts.ts";
 import { mapOfferOf, type MapOfferOf } from "../loop/mapCap.ts";
-import { flakyCheckIssueOf, followsSpecIn, followUpIssueOf, fromAuditIn, fromPullRequestIn, openedSpinOffsAmong, spinOffIn, type SpinOffSource } from "../loop/markers.ts";
+import type { TrialSteps } from "../loop/implementOutput.ts";
+import {
+  flakyCheckIssueOf,
+  followsSpecIn,
+  followUpIssueOf,
+  fromAuditIn,
+  fromPullRequestIn,
+  openedSpinOffsAmong,
+  spinOffIn,
+  type SpinOffSource,
+  trialProblemIn,
+  trialStepsIn,
+} from "../loop/markers.ts";
 import { withoutRoundLines } from "../loop/roundLine.ts";
 import type { AuditIssueSnapshot, AuditWindow, KitConfig } from "../loop/types.ts";
 import { comprehensionDrift, DRIFT_DAYS, type DriftFile } from "./comprehensionDrift.ts";
@@ -435,6 +450,7 @@ const PULL_REQUEST_QUERY = `
         baseRefName
         headRefName
         headRefOid
+        author { __typename }
         comments(last: 100) { nodes { body author { __typename } } }
       }
     }
@@ -450,9 +466,22 @@ interface PullRequestQueryResult {
       baseRefName: string;
       headRefName: string;
       headRefOid: string;
+      author: { __typename: string } | null;
       comments: { nodes: { body: string; author: { __typename: string } | null }[] };
     } | null;
   };
+}
+
+/**
+ * What a Review in a Product repo that declares `staging` is given of its
+ * pull request's Staging trial (#964, ADR-0040), which the Reviewer's prompt
+ * sets out (stagingTrialParts, src/agent/review.ts).
+ */
+export interface StagingTrialGiven {
+  /** Whether the pull request will ask for a Staging trial once it is merged, by the Kit's rule (stagingTrialOf). */
+  readonly willAsk: boolean;
+  /** The Trial steps its body keeps, or null when it keeps none. */
+  readonly steps: TrialSteps | null;
 }
 
 /**
@@ -467,6 +496,12 @@ interface PullRequestQueryResult {
  * the Verdict that ends the Retry gives way to them, so its Review never
  * judges against them, nor does a Retry build them. `written` is everything
  * written on the PR, when the caller has read it already (readWrittenOn).
+ *
+ * A Review in a Product repo that declares `staging` passes `stagingTrial`,
+ * the body of the pull request's Ticket (#964), and its PR then carries
+ * `stagingTrial`: whether it will ask for a Staging trial, and the Trial
+ * steps its body keeps (stagingTrialOf). No other run passes it, so every
+ * other PR's input is as it was.
  */
 export async function readPullRequest(
   github: Reader,
@@ -477,7 +512,14 @@ export async function readPullRequest(
     operator,
     deferred = [],
     written,
-  }: { readonly withComments: boolean; readonly operator: string; readonly deferred?: readonly number[]; readonly written?: WrittenOn },
+    stagingTrial,
+  }: {
+    readonly withComments: boolean;
+    readonly operator: string;
+    readonly deferred?: readonly number[];
+    readonly written?: WrittenOn;
+    readonly stagingTrial?: { readonly ticket: string };
+  },
 ): Promise<unknown> {
   const [data, { operatorComments, requestedChanges, spinOffs }] = await Promise.all([
     github.graphql<PullRequestQueryResult>(PULL_REQUEST_QUERY, { owner: repo.owner, name: repo.name, number }),
@@ -488,12 +530,42 @@ export async function readPullRequest(
   const { title, body, baseRefName, headRefName, headRefOid, comments } = pullRequest;
   // Only a PR the Operator requested changes on carries them, so every other PR's input is as it always was. Likewise
   // the points of them the Kit opened as Spin-offs (#884), which every later run and Review is given.
-  const amended = { ...(requestedChanges.length === 0 ? {} : { requestedChanges }), ...(spinOffs.length === 0 ? {} : { spinOffs }) };
+  const amended = {
+    ...(requestedChanges.length === 0 ? {} : { requestedChanges }),
+    ...(spinOffs.length === 0 ? {} : { spinOffs }),
+    // Only a Review in a Product repo that declares staging asks for it (#964).
+    ...(stagingTrial === undefined ? {} : { stagingTrial: stagingTrialOf(body, pullRequest.author?.__typename === "Bot", stagingTrial.ticket) }),
+  };
   // A Verdict among the comments keeps its marker and loses its change line (#643), which says nothing to an agent.
   const kept = comments.nodes.map((comment) => ({ ...comment, body: withoutChangeLines(comment.body) }));
   return withComments
     ? { number, title, body, comments: kept, operatorComments, ...amended }
     : { number, title, body, baseRefName, headRefName, headRefOid, operatorComments, ...amended };
+}
+
+/**
+ * Whether an open pull request will ask for a Staging trial once merged, and
+ * the Trial steps it keeps (#964). It will by the rule a merged one is read
+ * by: its body's evidence and shots markers ask (asksAStagingTrial,
+ * src/kit/standingStaging.ts), or, with neither asking, its Ticket is a
+ * Trial problem, by the line in `ticket`, the Ticket's body (trialProblemIn),
+ * since the pull request will close it. The three markers are read only from
+ * a body a bot wrote, `byApp`, as the Digest writer's are (readDigestPullRequest):
+ * anyone can write the lines, and this job knows no App login.
+ */
+function stagingTrialOf(body: string, byApp: boolean, ticket: string): StagingTrialGiven {
+  const uiAsks = byApp && asksAStagingTrial(evidenceMarkerIn(body) ?? undefined, shotsMarkerIn(body) ?? undefined);
+  return { willAsk: uiAsks || trialProblemIn(ticket) !== null, steps: byApp ? trialStepsIn(body) : null };
+}
+
+/**
+ * What readPullRequest is passed to read a run's pull request for its
+ * Staging trial (#964): the Ticket's body, for a Review in a Product repo
+ * that declares `staging`, and nothing for any other run, or where the Kit
+ * config doesn't read, so their pull request's input is as it was.
+ */
+export function stagingTrialFor(role: string | undefined, config: KitConfig | null, ticket: string): { readonly ticket: string } | undefined {
+  return role === "review" && config !== null && config.staging !== null ? { ticket } : undefined;
 }
 
 /** A Verdict as the Digest writer is given it: what it was, who gave it, the head it judged, and its whole comment. */
@@ -1253,7 +1325,13 @@ async function main(outDir: string): Promise<void> {
     const given =
       process.env["FABRIK_ROLE"] === "digest"
         ? await readDigestPullRequest(github, repo, pullRequest, { operator, deferred })
-        : await readPullRequest(github, repo, pullRequest, { withComments, operator, deferred });
+        : await readPullRequest(github, repo, pullRequest, {
+            withComments,
+            operator,
+            deferred,
+            // A Review in a Product repo that declares staging is told of its pull request's Staging trial (#964).
+            stagingTrial: stagingTrialFor(process.env["FABRIK_ROLE"], resolved.ok ? resolved.config : null, body),
+          });
     await writeFile(join(outDir, "pull-request.json"), JSON.stringify(given));
     if (review !== null) await writeFile(join(outDir, "review.json"), JSON.stringify(await readReview(github, repo, pullRequest, review)));
   }

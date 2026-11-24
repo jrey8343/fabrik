@@ -16,6 +16,7 @@ import {
 import {
   BROKEN_RUN_MARKER,
   EMPTY_DIFF_MARKER,
+  retryBodyOnlyMarker,
   RETRY_ENDED_MARKER,
   RETRY_PUSH_MARKER,
   RETRY_RESTARTED_MARKER,
@@ -334,6 +335,16 @@ describe("a run that was asked for and never began", () => {
         const standings = standingsIn(retryFacts([bodyOnlyFlaw, note], { headSha: JUDGED }, ["ready-for-agent"]));
 
         expect(standings).toMatchObject([{ place: "review", detail: { silence: "quiet-draft" } }]);
+      });
+
+      it("a body-only Retry's note (#962) ends that Retry the same way, once the Touch-ups are used", () => {
+        const JUDGED = "e".repeat(40);
+        const tags = { small: 1, missedEarlier: 0, counted: 0, smallBody: 1 };
+        const bodyOnlyFlaw = aComment(`${verdictMarker({ verdict: "execution-flaw", source: "reviewer", requestChanges: false, tags, headSha: JUDGED })}\nVerdict`, FLAW);
+        const note = aComment(`${retryBodyOnlyMarker(JUDGED)}\nThe Implementer's Retry 1 of 2 committed nothing, as every finding was about the PR's body.`, "2026-11-08T19:30:00Z");
+
+        expect(standingsIn(retryFacts([bodyOnlyFlaw], { headSha: JUDGED }, ["ready-for-agent"]))).toMatchObject([{ detail: { silence: "retry" } }]);
+        expect(standingsIn(retryFacts([bodyOnlyFlaw, note], { headSha: JUDGED }, ["ready-for-agent"]))).toMatchObject([{ place: "review", detail: { silence: "quiet-draft" } }]);
       });
 
       it("is running once the Touch-up is in flight, named Touch-up 1 of 2", () => {

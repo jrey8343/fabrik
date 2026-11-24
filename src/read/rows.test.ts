@@ -336,6 +336,7 @@ describe("a Product repo's rows", () => {
               ],
               shots: [],
               toTry: ["/book", "/patients/[patientId]/notes", "/cart?step=2"],
+              trial: null,
             },
           },
         ]);
@@ -353,13 +354,14 @@ describe("a Product repo's rows", () => {
                 { name: "inbox: empty", url: "https://staging.example.dev/shop/" },
               ],
               toTry: ["composer: draft ready", "inbox: empty"],
+              trial: null,
             },
           },
         ]);
       });
 
       it("give the site alone, and nothing to try, for a pull request that is not UI, and for one whose marker names no routes", () => {
-        const bare = { site: "https://staging.example.dev/shop/", pages: [], shots: [], toTry: [] };
+        const bare = { site: "https://staging.example.dev/shop/", pages: [], shots: [], toTry: [], trial: null };
 
         expect(stagingOf(merged())).toEqual([{ place: "staging", staging: bare }]);
         expect(stagingOf(merged({ evidenceMarkers: [{ pullRequest: 50, marker: { run: 4400, artifact: 900 } }] }))).toEqual([{ place: "staging", staging: bare }]);
@@ -401,6 +403,89 @@ describe("a Product repo's rows", () => {
           expect(rows.length).toBe(2);
           for (const row of rows) expect(row).not.toHaveProperty("staging");
         }
+      });
+    });
+
+    describe("its Trial steps (#965)", () => {
+      const TRIAL = {
+        summary: "A shopper can now save their basket and come back to it.",
+        steps: [
+          { route: "/cart?step=2", do: "Add any product, then press Save basket.", expect: "A line under the total saying the basket was saved." },
+          { do: "Open any patient from the list.", expect: "Their notes, newest first." },
+          { route: "/book", do: "Pick tomorrow.", expect: "The free times of that day." },
+        ],
+      } as const;
+      const stagingOf = (facts: Facts) => rowsOf(facts, null, null, null, NOW, { deployments: ON_STAGING, mainChecks: null })[0]?.staging;
+
+      it("are on its row with their summary and each step in the marker's order, a step with a route linked to the page a captured route of the same path has and one with none to no page", () => {
+        const staging = stagingOf(merged({ evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }], trialStepsMarkers: [{ pullRequest: 50, marker: TRIAL }] }));
+
+        expect(staging?.trial).toEqual({
+          summary: "A shopper can now save their basket and come back to it.",
+          steps: [
+            { do: "Add any product, then press Save basket.", expect: "A line under the total saying the basket was saved.", route: "/cart?step=2", url: "https://staging.example.dev/shop/cart?step=2" },
+            { do: "Open any patient from the list.", expect: "Their notes, newest first.", route: null, url: null },
+            { do: "Pick tomorrow.", expect: "The free times of that day.", route: "/book", url: "https://staging.example.dev/shop/book" },
+          ],
+        });
+        const captured = (route: string) => staging?.pages.find((page) => page.route === route)?.url;
+        expect(staging?.trial?.steps.map(({ route, url }) => route !== null && url === captured(route))).toEqual([true, false, true]);
+      });
+
+      it("are null for one with no marker, and for one when only another pull request keeps some, and leave its pages, its shots and what to try as they were", () => {
+        const markers = { evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }], shotsMarkers: [{ pullRequest: 50, marker: SHOTS_MARKER }] };
+        const { trial: kept, ...withSteps } = stagingOf(merged({ ...markers, trialStepsMarkers: [{ pullRequest: 50, marker: TRIAL }] }))!;
+        const { trial: none, ...without } = stagingOf(merged(markers))!;
+
+        expect(none).toBeNull();
+        expect(kept).not.toBeNull();
+        expect(stagingOf(merged({ ...markers, trialStepsMarkers: [{ pullRequest: 51, marker: TRIAL }] }))?.trial).toBeNull();
+        expect(withSteps).toEqual(without);
+        expect(without).toEqual({
+          site: "https://staging.example.dev/shop/",
+          pages: [
+            { route: "/book", url: "https://staging.example.dev/shop/book" },
+            { route: "/patients/[patientId]/notes", url: "https://staging.example.dev/shop/" },
+            { route: "/cart?step=2", url: "https://staging.example.dev/shop/cart?step=2" },
+          ],
+          shots: [
+            { name: "composer: draft ready", url: "https://staging.example.dev/shop/" },
+            { name: "inbox: empty", url: "https://staging.example.dev/shop/" },
+          ],
+          toTry: ["/book", "/patients/[patientId]/notes", "/cart?step=2", "composer: draft ready", "inbox: empty"],
+        });
+      });
+
+      it("are read of a pull request the gather keeps past the last day as of a newly merged one, and stay on its row at Production", () => {
+        const promoted = aDeploymentsRead({ [MERGE]: aDeployOf({ is: "succeeded", deployment: 950, commit: MERGE, at: "2026-11-08T19:58:00Z" }) });
+        const lastDay = merged({ evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }], trialStepsMarkers: [{ pullRequest: 50, marker: TRIAL }] });
+        const pastIt = homeFactsOf({
+          kit: STAGED,
+          staging: aStagingFacts({ unpromoted: [aMergedLastDay("2026-11-01T19:30:00Z")], mergedSince: 1, evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }], trialStepsMarkers: [{ pullRequest: 50, marker: TRIAL }] }),
+        });
+        const [atProduction] = rowsOf(lastDay, null, null, promoted, NOW, { deployments: ON_STAGING, mainChecks: null });
+
+        expect(stagingOf(pastIt)?.trial?.summary).toBe("A shopper can now save their basket and come back to it.");
+        expect(stagingOf(pastIt)).toEqual(stagingOf(lastDay));
+        expect(atProduction?.standing).toMatchObject({ place: "production", name: "live" });
+        expect(atProduction?.staging).toEqual(stagingOf(lastDay));
+      });
+
+      it("are null on a row from facts cached by an earlier release, which hold no Trial steps at either place", () => {
+        const { trialStepsMarkers: _, ...lastDay } = merged({ evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }] });
+        const { trialStepsMarkers: __, ...kept } = aStagingFacts({ unpromoted: [aMergedLastDay("2026-11-08T19:30:00Z")], mergedSince: 1 });
+        const cached = JSON.parse(JSON.stringify({ ...lastDay, staging: kept })) as Facts;
+
+        expect(stagingOf(cached)).toEqual(stagingOf(merged({ evidenceMarkers: [{ pullRequest: 50, marker: UI_MARKER }] })));
+        expect(stagingOf(cached)?.trial).toBeNull();
+      });
+
+      it("survive a JSON round trip, facts and rows alike", () => {
+        const facts = merged({ trialStepsMarkers: [{ pullRequest: 50, marker: TRIAL }] });
+        const rows = rowsOf(facts, null, null, null, NOW, { deployments: ON_STAGING, mainChecks: null });
+
+        expect(rowsOf(JSON.parse(JSON.stringify(facts)) as Facts, null, null, null, NOW, { deployments: ON_STAGING, mainChecks: null })).toStrictEqual(rows);
+        expect(JSON.parse(JSON.stringify(rows))).toStrictEqual(rows);
       });
     });
 
@@ -473,6 +558,10 @@ describe("a Product repo's rows", () => {
       const before = rowsOf(undeclared, null, null, live, NOW);
 
       expect(JSON.stringify(rowsOf(undeclared, null, null, live, NOW, { deployments: ON_STAGING, mainChecks: { repo: "owner/product", readAt: NOW, commits: {} } }))).toBe(JSON.stringify(before));
+      // Nor do Trial steps a body keeps add anything to them (#965): byte for byte the same rows.
+      const steps = { summary: "A shopper can now save their basket.", steps: [{ route: "/cart", do: "Press Save basket.", expect: "A line saying it was saved." }] };
+      expect(JSON.stringify(rowsOf({ ...undeclared, trialStepsMarkers: [{ pullRequest: 50, marker: steps }] }, null, null, live, NOW))).toBe(JSON.stringify(before));
+      expect(JSON.stringify(before)).not.toContain("trial");
       expect(before.map(({ standing }) => standing)).toMatchObject([{ issue: 7, name: "not-started" }, { pullRequest: 50, place: "production", name: "live", detail: { mergeCommit: MERGE, mergedAt: "2026-11-08T19:30:00Z", environment: "production", noDeployAt: null, deployment: 900, log: null, deploysUnread: false } }]);
       expect(Object.keys(before[1]!.standing.detail).toSorted()).toEqual(["deployment", "deploysUnread", "environment", "log", "mergeCommit", "mergedAt", "noDeployAt"]);
     });

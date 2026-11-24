@@ -12,6 +12,7 @@ import {
 } from "../__fixtures__/snapshots.ts";
 import { asAnEarlierReleaseWroteIt } from "../__fixtures__/earlierEvidenceWording.ts";
 import { anEvidence, CAPTURED, EVIDENCE_PAGE, UI } from "../__fixtures__/uiEvidence.ts";
+import { trialStepsIn, trialStepsMarker } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import { owedRetry, runInFlight } from "./retry.ts";
 import type { Action, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
@@ -626,6 +627,66 @@ const NEW_SECTION = [
   "- `/waitlist`, named by the Implementer",
   `<!-- fabrik:ui-evidence {"run":9100,"artifact":9202,"failure":null,"routes":["/waitlist"],"preview":{"is":"none"},"missed":[]} -->`,
 ].join("\n");
+
+describe("The Trial steps marker on a retry's PR (#963)", () => {
+  const STAGING = { url: "https://staging.shop.example", environment: "staging" };
+  const EARLIER = { summary: "An empty cart says it is empty.", steps: [{ route: "/cart", do: "Open the cart with nothing in it.", expect: "It says the cart is empty." }] };
+  const NOW = {
+    summary: "An empty cart says it is empty, and offers a way back to the shop.",
+    steps: [
+      { route: "/cart", do: "Open the cart with nothing in it.", expect: "It says the cart is empty." },
+      { do: "Press Keep shopping.", expect: "The shop's front page opens." },
+    ],
+  };
+  /** A retry whose summary copies the earlier run's marker forward, which only the Kit may write. */
+  const retriedWith = (trial: unknown) =>
+    retried({
+      output: JSON.stringify({
+        title: "Handle the empty cart",
+        summary: `Shows the empty state.\n\n${trialStepsMarker(EARLIER)}`,
+        fix: "Adds the way back to the shop.",
+        ...(trial === undefined ? {} : { trial }),
+      }),
+    });
+  const editedBody = (plan: Plan): string => {
+    const edit = actionsOf(plan).find((action) => action.kind === "edit-issue-body");
+    if (edit === undefined) throw new Error(`expected a plan that edits the PR's body, got ${JSON.stringify(plan)}`);
+    return edit.body;
+  };
+
+  /** The snapshot of a pull request whose body keeps the earlier run's Trial steps. */
+  const keepingEarlier = () => retrySnapshot({ ...flawedPullRequest(), trialSteps: EARLIER });
+  const NOT_TRIAL_STEPS = { summary: NOW.summary, steps: [{ do: "Press Keep shopping." }] };
+
+  it("replaces the earlier run's: the body carries one, holding the steps for the pull request as it now stands", () => {
+    const body = editedBody(planFor(retriedWith(NOW), keepingEarlier(), kitConfig({ staging: STAGING })));
+
+    expect(body).toBe(`Shows the empty state.\n\n${trialStepsMarker(NOW)}\n\nCloses #7`);
+    expect(trialStepsIn(body)).toEqual(NOW);
+  });
+
+  it.each([
+    ["gave none", undefined],
+    ["gave steps that aren't Trial steps", NOT_TRIAL_STEPS],
+  ])("stays the pull request's own when the retry %s: the Kit writes again the steps the body kept, and the retry lands as it would have (#962)", (_, trial) => {
+    const plan = planFor(retriedWith(trial), keepingEarlier(), kitConfig({ staging: STAGING }));
+
+    expect(editedBody(plan)).toBe(`Shows the empty state.\n\n${trialStepsMarker(EARLIER)}\n\nCloses #7`);
+    expect(actionsOf(plan).map((action) => action.kind)).toEqual(["edit-issue-body", "comment", "push-branch"]);
+  });
+
+  it.each([
+    ["gave none", undefined],
+    ["gave steps that aren't Trial steps", NOT_TRIAL_STEPS],
+  ])("isn't there when the retry %s and the pull request keeps none, whatever its summary copied forward", (_, trial) => {
+    expect(editedBody(planFor(retriedWith(trial), retrySnapshot(), kitConfig({ staging: STAGING })))).toBe("Shows the empty state.\n\nCloses #7");
+  });
+
+  it("isn't written in a repo with no staging block, whatever the retry gave and the pull request keeps, so its retry lands as it did", () => {
+    expect(editedBody(planFor(retriedWith(NOW), keepingEarlier(), kitConfig()))).toBe("Shows the empty state.\n\nCloses #7");
+    expect(editedBody(planFor(retriedWith(undefined), keepingEarlier(), kitConfig()))).toBe("Shows the empty state.\n\nCloses #7");
+  });
+});
 
 describe("The evidence section on a retry's PR", () => {
   /** A retry whose summary copies the old section forward, which only the Kit may write. */

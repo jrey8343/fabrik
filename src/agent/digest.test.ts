@@ -672,10 +672,17 @@ describe("The Digest writer's prompt", () => {
     expect(how).toContain("A Touch-up is never a Retry: count each apart, as `counts` does");
   });
 
-  it("has How it got here take a body-only Touch-up from the rounds, as `counts.touchUps` counts only the Touch-ups that pushed", async () => {
-    const how = part(await prompt(), "How it got here");
+  it("has How it got here take a body-only Touch-up or a body-only Retry (#962) from the rounds, as `counts.touchUps` and `counts.retries` count only the ones that pushed", async () => {
+    const text = await prompt();
+    const how = part(text, "How it got here");
 
-    expect(how).toContain("`counts.touchUps` is the Touch-ups that pushed. A body-only Touch-up, which rewrote the body alone and pushed nothing, is a round of its own in `rounds` and isn't among them");
+    // What Kit code's facts give for each is held where they are worked out (src/loop/digestFacts.test.ts): a round of its own, and neither count.
+    expect(how).toContain(
+      "`counts.touchUps` is the Touch-ups that pushed, and `counts.retries` the Retries that pushed. A body-only Touch-up or a body-only Retry, which rewrote the body alone and pushed nothing, is a round of its own in `rounds` and isn't among them: say it rewrote the body, in its place in the order.",
+    );
+    expect(text).toContain("such as a Retry's push, a Touch-up's push, a body-only Touch-up's or a body-only Retry's note that it rewrote the body alone, or a rebase onto the default branch.");
+    // The keys the sentence names are the ones the facts count under.
+    expect(Object.keys(aDigestFacts().counts)).toEqual(expect.arrayContaining(["touchUps", "retries"]));
   });
 
   it("asks which of the listed Follow-ups to show, each once: one that repeats another is left out, and one an existing Ticket covers is left out and named in the second fold with that Ticket", async () => {

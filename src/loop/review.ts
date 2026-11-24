@@ -297,7 +297,7 @@ function listed(names: readonly string[]): string {
   return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
-/** Lands a Verdict only on the agent draft PR it was given for, at the commit it judged, once, or once more after a body-only Touch-up (#751). */
+/** Lands a Verdict only on the agent draft PR it was given for, at the commit it judged, once, or once more after a body-only Touch-up (#751) or a body-only Retry (#962). */
 function landVerdict(
   event: Reviewed | MissFound,
   { pullRequest }: Snapshot,

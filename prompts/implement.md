@@ -119,7 +119,7 @@ The Kit refuses, and hands to the Operator, any branch that changes a file that 
 
 An acceptance criterion that needs one of these changed is one no run can meet: "When a criterion is one no run can meet" says what to do.
 
-You hold no GitHub credential. Don't call `gh` or the GitHub API: the Kit pushes your branch and opens the draft PR after you finish, from your commits and the output below. A run that commits nothing counts as a failed attempt, so commit what you built, unless this prompt tells the run to commit nothing: a body-only Touch-up, and a Request-changes run whose review asked only for Spin-offs.
+You hold no GitHub credential. Don't call `gh` or the GitHub API: the Kit pushes your branch and opens the draft PR after you finish, from your commits and the output below. A run that commits nothing counts as a failed attempt, so commit what you built, unless this prompt tells the run to commit nothing: a body-only Touch-up, a retry whose findings are all about the PR's body, and a Request-changes run whose review asked only for Spin-offs.
 
 ## When a criterion is one no run can meet
 

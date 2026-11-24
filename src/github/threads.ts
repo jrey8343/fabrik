@@ -29,6 +29,7 @@ import {
   IMPLEMENT_RUN_FAILED_MARKER,
   isReviewerFlaw,
   RESEARCH_RUN_FAILED_MARKER,
+  retryBodyOnlyIn,
   RETRY_ENDED_MARKER,
   RETRY_PUSH_MARKER,
   RETRY_RESTARTED_MARKER,
@@ -262,18 +263,18 @@ export function pushedSinceVerdictIn(commentBodies: readonly string[]): boolean 
 }
 
 /**
- * The head a body-only Touch-up's note (#751) since a PR's latest Verdict
- * names, or null when none came since, from the Fabrik App's comments on it,
- * oldest first. The note ends the Touch-up's time in flight, as a push note
- * does, but it is no push: nothing in pushedSinceVerdictIn, landedPushNotes
- * or the Kit's push notes reads it. A Review may land a second Verdict on
- * the head it names.
+ * The head a body-only Touch-up's note (#751), or a body-only Retry's
+ * (#962), since a PR's latest Verdict names, or null when none came since,
+ * from the Fabrik App's comments on it, oldest first. The note ends the
+ * run's time in flight, as a push note does, but it is no push: nothing in
+ * pushedSinceVerdictIn, landedPushNotes or the Kit's push notes reads it. A
+ * Review may land one more Verdict on the head it names.
  */
-export function bodyOnlyTouchUpHeadIn(commentBodies: readonly string[]): string | null {
+export function bodyOnlyRunHeadIn(commentBodies: readonly string[]): string | null {
   let head: string | null = null;
   for (const body of commentBodies) {
-    const note = touchUpBodyOnlyIn(body);
-    if (note !== null) head = note.headSha;
+    const noted = touchUpBodyOnlyIn(body)?.headSha ?? retryBodyOnlyIn(body);
+    if (noted !== null) head = noted;
     else if (isVerdict(body)) head = null;
   }
   return head;

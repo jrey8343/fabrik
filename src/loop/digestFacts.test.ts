@@ -17,6 +17,7 @@ import {
   pushedHeadMarker,
   REQUEST_CHANGES_RUN_MARKER,
   requestChangesRunStartedMarker,
+  retryBodyOnlyMarker,
   RETRY_PUSH_MARKER,
   touchUpBodyOnlyMarker,
   touchUpPushMarker,
@@ -484,6 +485,30 @@ describe("Touch-ups, counted apart from Retries", () => {
     ]);
     expect([facts.counts.touchUps, facts.touchUpsLeft, facts.counts.retries]).toEqual([0, 1, 0]);
   });
+
+  it("give a body-only Retry (#962), which pushed nothing, its own row with the number the Retry rules gave it, and leave it out of the Retries that pushed, though it uses one up", () => {
+    const tags = { small: 1, missedEarlier: 0, counted: 0, smallBody: 1 };
+    const facts = digestFactsOf(
+      aThread({
+        kitComments: [
+          aVerdict(5, { verdict: "execution-flaw", headSha: sha("a"), tags, touchUp: 1 }),
+          aNote(10, touchUpBodyOnlyMarker(1, sha("a")), "The Implementer's Touch-up 1 of 2 committed nothing, as every finding was about the PR's body."),
+          aVerdict(15, { verdict: "execution-flaw", headSha: sha("a"), tags, touchUp: 2 }),
+          aNote(20, touchUpBodyOnlyMarker(2, sha("a")), "The Implementer's Touch-up 2 of 2 committed nothing, as every finding was about the PR's body."),
+          aVerdict(25, { verdict: "execution-flaw", headSha: sha("a"), tags }),
+          aNote(30, retryBodyOnlyMarker(sha("a")), "The Implementer's Retry 1 of 2 committed nothing, as every finding was about the PR's body."),
+          aVerdict(35, { verdict: "pass", headSha: sha("a") }),
+        ],
+      }),
+    );
+
+    expect(facts.rounds.slice(-3).map(({ who, what, retry, touchUp }) => [who, what, retry ?? null, touchUp ?? null])).toEqual([
+      ["reviewer", "execution-flaw", null, null],
+      ["implementer", "body-only-retry", 1, null],
+      ["reviewer", "pass", null, null],
+    ]);
+    expect([facts.counts.retries, facts.retriesLeft, facts.counts.touchUps, facts.touchUpsLeft]).toEqual([0, 1, 0, 0]);
+  });
 });
 
 describe("The Follow-ups of every pass on the pull request", () => {
@@ -653,7 +678,7 @@ describe("The rounds fold", () => {
     expect(body.endsWith(`</details>\n\n[The run](${aDigestGiven().runUrl})`)).toBe(true);
   });
 
-  it("words every kind of round: the Kit's own Verdicts with what they were for, a Design flaw, a Touch-up and a body-only one with their numbers, a conflict-only run, a Broken run, and an effect that is tests only or not known", () => {
+  it("words every kind of round: the Kit's own Verdicts with what they were for, a Design flaw, a Touch-up and a body-only one with their numbers, a body-only Retry with its own, a conflict-only run, a Broken run, and an effect that is tests only or not known", () => {
     const facts = aDigestFacts({
       rounds: [
         { who: "implementer", what: "first-run", effect: null },
@@ -664,12 +689,13 @@ describe("The rounds fold", () => {
         { who: "kit", what: "execution-flaw", why: "broken-run", effect: "not-known" },
         { who: "implementer", what: "touch-up", touchUp: 1, effect: null },
         { who: "implementer", what: "body-only-touch-up", touchUp: 2, effect: null },
+        { who: "implementer", what: "body-only-retry", retry: 1, effect: null },
         { who: "implementer", what: "conflict-only-run", effect: null },
         { who: "reviewer", what: "design-flaw", effect: "tests-only" },
       ],
     });
 
-    expect(roundsFoldOf(bodyOf(aDigestReply(), aDigestGiven({ facts }))).split("\n").slice(5, 15)).toEqual([
+    expect(roundsFoldOf(bodyOf(aDigestReply(), aDigestGiven({ facts }))).split("\n").slice(5, 16)).toEqual([
       "| The Implementer | The first run | |",
       "| The Reviewer | Execution flaw | |",
       "| The Kit, for a Retry that changed nothing | Execution flaw | None |",
@@ -678,6 +704,7 @@ describe("The rounds fold", () => {
       "| The Kit, for a Broken run | Execution flaw | Not known |",
       "| The Implementer | Touch-up 1 | |",
       "| The Implementer | Body-only Touch-up 2 | |",
+      "| The Implementer | Body-only Retry 1 | |",
       "| The Implementer | A conflict-only run | |",
       "| The Reviewer | Design flaw | Tests only |",
     ]);

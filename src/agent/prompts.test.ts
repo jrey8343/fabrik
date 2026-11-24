@@ -1651,9 +1651,11 @@ describe("A Request changes' Spin-offs in the Implement prompt (#884)", () => {
     expect(lineStarting(await run(), "- One review can be both")).toContain("A point set aside as a Spin-off is neither.");
   });
 
-  it("no longer calls every run that commits nothing a failed attempt: a review of only Spin-offs commits nothing", async () => {
+  it("no longer calls every run that commits nothing a failed attempt: a review of only Spin-offs commits nothing, and so does a retry of findings all about the body (#962)", async () => {
     const guard = section(await prompt("implement"), "What you must not change");
-    expect(guard).toContain("A run that commits nothing counts as a failed attempt, so commit what you built, unless this prompt tells the run to commit nothing: a body-only Touch-up, and a Request-changes run whose review asked only for Spin-offs.");
+    expect(guard).toContain(
+      "A run that commits nothing counts as a failed attempt, so commit what you built, unless this prompt tells the run to commit nothing: a body-only Touch-up, a retry whose findings are all about the PR's body, and a Request-changes run whose review asked only for Spin-offs.",
+    );
   });
 
   it("documents spinOffs in the output rules, and its example carries one the Request-changes contract reads", async () => {

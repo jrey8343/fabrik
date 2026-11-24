@@ -535,7 +535,8 @@ export function standingFactsOf(overrides: Partial<Omit<StandingFacts, "kind">> 
  * Kit config the default at `main`, nothing for Dispatch to weigh, the
  * Operator `operator`, the Fabrik App `fabrik-app[bot]`, and no GitHub facts,
  * issue bodies, merges, cross-references, closed issues' comments, Tickets'
- * states, evidence markers or shots markers unless a test says so.
+ * states, evidence markers, shots markers or Trial steps unless a test says
+ * so.
  */
 export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts {
   return {
@@ -552,6 +553,7 @@ export function homeFactsOf(overrides: Partial<Omit<Facts, "kind">> = {}): Facts
     mergedFollowUps: [],
     evidenceMarkers: [],
     shotsMarkers: [],
+    trialStepsMarkers: [],
     ...overrides,
   };
 }
@@ -574,11 +576,13 @@ export function aDeploymentsRead(merges: DeploymentsRead["merges"], readAt = "20
 /**
  * What a gather reads past the last day of a repo that declares `staging`
  * (Facts' `staging`, ./gather.ts): no Deployment to start at, no pull request
- * kept or counted, no label event and no Trial problem, unless a test says
- * so.
+ * kept or counted, no label event, no Trial problem, and no marker or Trial
+ * steps of any, unless a test says so. A pull request's Trial steps are
+ * given as `trialStepsMarkers`, each `{ pullRequest, marker }` with the
+ * steps as the Implementer writes them (#965).
  */
 export function aStagingFacts(overrides: Partial<StagingFacts> = {}): StagingFacts {
-  return { since: null, unpromoted: [], promoted: [], plain: [], mergedSince: 0, trials: { pullRequests: [], problems: [] }, evidenceMarkers: [], shotsMarkers: [], ...overrides };
+  return { since: null, unpromoted: [], promoted: [], plain: [], mergedSince: 0, trials: { pullRequests: [], problems: [] }, evidenceMarkers: [], shotsMarkers: [], trialStepsMarkers: [], ...overrides };
 }
 
 /** A Main checks read of `owner/product` at the filing's time, holding how these commits' Main checks stand, by commit. */

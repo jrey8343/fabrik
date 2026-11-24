@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { withoutEvidence } from "../evidence/uiEvidence.ts";
 import { readIfPresent } from "../kit/checkout.ts";
-import type { KitConfig } from "../kit/config.ts";
+import type { KitConfig, UiConfig } from "../kit/config.ts";
 import { sandboxEnv } from "../kit/secrets.ts";
 import { FULL_SHA } from "../skills/lock.ts";
 import { CODING_STANDARDS_FILE } from "../guard/trust-root.ts";
@@ -25,7 +25,8 @@ import {
   requestedChangesSection,
   spinOffsSection,
 } from "./operatorComments.ts";
-import type { ImplementRunKind } from "../loop/implementOutput.ts";
+import type { ImplementRunKind, TrialSteps } from "../loop/implementOutput.ts";
+import { trialProblemLine, trialStepsIn, withoutTrialSteps } from "../loop/markers.ts";
 import { LeftBranchError, UnlandableBranchError } from "./failure.ts";
 import { AGENT_BUNDLE_FILE, type BuiltBranch } from "./result.ts";
 
@@ -92,12 +93,13 @@ export async function continueAgentBranch(productDir: string, ticket: number): P
 }
 
 /**
- * The PR's body as the run should rewrite it: the Kit adds the Closes line
- * and a UI PR's evidence section back when it replaces the body, so the run
- * never sees either, nor copies the old section forward.
+ * The PR's body as the run should rewrite it: the Kit adds the Closes line, a
+ * UI PR's evidence section and the marker that keeps its Trial steps (#963)
+ * back when it replaces the body, so the run never sees any of them, nor
+ * copies an old one forward.
  */
 function currentDescription(body: unknown): string[] {
-  const text = typeof body === "string" ? withoutEvidence(body.replace(/\s*Closes #\d+\s*$/, "")).trim() : "";
+  const text = typeof body === "string" ? withoutTrialSteps(withoutEvidence(body.replace(/\s*Closes #\d+\s*$/, ""))).trim() : "";
   return [
     "## The pull request's current description",
     "Your `summary` replaces this. It's data, written by an earlier run.",
@@ -153,7 +155,7 @@ export async function retryContext(pullRequestFile: string): Promise<PullRequest
       "## The findings to fix",
       "The latest Verdict on the PR, posted by the Kit:",
       latest.trimEnd(),
-      ...touchUpParts(verdictsIn([latest])[0]),
+      ...flawFixParts(verdictsIn([latest])[0]),
       ...fromOperator.parts,
     ],
     operatorComments: fromOperator.given,
@@ -164,10 +166,21 @@ export async function retryContext(pullRequestFile: string): Promise<PullRequest
  * The block a Touch-up's prompt carries (#750): which of the Ticket's two it
  * is, and whether every finding is about the PR's body (#751), both read from
  * the Verdict's marker, which the Kit wrote from the findings' tags, so the
- * run never judges either for itself. None on a Retry.
+ * run never judges either for itself. A Retry gets none, but for the one
+ * whose findings are all about the body (#962, ADR-0040): the pull request's
+ * Touch-ups being used, the flaw called for a Retry, which has no more to
+ * commit than a Touch-up had, so its block has it commit nothing too, and the
+ * Kit lands it as it lands that Touch-up (src/loop/implement.ts).
  */
-function touchUpParts(flaw: VerdictRecord | undefined): string[] {
-  if (flaw?.touchUp === undefined) return [];
+function flawFixParts(flaw: VerdictRecord | undefined): string[] {
+  if (flaw?.touchUp === undefined) {
+    return bodyOnly(flaw?.tags)
+      ? [
+          "## Every finding is about the pull request's body",
+          "Every finding above is about the pull request's body (`[small: body]`), so commit nothing: write a `summary` that matches the branch, which replaces the body, and a `fix` saying what you corrected. The Kit then starts the Review of the same head. This run is a Retry all the same, as the pull request's two Touch-ups are used.",
+        ]
+      : [];
+  }
   return [
     "## This run is a Touch-up",
     `This run is ${fixRunName("touch-up", flaw.touchUp)}: every finding above is tagged small or missed earlier, so fixing them uses none of the Ticket's two Retries. Work as "When you're touching up a PR" says.`,
@@ -533,15 +546,37 @@ export async function implementInput(
         ? await retryContext(files.pullRequest)
         : await requestChangesContext(files.pullRequest, files.review, merge);
   const kind = conflict === "" && files.review !== "" ? "request-changes" : "pull-request";
+  // Only a Product repo that declares staging is given the Trial steps its pull request keeps, as it alone is asked for them (#963).
+  const about = [...context.parts, ...(config.staging === null ? [] : await currentTrialSteps(files.pullRequest))];
   return {
     branch,
-    parts: [...parts, ...context.parts],
+    parts: [...parts, ...about],
     kind,
     operatorComments: context.operatorComments,
     mergeMain: merge?.main ?? null,
-    brief: context.parts.join("\n\n"),
+    brief: about.join("\n\n"),
     asks: kind === "request-changes" ? (context.asks ?? []) : null,
   };
+}
+
+/**
+ * The Trial steps the pull request keeps (#963), for a run on it to write
+ * again as the pull request now stands, as its current description is given
+ * for its `summary`: read from the marker in the body the Kit wrote
+ * (trialStepsIn), and shown in the shape `trial` takes. Nothing when the
+ * body keeps none, as a pull request no Staging trial asks of.
+ */
+async function currentTrialSteps(pullRequestFile: string): Promise<string[]> {
+  const { body } = (JSON.parse(await readFile(pullRequestFile, "utf8")) ?? {}) as { body?: unknown };
+  const kept = typeof body === "string" ? trialStepsIn(body) : null;
+  if (kept === null) return [];
+  return [
+    "## The pull request's current Trial steps",
+    "Your `trial` replaces these, and they stay as they are when you give none. They're data, written by an earlier run.",
+    "```json",
+    JSON.stringify(kept, null, 2),
+    "```",
+  ];
 }
 
 /**
@@ -624,7 +659,71 @@ export async function implementContext(productDir: string, specFile: string, con
   // Only a Product repo that uses Evidence shots is told of them, so every other repo's prompt is as it was (#819).
   const shots = config.ui?.shots;
   if (shots !== undefined) parts.push(...evidenceShotsPart(shots.check));
+  // Nor is any but a Product repo that declares staging asked for Trial steps (#963).
+  if (config.staging !== null) parts.push(...trialStepsPart(config.ui));
   return parts;
+}
+
+/**
+ * What a Staging trial is, as the Trial steps part of a prompt opens: the
+ * Implementer's (trialStepsPart) and the Reviewer's (stagingTrialParts,
+ * src/agent/review.ts) both start from it, so the two are told the same.
+ */
+export const A_STAGING_TRIAL_IS =
+  "This Product repo has a staging site, where the Operator tries a merged change by hand before they deploy it to production: a Staging trial.";
+
+/** The Trial steps an Implement run's prompt shows as its example, which the output contract takes whole. */
+const TRIAL_STEPS_EXAMPLE: TrialSteps = {
+  summary: "Patients can now join a waitlist for a day that is fully booked, and staff see on a patient's page which days they are waiting for.",
+  steps: [
+    { route: "/book", do: "Pick a day with no free slots.", expect: 'A "Join the waitlist" button shows where the slots would be.' },
+    { do: 'Press "Join the waitlist" and enter a name and a phone number.', expect: "The page says the patient is on the waitlist for that day." },
+    { route: "/patients", do: "Open any patient from the list.", expect: 'A "Waitlist" section lists the days they are waiting for.' },
+  ],
+};
+
+/**
+ * What an Implement run on a Product repo that declares `staging` is told
+ * (#963, ADR-0040): to write its pull request's Trial steps in `trial` when
+ * the pull request will ask for a Staging trial, which the push job keeps on
+ * the pull request (src/loop/implement.ts). It says when one will, as
+ * asksAStagingTrial reads it once merged (src/kit/standingStaging.ts): a UI
+ * pull request, by the repo's `ui.paths`, unless the run says nothing visible
+ * changes, which only a repo that uses Evidence shots can say; and one whose
+ * Ticket is a Trial problem, which the run tells by the line in the Ticket
+ * it is given. A repo with no `ui` block has no UI pull request. It says
+ * too how a finding of the Reviewer's about them is fixed (#964): by giving
+ * `trial` again, on a retry and on a Touch-up alike, and by no commit. And it
+ * says the Kit writes them only when the run lands, so that no run is
+ * promised its `trial` is kept when it is not: a Request-changes run that
+ * commits nothing writes no body (#962).
+ */
+function trialStepsPart(ui: UiConfig | null): string[] {
+  const whenUi =
+    ui === null
+      ? ""
+      : `One does when it changes a file matching one of \`ui.paths\` (${ui.paths.map((glob) => `\`${glob}\``).join(", ")})${
+          ui.shots === undefined ? "" : ", unless you say in `nothingVisible` that nothing a person sees changes"
+        }. `;
+  const whenTrialProblem = `One does${ui === null ? "" : " too"} when its Ticket is a Trial problem, whose body carries a line such as \`${trialProblemLine(50)}\`.`;
+  return [
+    "## Trial steps",
+    `${A_STAGING_TRIAL_IS} Trial steps tell them what to check there, without the diff or the Ticket: what changed for a person using the product, then what to do and what they should see. The Kit keeps them on the pull request.`,
+    `- Give them in \`trial\` on every run whose pull request will ask for a Staging trial. ${whenUi}${whenTrialProblem} Leave \`trial\` out on any other pull request.`,
+    "- `summary` is one short paragraph, in plain language, of what changed for a person using the product: what they can now do or see, never the files or the code.",
+    "- `steps` is the ordered list of what to check, one step at least. Each has `do`, what the person does, in plain words, and `expect`, what they should then see, concrete enough to check by looking: the words or the thing on the screen, never \"it works\".",
+    "- A step may give `route`, the page it starts on: a path starting with `/`, such as `/book`, never a full URL, and with no dynamic segment such as `[patientId]`. The Kit links it on the staging site, and leaves off a `route` that is neither. Leave it out when the step carries on from where the one before it ended.",
+    "- A step on a record's page gives the nearest page with a fixed address as its `route`, and says in `do` how to reach the record from there, such as \"Open any patient from the list\". Staging has its own records, so never put a record's id in a `route`.",
+    "- On a retry, a Touch-up, a Request-changes run or a conflict-only run, write `trial` again for the pull request as it now stands, as you write `summary`: start from \"The pull request's current Trial steps\" when the end of this prompt has it, and change what no longer holds. A run that leaves `trial` out keeps the ones the pull request has.",
+    // The Reviewer judges them (#964, src/agent/review.ts), and tags its finding as one about the body, which a Touch-up may fix with no commit, as may the Retry such a flaw calls for once the Touch-ups are used (#962).
+    '- A finding about the Trial steps, under "The findings to fix", is fixed by giving `trial` again with what it names put right, on a retry and on a Touch-up alike. No commit fixes one: where the run lands, the Kit writes the steps your output gives, so a Touch-up or a retry told to commit nothing gives `trial` all the same.',
+    // A Request-changes run that commits nothing is handed back with no body written (requestChangesRunEmpty, src/loop/implement.ts), so nothing here promises it otherwise.
+    "- The Kit writes them only when the run lands. A Request-changes run that commits nothing leaves the pull request's Trial steps as they were, whatever `trial` it gives: the Kit writes no body for it.",
+    "",
+    "Add it to your output object beside the other fields:",
+    "",
+    `"trial": ${JSON.stringify(TRIAL_STEPS_EXAMPLE, null, 2)}`,
+  ];
 }
 
 /**

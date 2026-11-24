@@ -93,6 +93,9 @@ async function installSkills({ kitDir, productDir, release, download }: Omit<Ses
           own.includes("fabrik-visual-evidence")
             ? "To turn Visual evidence on, or change its answers, the Operator runs /fabrik-visual-evidence."
             : "",
+          own.includes("fabrik-trial")
+            ? "To try the merged changes untried on staging with an agent driving their own Chrome (a Trial session), the Operator runs /fabrik-trial, or /fabrik-trial <pull request number> for one, in a local session with Claude in Chrome connected."
+            : "",
         ]
           .filter((line) => line !== "")
           .join("\n"),

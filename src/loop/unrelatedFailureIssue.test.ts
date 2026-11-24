@@ -112,7 +112,7 @@ describe("A second Verdict on one head, after a Touch-up that changed only the b
   const open: KitIssueSnapshot = { number: 88, labels: ["fabrik:flaky-check"], body: '<!-- fabrik:flaky-check-issue {"check":"e2e"} -->\nFlaky.', comments: [] };
 
   it("says nothing more of a check the first already named an Unrelated failure there, and still links its issue", () => {
-    const pullRequest = aPullRequest({ verdicts: [earlier], bodyOnlyTouchUpHead: HEAD_SHA });
+    const pullRequest = aPullRequest({ verdicts: [earlier], bodyOnlyRunHead: HEAD_SHA });
     const plan = land(`verdict: pass\n\nChecked it.\n\n${ONE_UNRELATED.replace("caused `gate`", "unrelated `gate`")}`, { pullRequest, issues: [open] });
 
     const line = textOf(actionsOf(plan)[lineIndex(plan)]!);

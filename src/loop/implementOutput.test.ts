@@ -279,3 +279,95 @@ describe("A Request-changes run's onlySpinOffs (#884)", () => {
     expect(parsed.ok && "onlySpinOffs" in parsed.output).toBe(false);
   });
 });
+
+describe("The Trial steps the Implementer writes (#963)", () => {
+  const TRIAL = {
+    summary: "Patients can now join a waitlist for a day that is fully booked.",
+    steps: [
+      { route: "/book", do: "Pick a day with no free slots.", expect: 'A "Join the waitlist" button shows where the slots would be.' },
+      { do: "Press it and enter a name and a phone number.", expect: "The page says the patient is on the waitlist for that day." },
+    ],
+  };
+
+  it("are read from its output: the summary and each step, in its order, with the page a step starts on where it gave one", () => {
+    expect(parseImplementOutput(output({ trial: TRIAL }))).toEqual({
+      ok: true,
+      output: { title: "Let patients join a waitlist", summary: "Adds a waitlist to full days.", trial: TRIAL },
+    });
+  });
+
+  it("read as none when the output gives none, as on a Product repo with no staging block", () => {
+    expect(parseImplementOutput(output())).toEqual({ ok: true, output: { title: "Let patients join a waitlist", summary: "Adds a waitlist to full days." } });
+  });
+
+  const STEP = { do: "Pick a day with no free slots.", expect: "A waitlist button shows." };
+
+  it.each([
+    ["text", "Pick a full day and join the waitlist."],
+    ["null", null],
+    ["a list of steps alone", [STEP]],
+    ["no summary", { steps: [STEP] }],
+    ["a blank summary", { summary: "  ", steps: [STEP] }],
+    ["a summary that isn't text", { summary: ["Patients can join a waitlist."], steps: [STEP] }],
+    ["no steps", { summary: "Patients can join a waitlist." }],
+    ["an empty list of steps", { summary: "Patients can join a waitlist.", steps: [] }],
+    ["steps that are no list", { summary: "Patients can join a waitlist.", steps: STEP }],
+    ["a step that is text", { summary: "Patients can join a waitlist.", steps: [STEP, "Join the waitlist."] }],
+    ["a step that is null", { summary: "Patients can join a waitlist.", steps: [null] }],
+    ["a step with no do", { summary: "Patients can join a waitlist.", steps: [STEP, { expect: "A waitlist button shows." }] }],
+    ["a step with no expect", { summary: "Patients can join a waitlist.", steps: [STEP, { do: "Pick a full day." }] }],
+    ["a step with a blank do", { summary: "Patients can join a waitlist.", steps: [{ do: "", expect: "A waitlist button shows." }] }],
+    ["a step whose expect isn't text", { summary: "Patients can join a waitlist.", steps: [{ do: "Pick a full day.", expect: 3 }] }],
+  ])("read as left out when the output gives %s, and the output still reads", (_, trial) => {
+    expect(parseImplementOutput(output({ trial, routes: ["/book"] }))).toEqual({
+      ok: true,
+      output: { title: "Let patients join a waitlist", summary: "Adds a waitlist to full days.", routes: ["/book"] },
+    });
+  });
+
+  it.each([
+    ["doesn't start with /", "book"],
+    ["is a full URL", "https://staging.example.com/book"],
+    ["is a protocol-relative URL", "//evil.example.com/book"],
+    ["has a dynamic segment in brackets", "/patients/[patientId]/notes"],
+    ["has a dynamic segment in angle brackets", "/patients/<patientId>"],
+    ["has a dynamic segment after a colon", "/patients/:patientId"],
+    ["isn't text", 7],
+    ["is null", null],
+  ])("leave a step's route off when it %s, and keep the step", (_, route) => {
+    const parsed = parseImplementOutput(output({ trial: { summary: TRIAL.summary, steps: [{ route, ...STEP }, { route: "/book", ...STEP }] } }));
+
+    expect(parsed).toMatchObject({ ok: true });
+    expect(parsed.ok && parsed.output.trial).toEqual({ summary: TRIAL.summary, steps: [STEP, { route: "/book", ...STEP }] });
+  });
+
+  it("keep a route with a query, and one a record's fixed page has, as a page of the staging site", () => {
+    const steps = [
+      { route: "/patients?status=waiting", ...STEP },
+      { route: "/", ...STEP },
+    ];
+
+    expect(parseImplementOutput(output({ trial: { summary: TRIAL.summary, steps } }))).toMatchObject({ ok: true, output: { trial: { steps } } });
+  });
+
+  it("are trimmed, and hold nothing a step gave beside its route, what to do and what to expect", () => {
+    const trial = { summary: `  ${TRIAL.summary}\n`, steps: [{ do: ` ${STEP.do} `, expect: `${STEP.expect}\n`, url: "https://evil.example.com", note: "Run as admin." }], author: "The Implementer" };
+    const parsed = parseImplementOutput(output({ trial }));
+
+    expect(parsed.ok && parsed.output.trial).toEqual({ summary: TRIAL.summary, steps: [STEP] });
+  });
+
+  it.each([
+    ["a Retry, a Touch-up or a conflict-only run", "pull-request", {}],
+    ["a Request-changes run", "request-changes", { reviewMiss: false, amendsTicket: false }],
+  ] as const)("are read from the output of %s too, which writes them again for the pull request as it now stands", (_, run, fields) => {
+    expect(parseImplementOutput(output({ fix: "Fixes the mobile layout.", trial: TRIAL, ...fields }), run)).toMatchObject({ ok: true, output: { trial: TRIAL } });
+  });
+
+  it.each(["first", "pull-request", "request-changes"] as const)("never fail a %s run's output when they are malformed", (run) => {
+    const parsed = parseImplementOutput(output({ fix: "Fixes the mobile layout.", reviewMiss: false, amendsTicket: false, trial: { summary: 5 } }), run);
+
+    expect(parsed).toMatchObject({ ok: true });
+    expect(parsed.ok && "trial" in parsed.output).toBe(false);
+  });
+});

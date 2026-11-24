@@ -29,11 +29,14 @@ import {
   REQUEST_CHANGES_RUN_EMPTY_MARKER,
   REQUEST_CHANGES_RUN_MARKER,
   requestChangesRunStartedMarker,
+  retryBodyOnlyMarker,
   RETRY_PUSH_MARKER,
   stepUpReasonMarker,
   touchUpBodyOnlyMarker,
   touchUpPushMarker,
+  trialStepsMarker,
   UNMARKED_RETRY_PUSH,
+  withoutTrialSteps,
 } from "./markers.ts";
 import { type HeldOn, heldOn, heldUntilReset, heldUntilThen, onceReset, startsWhen } from "./hold.ts";
 import { backAtGateOnStandingPass } from "./digest.ts";
@@ -41,6 +44,7 @@ import { handBack, owedRequestChangesRun } from "./mergeGate.ts";
 import {
   bodyOnly,
   fixRunName,
+  type FlawFixInFlight,
   implementSettings,
   isRetryOrTouchUp,
   MAX_RETRIES,
@@ -224,7 +228,7 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
         head: branch,
         base,
         title: withoutMentions(title),
-        body: pullRequestBody(summary, issueNumber, section, whole?.changedTests ?? changes.changedTests ?? [], event.keptBranch?.pullRequest ?? null),
+        body: pullRequestBody(summary, issueNumber, section, trialStepsMarkerFor(parsed.output, config, null), whole?.changedTests ?? changes.changedTests ?? [], event.keptBranch?.pullRequest ?? null),
         draft: true,
       },
       ...previewToLink(section, config, branch, null),
@@ -268,7 +272,7 @@ function opening(ticket: number, issue: IssueSnapshot, headSha: string): PullReq
     conflictRunInFlight: null,
     conflictRunOnUnreviewedDraft: false,
     pushedSinceVerdict: false,
-    bodyOnlyTouchUpHead: null,
+    bodyOnlyRunHead: null,
     retryNoteSinceVerdict: null,
     verdictPostedAt: null,
     headPushedAt: null,
@@ -286,6 +290,7 @@ function opening(ticket: number, issue: IssueSnapshot, headSha: string): PullReq
     uiEvidenceMarker: null,
     shotsMarker: null,
     changedTests: [],
+    trialSteps: null,
     digests: [],
     faults: [],
     followUpsOpened: false,
@@ -468,13 +473,24 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   if (changes.net.length === 0 && changes.updatedFromMain !== true && mainMerge === undefined) {
     // A Request-changes run's empty diff is no Verdict, so it never costs a Retry (#388).
     if (requestChanges) return { kind: "act", actions: requestChangesRunEmpty(pullRequest, fixes, branch, snapshot, config, recorded, parsed.output, setAside) };
-    // A Touch-up whose findings were all about the body is told to commit nothing (#751): that's no empty diff.
-    if (inFlight?.kind === "touch-up" && bodyOnly(pullRequest.verdicts.at(-1)?.tags)) {
+    // A Touch-up whose findings were all about the body is told to commit nothing (#751): that's no empty diff. Nor is
+    // it for the Retry such a flaw calls for once the Touch-ups are used (#962), which has no more to commit than one.
+    if (isRetryOrTouchUp(inFlight) && bodyOnly(pullRequest.verdicts.at(-1)?.tags)) {
       // It pushes no head, so an Evidence miss on it is shown and never sent back.
       const evidence = evidenceFor(event, config, parsed.output, pullRequest, null);
       return {
         kind: "act",
-        actions: bodyOnlyTouchUpLanded(pullRequest, inFlight.touchUp, issueNumber, branch, parsed.output, evidence?.section ?? null, changedTestsOf(pullRequest, changes), fixes.operatorComments),
+        actions: bodyOnlyRunLanded(
+          pullRequest,
+          inFlight,
+          issueNumber,
+          branch,
+          parsed.output,
+          evidence?.section ?? null,
+          trialStepsMarkerFor(parsed.output, config, pullRequest),
+          changedTestsOf(pullRequest, changes),
+          fixes.operatorComments,
+        ),
       };
     }
     return {
@@ -509,7 +525,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       {
         kind: "edit-issue-body",
         issue: pullRequest.number,
-        body: pullRequestBody(parsed.output.summary, issueNumber, section, changedTestsOf(pullRequest, changes)),
+        body: pullRequestBody(parsed.output.summary, issueNumber, section, trialStepsMarkerFor(parsed.output, config, pullRequest), changedTestsOf(pullRequest, changes)),
       },
       // Each Spin-off's issue, before the note that names it by its number (#884).
       ...setAside.actions,
@@ -565,27 +581,37 @@ function pushedBy(pullRequest: PullRequestSnapshot, headSha: string, { requestCh
  * ends its time in flight but is no push, and adds agent:review, which starts
  * the Review of that head. That Review may land a second Verdict on it, and
  * the PR stays in draft until it does. Like the rest of a retry, it's silent.
+ *
+ * A Retry of such a flaw lands the same way (#962, ADR-0040): a third flaw
+ * whose findings are all `[small: body]` calls for a Retry, the Touch-ups
+ * being used, and it has no more to commit than a Touch-up had. Its note says
+ * it is a Retry, and it is one: the flaw that called for it counts toward the
+ * Ticket's two as any other does.
  */
-function bodyOnlyTouchUpLanded(
+function bodyOnlyRunLanded(
   pullRequest: PullRequestSnapshot,
-  touchUp: number,
+  run: FlawFixInFlight,
   issueNumber: number,
   branch: string,
   output: { readonly summary: string; readonly fix?: string; readonly operatorCommentsConsidered?: readonly string[] },
   evidence: string | null,
+  trialSteps: string | null,
   changedTests: readonly string[],
   operatorComments: NonNullable<ImplementRunFinished["fixes"]>["operatorComments"],
 ): Action[] {
   const { number, headSha } = pullRequest;
+  const head = headSha.slice(0, 7);
   return [
     // The body goes first, so the Review its label starts reads the new one.
-    { kind: "edit-issue-body", issue: number, body: pullRequestBody(output.summary, issueNumber, evidence, changedTests) },
+    { kind: "edit-issue-body", issue: number, body: pullRequestBody(output.summary, issueNumber, evidence, trialSteps, changedTests) },
     {
       kind: "comment",
       issue: number,
       body: [
-        touchUpBodyOnlyMarker(touchUp, headSha),
-        `The Implementer's ${fixRunName("touch-up", touchUp)} on \`${branch}\` committed nothing, as every finding was about the PR's body: it rewrote the body to match ${headSha.slice(0, 7)}. Review runs again on ${headSha.slice(0, 7)}, and no Retry was used.`,
+        run.kind === "touch-up" ? touchUpBodyOnlyMarker(run.touchUp, headSha) : retryBodyOnlyMarker(headSha),
+        `The Implementer's ${runName(run)} on \`${branch}\` committed nothing, as every finding was about the PR's body: it rewrote the body to match ${head}. Review runs again on ${head}${
+          run.kind === "touch-up" ? ", and no Retry was used." : ". It used one of the Ticket's two Retries."
+        }`,
         "",
         // Present: the on-a-PR contract requires it.
         withoutMentions(output.fix ?? ""),
@@ -902,7 +928,11 @@ function landConflictRun(
   return {
     kind: "act",
     actions: [
-      { kind: "edit-issue-body", issue: pullRequest.number, body: pullRequestBody(output.summary, event.issue, section, changedTestsOf(pullRequest, changes)) },
+      {
+        kind: "edit-issue-body",
+        issue: pullRequest.number,
+        body: pullRequestBody(output.summary, event.issue, section, trialStepsMarkerFor(output, config, pullRequest), changedTestsOf(pullRequest, changes)),
+      },
       {
         kind: "comment",
         issue: pullRequest.number,
@@ -944,27 +974,49 @@ function pushedHead({ pushedHead: head }: BranchChanges): string[] {
 /**
  * An agent PR's body: the Implementer's summary, then the Changed existing
  * tests section when its runs changed any (#463), then the evidence section
- * when the run was UI, then the Closes line, so merging the PR closes the
- * Ticket and starts the next Dispatch check. The summary is agent text, so it
- * keeps no section or marker of its own: only the Kit's say which existing
- * tests changed and where the evidence is kept.
+ * when the run was UI, then the marker that keeps its Trial steps when the
+ * run gave them or the PR already kept some (#963, trialStepsMarkerFor), then the Closes line, so merging the
+ * PR closes the Ticket and starts the next Dispatch check. The summary is
+ * agent text, so it keeps no section or marker of its own: only the Kit's
+ * say which existing tests changed, where the evidence is kept and what the
+ * Trial steps are.
  */
 function pullRequestBody(
   summary: string,
   issueNumber: number,
   evidence: string | null,
+  trialSteps: string | null,
   changedTests: readonly string[],
   carriesOn: number | null = null,
 ): string {
   const tests = changedTestsSection(changedTests);
   return [
-    withoutChangedTests(withoutEvidence(withoutMentions(summary))),
+    withoutTrialSteps(withoutChangedTests(withoutEvidence(withoutMentions(summary)))),
     ...(tests === null ? [] : [tests]),
     ...(evidence === null ? [] : [evidence]),
+    ...(trialSteps === null ? [] : [trialSteps]),
     // The Kit's line, never the agent's, naming the PR a Kept-branch start's branch came from (#536).
     ...(carriesOn === null ? [] : [`Carries on from #${carriesOn}.`]),
     `Closes #${issueNumber}`,
   ].join("\n\n");
+}
+
+/**
+ * The marker that keeps a pull request's Trial steps in the body a run
+ * writes (#963), or null when the body carries none. In a Product repo that
+ * declares `staging`, a run that gave a `trial` the contract took writes it,
+ * so a later run's steps take the earlier one's place. A run on an existing
+ * pull request, `pullRequest`, that gave none it took, by leaving it out or
+ * by a malformed one, keeps the steps that pull request already carries
+ * (#962): each run's body is written whole, so the Kit writes them again
+ * from what the snapshot read in the body the Fabrik App wrote. A first run
+ * that gives none writes none. A Product repo that declares no `staging`
+ * has no marker, whatever the run gave: its pull requests are as they were.
+ */
+function trialStepsMarkerFor({ trial }: ImplementOutput, config: KitConfig, pullRequest: Pick<PullRequestSnapshot, "trialSteps"> | null): string | null {
+  if (config.staging === null) return null;
+  const steps = trial ?? pullRequest?.trialSteps ?? null;
+  return steps === null ? null : trialStepsMarker(steps);
 }
 
 /** The existing tests a run on its agent PR leaves the body listing: those the PR's marker lists, then the run's own. */

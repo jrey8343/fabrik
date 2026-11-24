@@ -84,9 +84,14 @@ export interface PromoteAgentEntry {
   readonly evidence: RowEvidence | null;
   /** Its Evidence shots, as a merged pull request's row gives them (Row's `shots`); null for one with none. */
   readonly shots: RowShots | null;
-  /** Where the Operator tries its change on staging, and what to try, as its row gives them (Row's `staging`). */
+  /**
+   * Where the Operator tries its change on staging, and what to try, as its
+   * row gives them (Row's `staging`): its Trial steps among them, under
+   * `staging.trial`, each step with its page on staging (#965), null for a
+   * pull request that keeps none.
+   */
   readonly staging: RowStaging;
-  /** Whether it needs a Staging trial, and why, as its Standing at Staging says. */
+  /** Whether it needs a Staging trial, and why, as its Standing at Staging says. Its Trial steps are not here: they are `staging.trial`. */
   readonly trial: StagingTrial;
   /** Its Staging trial's result, as its Standing at Staging says for the same facts. */
   readonly result: PromoteResult;

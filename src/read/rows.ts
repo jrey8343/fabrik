@@ -11,7 +11,8 @@
 // address, so a reader holds no rule about addresses either. In a repo that
 // declares `staging`, a merged pull request's row stands at Staging for what
 // a staging read says (#855), and carries where to try it on staging and
-// what to try; there the Operator's own label gives its Staging trial a
+// what to try, with the Trial steps its body keeps, each with its page on
+// staging (#965); there the Operator's own label gives its Staging trial a
 // result, and one that waits on them has a row for as long as production
 // leaves it (#856). An open agent
 // pull request's row carries the Digest of its head as data (#655), and each
@@ -196,6 +197,36 @@ export interface RowStaging {
   readonly shots: readonly { readonly name: string; readonly url: string }[];
   /** What to try: the route patterns, then the Evidence shot names, each in its order. */
   readonly toTry: readonly string[];
+  /**
+   * Its Trial steps (#965, ADR-0040), as the marker in its body keeps them:
+   * what its change does and how to check it. Null for a pull request with
+   * no marker, as every one merged before the Kit kept them is.
+   */
+  readonly trial: RowTrial | null;
+}
+
+/**
+ * A merged agent pull request's Trial steps (GLOSSARY.md), as its row gives
+ * them. Each text is an agent's, so a reader shows it as text, never as
+ * markup, and takes no link from it: a step's only link is its `url`.
+ */
+export interface RowTrial {
+  /** One short paragraph of what changed for a person using the product. */
+  readonly summary: string;
+  /** The steps, in the marker's order: one at least. */
+  readonly steps: readonly RowTrialStep[];
+}
+
+/** One of a row's Trial steps, with its page on staging. */
+export interface RowTrialStep {
+  /** What the person does. */
+  readonly do: string;
+  /** What they should then see. */
+  readonly expect: string;
+  /** The page the step starts on, as the marker holds it: a route with no dynamic segment. Null for a step that gave none. */
+  readonly route: string | null;
+  /** That route's page on the staging site, built as a captured route's page is in `pages`; null for a step with no route. */
+  readonly url: string | null;
 }
 
 /** An agent pull request's UI evidence, as its evidence marker records it. */
@@ -385,6 +416,16 @@ function evidenceMarkersOf({ evidenceMarkers, staging }: Facts): Facts["evidence
   return staging === undefined ? evidenceMarkers : [...evidenceMarkers, ...staging.evidenceMarkers];
 }
 
+/**
+ * The Trial steps the facts hold, those of the pull requests production has
+ * not taken among them (#965): none in facts cached by an earlier release,
+ * which have no `trialStepsMarkers` at either place.
+ */
+function trialStepsMarkersOf({ trialStepsMarkers, staging }: Facts): Facts["trialStepsMarkers"] {
+  const held: readonly (Facts["trialStepsMarkers"] | undefined)[] = [trialStepsMarkers, staging?.trialStepsMarkers];
+  return held.flatMap((markers) => markers ?? []);
+}
+
 /** The merged agent pull requests the facts hold, each once, as the rule takes them (mergesHeld): those of the last 24 hours, then those production has not taken (#856), then those a production Deployment took in the last 24 hours (#857). */
 function mergedOf({ mergedLastDay, staging }: Facts): Facts["mergedLastDay"] {
   return staging === undefined ? mergedLastDay : mergesHeld<Facts["mergedLastDay"][number]>(mergedLastDay, staging.unpromoted, staging.promoted);
@@ -394,18 +435,27 @@ function mergedOf({ mergedLastDay, staging }: Facts): Facts["mergedLastDay"] {
  * Where the Operator tries merged agent pull request `pullRequest`'s change
  * on staging, and what to try; null when Kit config declares no `staging`.
  * The routes are the marker's own, as a row's production pages are, whatever
- * came of the capture.
+ * came of the capture. Its Trial steps are its marker's too (#965), each
+ * step's page built as a captured route's is, and take nothing from, and
+ * add nothing to, its pages, its shots and what to try.
  */
 export function stagingOf(facts: Facts, pullRequest: number): RowStaging | null {
   const staging = facts.kit.config.ok ? facts.kit.config.config.staging : null;
   if (staging === null) return null;
   const routes = evidenceMarkersOf(facts).find((held) => held.pullRequest === pullRequest)?.marker.routes ?? [];
   const names = (shotsMarkersOf(facts).find((held) => held.pullRequest === pullRequest)?.marker.named ?? []).map(({ name }) => name);
+  const trial = trialStepsMarkersOf(facts).find((held) => held.pullRequest === pullRequest)?.marker ?? null;
+  // The page a route has on the staging site: its own where it has no dynamic segment, else the site itself.
+  const pageOf = (route: string) => (hasDynamicSegment(route) ? staging.url : stagingPageUrl(staging, route));
   return {
     site: staging.url,
-    pages: routes.map((route) => ({ route, url: hasDynamicSegment(route) ? staging.url : stagingPageUrl(staging, route) })),
+    pages: routes.map((route) => ({ route, url: pageOf(route) })),
     shots: names.map((name) => ({ name, url: staging.url })),
     toTry: [...routes, ...names],
+    trial:
+      trial === null
+        ? null
+        : { summary: trial.summary, steps: trial.steps.map(({ route = null, do: does, expect }) => ({ do: does, expect, route, url: route === null ? null : pageOf(route) })) },
   };
 }
 

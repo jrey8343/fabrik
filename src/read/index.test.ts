@@ -113,7 +113,7 @@ describe("the read library's Standing at Staging (#855)", () => {
       deploysUnread: false,
       staging: { environment: "staging", productionEnvironment: "production", trial: { needed: true, why: "ui-evidence" }, result: null, standsUntil: "2026-11-10T11:30:00.000Z", mainChecks: ["e2e"], check: null, checksUnread: false },
     });
-    expect(rows[0]?.staging).toEqual({
+    expect(rows[0]?.staging).toMatchObject({
       site: "https://staging.shop.example",
       pages: [
         { route: "/book", url: "https://staging.shop.example/book" },
@@ -122,6 +122,7 @@ describe("the read library's Standing at Staging (#855)", () => {
       shots: [],
       toTry: ["/book", "/patients/[patientId]/notes"],
     });
+    expect(Object.keys(rows[0]?.staging ?? {}).toSorted()).toEqual(["pages", "shots", "site", "toTry", "trial"]);
     expect(wordStanding(rows[0]!.standing, "2026-11-09T12:36:00Z", "UTC")).toEqual({
       pill: "On staging",
       sentence: "On `staging` since 1 hour ago. It carries UI evidence, so it needs a Staging trial.",
@@ -182,8 +183,58 @@ describe("the read library's Staging trial (#856)", () => {
   });
 });
 
+describe("the read library's Trial steps (#965)", () => {
+  const STEPS = {
+    summary: "A patient can now book a visit and see it on their notes.",
+    steps: [
+      { route: "/book", do: "Pick tomorrow, then any free time.", expect: "A page saying the visit is booked, with its time." },
+      { do: "Open any patient from the list, then their notes.", expect: "The visit under Upcoming." },
+    ],
+  };
+
+  it("gives a reader the marker's writer and its reader, so a reader holds no format: what one writes the other reads, the last in a body counting", async () => {
+    const { trialStepsIn, trialStepsMarker } = await import("./index.ts");
+    const written = (await EXPORT_CALLS["trialStepsMarker"]!()) as string;
+    const later = { summary: "A patient can now book a visit.", steps: [{ do: "Pick any day.", expect: "Its free times." }] };
+
+    expect(written).toMatch(/^<!-- fabrik:trial-steps \{.*\} -->$/);
+    expect(trialStepsIn(`It builds the booking page.\n\n${written}`)).toEqual(STEPS);
+    expect(await EXPORT_CALLS["trialStepsIn"]!()).toEqual(STEPS);
+    expect(trialStepsIn(["It builds the booking page.", written, trialStepsMarker(later)].join("\n"))).toEqual(later);
+    expect(trialStepsIn("It builds the booking page.")).toBeNull();
+  });
+
+  it("gives a merged agent pull request's row its Trial steps under staging, each step with its page on staging or none, and its Promote list entry the same; the Standing's schema stays where it was", async () => {
+    const { STANDING_SCHEMA } = await import("./index.ts");
+    const rows = (await EXPORT_CALLS["joinStaging"]!()) as ReturnType<(typeof import("./index.ts"))["joinStaging"]>;
+    const list = (await EXPORT_CALLS["promoteListOf"]!()) as ReturnType<(typeof import("./index.ts"))["promoteListOf"]>;
+    const [entry, plain] = list?.entries ?? [];
+
+    expect(STANDING_SCHEMA).toBe(2);
+    expect(rows[0]?.staging?.trial).toEqual({
+      summary: "A patient can now book a visit and see it on their notes.",
+      steps: [
+        { do: "Pick tomorrow, then any free time.", expect: "A page saying the visit is booked, with its time.", route: "/book", url: "https://staging.shop.example/book" },
+        { do: "Open any patient from the list, then their notes.", expect: "The visit under Upcoming.", route: null, url: null },
+      ],
+    });
+    expect(entry?.is === "agent" ? entry.staging.trial : undefined).toEqual(rows[0]?.staging?.trial);
+    expect(plain).toMatchObject({ is: "plain" });
+    expect(plain).not.toHaveProperty("staging");
+    expect(plain).not.toHaveProperty("trial");
+  });
+
+  it("reads a row kept at Staging before this, with no Trial steps on it, as one whose pull request keeps none", async () => {
+    const { readRow } = await import("./index.ts");
+    const [row] = (await EXPORT_CALLS["joinStaging"]!()) as ReturnType<(typeof import("./index.ts"))["joinStaging"]>;
+    const { trial: _, ...keptStaging } = row!.staging!;
+
+    expect(readRow(JSON.parse(JSON.stringify({ ...row, staging: keptStaging })))).toEqual({ ...row, staging: { ...keptStaging, trial: null } });
+  });
+});
+
 describe("the read library's Promote list (#857)", () => {
-  const STAGED = { ...homeFactsOf().kit, config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" }, staging: { url: "https://staging.shop.example", environment: "staging" } } } } as const;
+  const STAGED ={ ...homeFactsOf().kit, config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, production: { url: "https://shop.example", environment: "production" }, staging: { url: "https://staging.shop.example", environment: "staging" } } } } as const;
 
   it("says what a production deployment would take, from a gather's facts and a staging read: its start, each agent pull request with the result its row's Standing at Staging has, each Plain one with its kind, the count not yet accepted, and the dispatch page", async () => {
     const list = (await EXPORT_CALLS["promoteListOf"]!()) as ReturnType<(typeof import("./index.ts"))["promoteListOf"]>;

@@ -60,6 +60,7 @@ import {
   openedSpinOffsAmong,
   operatorMentionMarksIn,
   spinOffIn,
+  trialStepsIn,
 } from "../loop/markers.ts";
 import { retroWindowStart } from "../loop/retro.ts";
 import { weekStart } from "../loop/weeklyGate.ts";
@@ -127,7 +128,7 @@ import {
   lastPushStepUpReasonIn,
   type PullRequestHistoryItem,
   pushedSinceVerdictIn,
-  bodyOnlyTouchUpHeadIn,
+  bodyOnlyRunHeadIn,
   retryNoteSinceVerdictIn,
   verdictPostedAtIn,
   requestChangesRunIn,
@@ -2430,7 +2431,7 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     conflictRunInFlight: conflictRunInFlightIn(botComments),
     conflictRunOnUnreviewedDraft: conflictRunOnUnreviewedDraftIn(botComments),
     pushedSinceVerdict: pushedSinceVerdictIn(botComments),
-    bodyOnlyTouchUpHead: bodyOnlyTouchUpHeadIn(botComments),
+    bodyOnlyRunHead: bodyOnlyRunHeadIn(botComments),
     retryNoteSinceVerdict: retryNoteSinceVerdictIn(botComments),
     verdictPostedAt: verdictPostedAtIn(history),
     headPushedAt: headPushedAtOf(pullRequest, fromBots, isAgent),
@@ -2443,6 +2444,8 @@ function pullRequestSnapshotOf(pullRequest: PullRequestNode, appLogin: string | 
     shotsMarker: byAppOf(pullRequest.author, appLogin) ? shotsMarkerIn(pullRequest.body) : null,
     // Likewise, so nobody else can plant or hide the existing tests its runs changed (#463).
     changedTests: byAppOf(pullRequest.author, appLogin) ? changedTestsIn(pullRequest.body) : [],
+    // Likewise the Trial steps it keeps, which a later run that gives none leaves as they are (#962).
+    trialSteps: byAppOf(pullRequest.author, appLogin) ? trialStepsIn(pullRequest.body) : null,
     // Only a bot's comment whose first line is the Digest's marker, as for a Verdict: never a no-Digest line, and
     // never a person's quoting one. A collapsed Digest is read whole, as GitHub still returns it.
     digests: fromBots

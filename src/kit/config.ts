@@ -118,7 +118,12 @@ export interface KitConfig {
   readonly preview: PreviewConfig | null;
   /** Where the Product repo's production is (ADR-0021); null declares nothing, and nothing in the Loop reads it. */
   readonly production: ProductionConfig | null;
-  /** Where the Product repo's staging environment is (ADR-0038); null declares none, and nothing in the Loop reads it. */
+  /**
+   * Where the Product repo's staging environment is (ADR-0038); null declares
+   * none. Nothing in the Loop reads the environment itself: only whether it
+   * is declared, which is when an Implementer is asked for Trial steps and
+   * the push job keeps them on the pull request (ADR-0040).
+   */
   readonly staging: StagingConfig | null;
   /**
    * The Operator's time zone (ADR-0023), an IANA zone every time the Kit shows
@@ -232,6 +237,28 @@ export function isRoute(value: unknown): value is string {
   return typeof value === "string" && value.startsWith("/") && !value.startsWith("//");
 }
 
+/**
+ * A path segment that stands for a value rather than names a page, as a
+ * framework's route files spell one: `[patientId]` (or `[...slug]`),
+ * `<patientId>`, or `:patientId`.
+ */
+const DYNAMIC_SEGMENT = /\[[^\]/]*\]|<[^>/]*>|^:[A-Za-z_]/;
+
+/**
+ * Whether a route has a dynamic segment (DYNAMIC_SEGMENT) in its path, its
+ * query and fragment left out: a route no page answers as written, which
+ * capture resolves through `ui.resolve_route` (ADR-0024) or misses, and
+ * which a Trial step never starts on (src/loop/implementOutput.ts). It is
+ * beside isRoute, below the modules that ask it, and UI evidence's module
+ * passes it on to its readers (src/evidence/uiEvidence.ts).
+ */
+export function hasDynamicSegment(route: string): boolean {
+  return route
+    .replace(/[?#].*$/s, "")
+    .split("/")
+    .some((segment) => DYNAMIC_SEGMENT.test(segment));
+}
+
 /** A browser viewport UI evidence is captured at. */
 export interface Viewport {
   readonly name: "mobile" | "desktop";
@@ -302,7 +329,9 @@ export interface ProductionConfig {
  * carry in GitHub's Deployments, where the Operator tries a merged change by
  * hand before they deploy it to production (ADR-0038). Unlike production's,
  * its environment is never null: a staging link that can't say whether
- * anything is deployed is no use. Only a reader of the Kit acts on it.
+ * anything is deployed is no use. Only a reader of the Kit acts on its
+ * address and its deploys; the Loop asks only whether the block is there
+ * (ADR-0040).
  */
 export interface StagingConfig {
   /** The staging site's http(s) base address, which staging links are built from. */

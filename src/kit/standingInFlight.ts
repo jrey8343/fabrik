@@ -5,7 +5,7 @@
 // (`blocked`). Each is read by the Loop's own rule for it, so the Standing and
 // the Loop can't disagree, and none can turn Stuck.
 import { dispatchedRunsOf, implementRunsWithoutPullRequestOf, type RunInFlightFact, type RunKind } from "../github/snapshot.ts";
-import { bodyOnlyTouchUpHeadIn, conflictRunInFlightIn } from "../github/threads.ts";
+import { bodyOnlyRunHeadIn, conflictRunInFlightIn } from "../github/threads.ts";
 import { inBlockerOrder } from "../loop/blockers.ts";
 import { checkDesignQueue, waitingIssues } from "../loop/designQueue.ts";
 import { agentPullRequestsByGate, type ChecksFixes, checksFixesOf, hasChecksFixes, inFlightOf, isChecksFix, mergeGateLoadOf, waitingForDispatch } from "../loop/dispatch.ts";
@@ -477,10 +477,11 @@ function waitsOnReview(pullRequest: OpenPullRequestFacts, appLogin: string): boo
 
 /**
  * Whether a pull request's head has its Verdict: one that no body-only
- * Touch-up's note on that head since (#751) leaves room for a second.
+ * Touch-up's note on that head since (#751), nor a body-only Retry's (#962),
+ * leaves room for one more.
  */
 export function hasVerdictOnHead(pullRequest: OpenPullRequestFacts): boolean {
-  const bodyOnly = bodyOnlyTouchUpHeadIn(pullRequest.comments.filter(({ byBot }) => byBot).map(({ body }) => body));
+  const bodyOnly = bodyOnlyRunHeadIn(pullRequest.comments.filter(({ byBot }) => byBot).map(({ body }) => body));
   return bodyOnly !== pullRequest.headSha && verdictsOn(pullRequest.comments).some(({ record }) => record.headSha === pullRequest.headSha);
 }
 

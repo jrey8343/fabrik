@@ -12,6 +12,8 @@ A **Staging trial** is the Operator trying a merged change by hand on staging be
 - **How long a Standing at Staging lasts turns on whose move it is.** A pull request that needs a trial and has no result is the Operator's move, so it keeps its Standing, whatever its name and place, until it has a result or production takes it, however long that is, and is never marked as stopping work. Production takes it when a production deployment that contains it has succeeded; one that failed or is still running has not. One with a result keeps its Standing for 24 hours from the label event that gave it, or from its fix's acceptance. One that changes no screen keeps it for 24 hours from its merge, as ADR-0021 has every merged pull request.
 - **It is advisory from end to end.** No Loop rule waits on staging, and neither the Kit nor the Console deploys production or refuses a deploy. The Operator's own dispatch of their production workflow is the approval. The Promote list, every pull request a production deployment would take with its result, only tells them what that deploy holds.
 
+What the Operator tries, and a trial they run with an agent driving their own browser, are as [ADR-0040](0040-the-implementer-writes-a-staging-trials-steps-and-the-reviewer-judges-them.md) has them: a label an agent puts on at the Operator's word, with the Operator's credential, is the Operator's.
+
 ## Considered options
 
 - **A list of environments.** The Kit has rules for two, the one every merge reaches and the one the Operator promotes to. A list would be a shape with no rules behind it.
