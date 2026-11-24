@@ -51,6 +51,7 @@ const DEFAULTS = {
   production: null,
   staging: null,
   timeZone: null,
+  console: { appId: null },
 };
 
 describe("Kit config", () => {
@@ -2118,6 +2119,40 @@ describe("The staging block, which says where a Product repo's staging environme
 
     expect(result.ok && result.config.production).toBeNull();
     expect(result.ok && result.config.staging).toEqual({ url: "https://staging.shop.example", environment: "staging" });
+  });
+});
+
+describe("The console block, whose app_id says the Console covers a Product repo", () => {
+  it.each([`{}`, `{ "console": {} }`])("covers nothing for %s, and is valid", (text) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  it("reads the Console's App's id from console.app_id, every other field at its default", () => {
+    const result = resolveKitConfig({ config: `{ "console": { "app_id": 1234567 } }` });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, console: { appId: 1234567 } } });
+  });
+
+  it.each([null, "1234567", 1.5, 0, -1])("refuses an app_id of %j, which isn't a whole number of at least 1", (appId) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ console: { app_id: appId } }) });
+
+    expect(result).toEqual({ ok: false, errors: ["console.app_id must be a whole number of at least 1"] });
+  });
+
+  it.each([`{ "console": null }`, `{ "console": [] }`])("refuses a console block that isn't an object: %s", (text) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: ["console must be an object"] });
+  });
+
+  it("refuses a field the console block doesn't know, naming it", () => {
+    const result = resolveKitConfig({ config: `{ "console": { "app_id": 1, "slug": "x" } }` });
+
+    expect(result).toEqual({ ok: false, errors: ["console.slug is not a Kit config field"] });
+  });
+
+  it("names its problem after time_zone's place, as the Kit config's own order has it", () => {
+    const result = resolveKitConfig({ config: JSON.stringify({ console: { app_id: 0 }, staging: { environment: "staging" } }) });
+
+    expect(result).toEqual({ ok: false, errors: ["staging.url is missing", "console.app_id must be a whole number of at least 1"] });
   });
 });
 
