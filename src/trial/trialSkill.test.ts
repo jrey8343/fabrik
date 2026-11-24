@@ -41,7 +41,11 @@ describe("the Trial session skill, /fabrik-trial", () => {
     expect(description).toContain("Trial session");
     expect(description).toContain("/fabrik-trial <pull request number>");
     expect(body).toMatch(/^\n?# Trial session\n/);
-    expect(body).toContain("`$ARGUMENTS`");
+    // Claude Code puts what the Operator typed after the skill's name where the text says $ARGUMENTS.
+    expect(body).toContain("It was run as `/fabrik-trial $ARGUMENTS`: with a merged pull request's number, for that one pull request, or with nothing after it, for every pull request untried on staging.");
+    // And one argument where it says $0, $1 and so on, so no other text of the skill may read as one.
+    expect(skill.split("$ARGUMENTS")).toHaveLength(2);
+    expect(skill).not.toMatch(/\$\d/);
   });
 
   it("uses the glossary's words for what it runs, and names the two decisions it stands on", () => {

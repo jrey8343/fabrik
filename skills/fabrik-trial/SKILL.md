@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Trial session
 
-The Operator is trying merged changes on their Product repo's staging site, a Staging trial, and you drive their own Chrome for them through Claude in Chrome while they watch: a Trial session (ADR-0040). `$ARGUMENTS` is one merged pull request's number, or nothing, which means every pull request untried on staging. Your job is to perform each pull request's Trial steps on staging, say for each step what the page showed against what it should show, ask the Operator for their verdict, and record it.
+The Operator is trying merged changes on their Product repo's staging site, a Staging trial, and you drive their own Chrome for them through Claude in Chrome while they watch: a Trial session (ADR-0040). It was run as `/fabrik-trial $ARGUMENTS`: with a merged pull request's number, for that one pull request, or with nothing after it, for every pull request untried on staging. Your job is to perform each pull request's Trial steps on staging, say for each step what the page showed against what it should show, ask the Operator for their verdict, and record it.
 
 This session runs on the Operator's own machine, where their Chrome is, with their own GitHub credentials, and counts as the Operator. So a label you put on at their word is the Operator's own, the only kind the Kit reads a Staging trial's result from (ADR-0038).
 
@@ -24,7 +24,7 @@ Check both of these before anything else. If either fails, say which fails and s
 - **`gh auth status`** passes. Every read and every label of this session is made with the Operator's own credential.
 - **The Claude in Chrome tools** are available: the MCP tools named `mcp__claude-in-chrome__*`. The session may list them as deferred, so load them through its tool search before the first call, all in one search: `tabs_context_mcp`, `tabs_create_mcp`, `navigate`, `computer`, `find`, `form_input`, `read_page`, `get_page_text` and `read_console_messages`. With no tool by that name the extension is not connected, which is what not available means: tell the Operator to connect Claude in Chrome and run `/fabrik-trial` again. When the session has Claude Code's own `claude-in-chrome` skill, load it for how the tools are used.
 
-Then read `$ARGUMENTS`: nothing, or one pull request's number, such as `50`. For anything else, say how the skill is run and stop.
+Then read how the skill was run, above: with nothing, or with one pull request's number, such as `50`. For anything else, say how it is run and stop.
 
 **Done when:** `gh` is signed in, the tools are loaded, and you know whether you have one pull request or the queue.
 
@@ -90,7 +90,7 @@ Once for each pull request, after its last step, list its steps' reports in a li
 
 ## 6. Record the verdict
 
-With `gh`, as the Operator:
+With `gh`, as the Operator, where `<n>` is the pull request's number:
 
 - **Accept:** `gh pr edit <n> --add-label fabrik:trial-accepted`.
 - **Problem:** open the Trial problem, then label the pull request.
@@ -110,7 +110,7 @@ From Staging trial of PR #50
 > Expect: The total under the list, with tax.
 
 - Expected: the total under the list, with tax.
-- Seen: at https://staging.shop.example/cart the line under the list reads "Total: $0.00". The console logged `TypeError: tax is undefined`.
+- Seen: at https://staging.shop.example/cart the line under the list reads "Total: 0.00", with no tax. The console logged `TypeError: tax is undefined`.
 
 The Operator's words: the total also flickers when the cart opens.
 ```
