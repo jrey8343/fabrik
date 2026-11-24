@@ -714,6 +714,144 @@ describe("Branch protection", () => {
       expect(plan.notes.join("\n")).toContain(".fabrik/config.json is invalid, so the Required checks it lists weren't added to the branch");
     });
   });
+
+  describe("a Kit config that names the Console's App (console.app_id)", () => {
+    const withKey = (checks: string[], appId = 42) => ({
+      ".fabrik/config.json": JSON.stringify({ sandbox: { checks }, console: { app_id: appId } }),
+    });
+    const consoleNote = (id: number, branch = "main") =>
+      `The Kit config names the Console's App (console.app_id is ${id}), so from this run on ${branch} merges only from the Console: GitHub refuses a merge at any head that App hasn't passed, from github.com, gh and an Operator session alike, the setup PR's included. Setup can't check the Console is ready, so look for this repo in the Console before you go on. Until the Console can pass a head here, the only way to merge is the Merge gate's by-hand way past.`;
+
+    it("requires the Console check from that App at once, beside the listed checks, holds admins, and says from this run on the branch merges only from the Console", () => {
+      const state = aCleanProduct({ files: withKey(["test"]) });
+      const plan = planSetup(state, kit);
+      const [action] = plan.actions.flatMap((a) => (a.kind === "protect-branch" ? [a] : []));
+
+      expect(action?.protection.required_status_checks?.checks).toEqual([{ context: "test" }, { context: "Merge from the Console", app_id: 42 }]);
+      expect(action?.protection.enforce_admins).toBe(true);
+      expect(plan.notes).toContain(consoleNote(42));
+    });
+
+    it("keeps the App the branch requires each other check from", () => {
+      const state = aCleanProduct({
+        files: withKey(["test"]),
+        protection: aProtectedBranch([], { required_status_checks: { strict: false, checks: [{ context: "test", app_id: 7 }] } }),
+      });
+
+      expect(protects(state)[0]?.protection.required_status_checks?.checks).toEqual([
+        { context: "test", app_id: 7 },
+        { context: "Merge from the Console", app_id: 42 },
+      ]);
+    });
+
+    it.each([
+      ["from another App", { context: "Merge from the Console", app_id: 41 }, "Merge from the Console (App 41)"],
+      ["with no App", { context: "Merge from the Console" }, "Merge from the Console"],
+    ])("puts the key's App beside the Console check the branch requires %s, and says so", (_, consoleCheck, before) => {
+      const state = aCleanProduct({
+        files: withKey(["test"]),
+        protection: aProtectedBranch([], { enforce_admins: true, required_status_checks: { strict: false, checks: [{ context: "test" }, consoleCheck] } }),
+      });
+      const plan = planSetup(state, kit);
+      const [action] = plan.actions.flatMap((a) => (a.kind === "protect-branch" ? [a] : []));
+
+      expect(action?.protection.required_status_checks?.checks).toEqual([{ context: "test" }, { context: "Merge from the Console", app_id: 42 }]);
+      expect(plan.notes).toContain(consoleNote(42));
+      expect(describeAction(action!)).toBe(
+        `protect main: required checks: test, ${before} → test, Merge from the Console (App 42); every other setting stays as it is`,
+      );
+    });
+
+    it("names the Console check with its App when it adds it", () => {
+      const state = aCleanProduct({ files: withKey(["test"]), protection: aProtectedBranch(["test"], { enforce_admins: true }) });
+
+      expect(describeAction(protects(state)[0]!)).toBe(
+        "protect main: required checks: test → test, Merge from the Console (App 42); every other setting stays as it is",
+      );
+    });
+
+    it("leaves a branch alone, with no note, once it requires the Console check from that App", () => {
+      const state = aCleanProduct({
+        files: withKey(["test"]),
+        protection: aProtectedBranch([], {
+          enforce_admins: true,
+          required_status_checks: { strict: false, checks: [{ context: "test" }, { context: "Merge from the Console", app_id: 42 }] },
+        }),
+      });
+      const plan = planSetup(state, kit);
+
+      expect(protects(state)).toEqual([]);
+      expect(plan.notes.join("\n")).not.toContain("Console");
+    });
+
+    it("gives no note when the branch already requires the Console check from that App and the step changes something else", () => {
+      const state = aCleanProduct({
+        files: withKey(["test"]),
+        protection: aProtectedBranch([], { required_status_checks: { strict: false, checks: [{ context: "test" }, { context: "Merge from the Console", app_id: 42 }] } }),
+      });
+      const plan = planSetup(state, kit);
+      const [action] = plan.actions.flatMap((a) => (a.kind === "protect-branch" ? [a] : []));
+
+      expect(describeAction(action!)).toBe("protect main: admins held to the rules: no → yes; every other setting stays as it is");
+      expect(plan.notes.join("\n")).not.toContain("Console");
+    });
+
+    it("still says the branch has no Required checks yet when sandbox.checks is empty", () => {
+      const plan = planSetup(aCleanProduct({ files: withKey([]) }), kit);
+      const [action] = plan.actions.flatMap((a) => (a.kind === "protect-branch" ? [a] : []));
+
+      expect(action?.protection.required_status_checks?.checks).toEqual([{ context: "Merge from the Console", app_id: 42 }]);
+      expect(plan.notes).toContain("main has no Required checks yet: list the CI checks that must pass in sandbox.checks in .fabrik/config.json, then run setup again.");
+    });
+
+    it("adds no check, the Console check included, from a Kit config that is invalid, and says it is invalid", () => {
+      const config = JSON.stringify({ sandbox: { checks: ["test"], nonsense: true }, console: { app_id: 42 } });
+      const plan = planSetup(aCleanProduct({ files: { ".fabrik/config.json": config } }), kit);
+      const [action] = plan.actions.flatMap((a) => (a.kind === "protect-branch" ? [a] : []));
+
+      expect(action?.protection.required_status_checks).toBeNull();
+      expect(plan.notes.join("\n")).toContain(".fabrik/config.json is invalid, so the Required checks it lists weren't added to the branch");
+      expect(plan.notes.join("\n")).not.toContain("console.app_id is");
+    });
+
+    it("leaves the branch requiring the Console check once its own step is applied", () => {
+      const state = aCleanProduct({ files: withKey(["test"]), protection: aProtectedBranch(["test", "lint"]) });
+
+      expect(protects(afterApplying(state, planSetup(state, kit)))).toEqual([]);
+    });
+  });
+
+  describe("a Kit config without console.app_id", () => {
+    it.each([
+      ["from an App", { context: "Merge from the Console", app_id: 41 }],
+      ["with no App", { context: "Merge from the Console" }],
+    ])("keeps a Console check the branch requires %s as it finds it, and says nothing of it", (_, consoleCheck) => {
+      const state = aCleanProduct({ files: withChecks(["test"]), protection: aProtectedBranch([], { required_status_checks: { strict: false, checks: [consoleCheck] } }) });
+      const plan = planSetup(state, kit);
+      const [action] = plan.actions.flatMap((a) => (a.kind === "protect-branch" ? [a] : []));
+
+      expect(action?.protection.required_status_checks?.checks).toEqual([consoleCheck, { context: "test" }]);
+      expect(plan.notes.join("\n")).not.toContain("console.app_id is");
+    });
+
+    it("leaves a branch that requires the Console check and the rest alone", () => {
+      const state = aCleanProduct({
+        files: withChecks(["test"]),
+        protection: aProtectedBranch([], { enforce_admins: true, required_status_checks: { strict: false, checks: [{ context: "test" }, { context: "Merge from the Console", app_id: 41 }] } }),
+      });
+
+      expect(protects(state)).toEqual([]);
+    });
+
+    it("requires no Console check on a first setup, which writes the starter Kit config", () => {
+      const plan = planSetup(aCleanProduct(), kit);
+      const [action] = plan.actions.flatMap((a) => (a.kind === "protect-branch" ? [a] : []));
+
+      expect(written(plan.actions, ".fabrik/config.json")).toBeDefined();
+      expect(JSON.stringify(action?.protection.required_status_checks ?? null)).not.toContain("Merge from the Console");
+      expect(plan.notes.join("\n")).not.toContain("Console");
+    });
+  });
 });
 
 describe("What setup reads from the Product repo", () => {

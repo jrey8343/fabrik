@@ -336,6 +336,26 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(said).toContain("- protect main: a pull request: not required → required; every other setting stays as it is");
   });
 
+  it("with the checkout's Kit config naming the Console's App, requires the Console check from that App, and says so in the plan it shows before the Operator's yes", async () => {
+    await mkdir(join(checkout, ".fabrik"));
+    await writeFile(join(checkout, ".fabrik", "config.json"), `${JSON.stringify({ sandbox: { checks: ["test"] }, console: { app_id: 42 } }, null, 2)}\n`);
+    git("add", ".fabrik");
+    git("commit", "-q", "-m", "Our Kit config");
+    git("push", "-q", "origin", "main");
+    const world = aWorld();
+
+    const { code, calls, said } = await setupOnce(world);
+
+    expect(code).toBe(0);
+    const puts = calls.filter((call) => call.line.startsWith("gh api --method PUT repos/acme/clinic/branches/main/protection "));
+    expect(puts.map((call) => JSON.parse(call.input ?? "").required_status_checks)).toEqual([
+      { strict: false, checks: [{ context: "test" }, { context: "Merge from the Console", app_id: 42 }] },
+    ]);
+    const note = said.findIndex((line) => line.startsWith("- The Kit config names the Console's App (console.app_id is 42), so from this run on main merges only from the Console"));
+    expect(note).toBeGreaterThan(-1);
+    expect(note).toBeLessThan(said.indexOf("What setup did:"));
+  });
+
   it("asks the Operator's yes to the plan, naming the branch, before it changes anything", async () => {
     const { questions, log } = await setupOnce(aWorld());
 
