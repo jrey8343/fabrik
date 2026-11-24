@@ -150,7 +150,7 @@ describe("a kept row read back", () => {
 
 describe("kept rows holding a Standing of another schema, given to a join or to anything else that takes kept rows", () => {
   const NOW = "2026-11-08T20:00:00Z";
-  const A_CHECKS_READ: RequiredChecksRead = { repo: "acme/shop", branch: "main", readAt: NOW, required: ["test"], holdsAdmins: "yes", heads: {} };
+  const A_CHECKS_READ: RequiredChecksRead = { repo: "acme/shop", branch: "main", readAt: NOW, required: ["test"], holdsAdmins: "yes", heads: {}, consoleCheck: { is: "not-required" } };
   const JOINS: readonly (readonly [string, (rows: readonly Row[]) => unknown])[] = [
     ["joinRuns", (rows) => joinRuns(rows, aRunsRead([]), NOW)],
     ["joinChecks", (rows) => joinChecks(rows, A_CHECKS_READ, NOW)],

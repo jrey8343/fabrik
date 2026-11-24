@@ -374,7 +374,7 @@ const A_NAMED_RUNS_READ = {
   ],
 } as const satisfies NamedRunsRead;
 
-/** `owner/product`'s Required checks read at NOW: `main` holds admins to its rules and requires `test`, which passed on Plain pull request 70's head. */
+/** `owner/product`'s Required checks read at NOW: `main` holds admins to its rules and requires `test`, which passed on Plain pull request 70's head, and not the Console check. */
 const A_CHECKS_READ = {
   repo: "owner/product",
   branch: "main",
@@ -382,6 +382,7 @@ const A_CHECKS_READ = {
   required: ["test"],
   holdsAdmins: "yes",
   heads: { ["p".repeat(40)]: [{ name: "test", is: "passed", url: "https://github.com/owner/product/runs/1", at: "2026-11-09T11:30:00Z" }] },
+  consoleCheck: { is: "not-required" },
 } as const satisfies RequiredChecksRead;
 
 /** Agent pull request 50 for Ticket 7, merged at 11:30 with merge commit `m…`, in a repo declaring production in environment `production`. */

@@ -6,10 +6,15 @@
 // with no Administration permission can do: never GitHub's rollup of every
 // check on the head, and never the Kit config's list alone. Passed here is
 // what GitHub accepts for a merge, as the Review's wait judges it too (#456).
-// The Weekly summary keeps its own narrower read (gatherHeadChecks,
-// src/github/facts.ts). It never throws: a head GitHub refuses or fails is
-// "unread", and the others are still given.
+// The Console check (CONSOLE_CHECK, src/kit/consoleCheck.ts), which reports
+// only at the moment of a merge, is left out of the branch's list and so of
+// every head's, by its name alone, and handed back as a fact of its own,
+// `consoleCheck`: whether the branch requires it, and the App GitHub expects
+// it from in each place (#920). The Weekly summary keeps its own narrower
+// read (gatherHeadChecks, src/github/facts.ts). It never throws: a head
+// GitHub refuses or fails is "unread", and the others are still given.
 import { allPages, type ReadClient, type Repo, whyUnread } from "../github/client.ts";
+import { CONSOLE_CHECK } from "../kit/consoleCheck.ts";
 import type { RequiredChecksFact } from "../kit/weeklySummary.ts";
 import { refuseRowsOfOtherSchema } from "./keptRow.ts";
 import type { Row } from "./rows.ts";
@@ -28,7 +33,19 @@ export interface RequiredChecksRead {
   readonly holdsAdmins: "yes" | "no" | "unknown";
   /** Each head asked about, by its sha: each Required check on it, in the branch's order, or unread. */
   readonly heads: Readonly<Record<string, readonly HeadCheck[] | "unread">>;
+  /** Whether the branch requires the Console check, which `required` and every head's list leave out. */
+  readonly consoleCheck: ConsoleCheckRead;
 }
+
+/**
+ * Whether a branch requires the Console check, `CONSOLE_CHECK`: `required`,
+ * with the id of the GitHub App GitHub expects it from in each place the
+ * branch requires it, its protection's first and then each active rule's in
+ * the order GitHub lists them, or null where one names no App;
+ * `not-required` when none does; or `unknown` when the branch could not be
+ * read.
+ */
+export type ConsoleCheckRead = { readonly is: "required"; readonly apps: readonly (number | null)[] } | { readonly is: "not-required" } | { readonly is: "unknown" };
 
 /** One Required check, as it stands on a head. */
 export interface HeadCheck {
@@ -47,20 +64,31 @@ export interface HeadCheck {
  * the branch and its rules; and two for each head while each list fits a
  * page: its check runs and its commit statuses. With none required,
  * each head has an empty list, which a reader takes as all passed, and its
- * reports are not read. A branch that could not be read leaves every head
- * unread.
+ * reports are not read. The Console check is never one of them: it is left
+ * out of `required` and every head's list by its name, so a branch that
+ * requires it and nothing else requires nothing, and no head is read for
+ * it; whether the branch requires it is `consoleCheck`. A branch that could
+ * not be read leaves every head unread, and `consoleCheck` unknown.
  */
 export async function readRequiredChecks(client: Pick<ReadClient, "rest">, repo: string, heads: readonly string[], now: string): Promise<RequiredChecksRead> {
   const target = repoOf(repo);
   const branch = await readBranch(client, target);
   const asked = [...new Set(heads)];
   if (branch.kind === "unread") {
-    return { repo, branch: branch.name ?? "", readAt: now, required: [], holdsAdmins: "unknown", heads: Object.fromEntries(asked.map((sha) => [sha, "unread"])) };
+    return {
+      repo,
+      branch: branch.name ?? "",
+      readAt: now,
+      required: [],
+      holdsAdmins: "unknown",
+      heads: Object.fromEntries(asked.map((sha) => [sha, "unread"])),
+      consoleCheck: { is: "unknown" },
+    };
   }
   const read = await Promise.all(
     asked.map(async (sha) => [sha, branch.required.length === 0 ? [] : await readHead(client, target, sha, branch.required, "check-runs-and-statuses")] as const),
   );
-  return { repo, branch: branch.name, readAt: now, required: branch.required, holdsAdmins: branch.holdsAdmins, heads: Object.fromEntries(read) };
+  return { repo, branch: branch.name, readAt: now, required: branch.required, holdsAdmins: branch.holdsAdmins, heads: Object.fromEntries(read), consoleCheck: branch.consoleCheck };
 }
 
 /** The default branch's own list of Required checks; or why it could not be read. */
@@ -70,8 +98,8 @@ export type BranchRequiredChecks = { readonly kind: "read"; readonly required: r
  * The default branch's own list of Required checks, read from the branch
  * and its active rules as readRequiredChecks reads them, so the Review's
  * wait and a reader never disagree about what the branch requires (#565,
- * #694); or why it could not be read. Three REST requests while the
- * branch's rules fit a page.
+ * #694), the Console check left out; or why it could not be read. Three
+ * REST requests while the branch's rules fit a page.
  */
 export async function readDefaultBranchRequiredChecks(client: Pick<ReadClient, "rest">, repo: string): Promise<BranchRequiredChecks> {
   const branch = await readBranch(client, repoOf(repo));
@@ -164,10 +192,22 @@ function repoOf(repo: string): Repo {
   return { owner, name };
 }
 
-/** The default branch, its Required checks and whether it holds admins to its rules; or unread, with its name when that much was read, and why. */
+/** The default branch, its Required checks, whether it holds admins to its rules and whether it requires the Console check; or unread, with its name when that much was read, and why. */
 type BranchRead =
-  | { readonly kind: "read"; readonly name: string; readonly required: readonly string[]; readonly holdsAdmins: RequiredChecksRead["holdsAdmins"] }
+  | {
+      readonly kind: "read";
+      readonly name: string;
+      readonly required: readonly string[];
+      readonly holdsAdmins: RequiredChecksRead["holdsAdmins"];
+      readonly consoleCheck: Exclude<ConsoleCheckRead, { readonly is: "unknown" }>;
+    }
   | { readonly kind: "unread"; readonly name: string | null; readonly why: string };
+
+/** A check a branch requires, by its name, with the App GitHub expects it from, or null for none. */
+interface NamedCheck {
+  readonly name: string;
+  readonly app: number | null;
+}
 
 interface RawBranch {
   readonly protected?: boolean;
@@ -175,7 +215,7 @@ interface RawBranch {
     readonly required_status_checks?: {
       readonly enforcement_level?: string;
       readonly contexts?: readonly string[];
-      readonly checks?: readonly { readonly context: string }[];
+      readonly checks?: readonly { readonly context: string; readonly app_id?: number | null }[];
     } | null;
   } | null;
 }
@@ -183,7 +223,7 @@ interface RawBranch {
 /** One active rule on a branch, as `GET /repos/{o}/{r}/rules/branches/{b}` lists it. */
 interface RawRule {
   readonly type: string;
-  readonly parameters?: { readonly required_status_checks?: readonly { readonly context: string }[] } | null;
+  readonly parameters?: { readonly required_status_checks?: readonly { readonly context: string; readonly integration_id?: number | null }[] } | null;
 }
 
 /**
@@ -192,14 +232,20 @@ interface RawRule {
  * `required_status_checks` rule adds, each once. The rules endpoint lists
  * only active rules, from repository and organization rulesets alike, so a
  * ruleset in `evaluate` or `disabled`, which GitHub doesn't enforce, adds
- * none. A check is matched by name alone: a rule's `integration_id` is not
- * read. Rules that could not be read leave the branch unread, never its
- * protection's list alone, which would let a check GitHub enforces through.
- * Its protection's enforcement level alone says whether it holds admins to
- * its rules, as the rules endpoint doesn't say who may bypass a rule:
- * `everyone` yes, `non_admins` no, and a branch with no protection no. A
- * protected branch whose protection requires no checks reads `off` whatever
- * it does about admins, so that is unknown, whatever a ruleset requires.
+ * none. A check is matched by name alone. The Console check is dropped
+ * from the list, by its name alone, from the protection's and from each
+ * rule's, and handed back as `consoleCheck`, with the App beside each entry
+ * that names it: a check's `app_id` in the protection and a rule's
+ * `integration_id` are read for it alone, and a protection that gives only
+ * `contexts` names no App. Rules that could not be read leave the branch
+ * unread, never its protection's list alone, which would let a check GitHub
+ * enforces through. Its protection's enforcement level alone says whether
+ * it holds admins to its rules, as the rules endpoint doesn't say who may
+ * bypass a rule: `everyone` yes, `non_admins` no, and a branch with no
+ * protection no, judged from the protection's whole list, the Console check
+ * in it, as that is GitHub's own setting. A protected branch whose
+ * protection requires no checks reads `off` whatever it does about admins,
+ * so that is unknown, whatever a ruleset requires.
  */
 async function readBranch(client: Pick<ReadClient, "rest">, repo: Repo): Promise<BranchRead> {
   const repoPath = `/repos/${repo.owner}/${repo.name}`;
@@ -223,15 +269,18 @@ async function readBranch(client: Pick<ReadClient, "rest">, repo: Repo): Promise
   } catch (error) {
     return { kind: "unread", name, why: whyUnread(error, `GET ${rulesPath}`) };
   }
-  const rulesetChecks = rules
+  const rulesetChecks: NamedCheck[] = rules
     .filter((rule) => rule.type === "required_status_checks")
     .flatMap((rule) => rule.parameters?.required_status_checks ?? [])
-    .map(({ context }) => context);
+    .map(({ context, integration_id }) => ({ name: context, app: integration_id ?? null }));
   const checks = branch.protected === true ? (branch.protection?.required_status_checks ?? null) : null;
-  const protectionChecks = checks?.checks?.map(({ context }) => context) ?? checks?.contexts ?? [];
+  const protectionChecks: NamedCheck[] = checks?.checks?.map(({ context, app_id }) => ({ name: context, app: app_id ?? null })) ?? checks?.contexts?.map((name) => ({ name, app: null })) ?? [];
   const level = checks?.enforcement_level;
   const holdsAdmins = branch.protected !== true ? "no" : protectionChecks.length === 0 ? "unknown" : level === "everyone" ? "yes" : level === "non_admins" ? "no" : "unknown";
-  return { kind: "read", name, required: [...new Set([...protectionChecks, ...rulesetChecks])], holdsAdmins };
+  const all = [...protectionChecks, ...rulesetChecks];
+  const apps = all.filter(({ name }) => name === CONSOLE_CHECK).map(({ app }) => app);
+  const required = all.filter(({ name }) => name !== CONSOLE_CHECK).map(({ name }) => name);
+  return { kind: "read", name, required: [...new Set(required)], holdsAdmins, consoleCheck: apps.length === 0 ? { is: "not-required" } : { is: "required", apps } };
 }
 
 interface RawCheckRun {

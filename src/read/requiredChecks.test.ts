@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GitHubError, type ReadClient } from "../github/client.ts";
+import { CONSOLE_CHECK } from "../kit/consoleCheck.ts";
 import { aLabelAdded, anOpenIssue, anOpenPullRequest, aPlainPullRequest, aVerdictComment, factsOf, homeFactsOf } from "./builders.ts";
 import {
   type HeadCheck,
@@ -42,14 +43,27 @@ interface CannedHead {
   readonly statuses?: readonly CannedStatus[] | GitHubError;
 }
 
-/** The default branch's protection, as `GET /repos/{o}/{r}/branches/{b}` gives it, or a GitHubError failing that read. */
+/** A check a branch requires: its name alone, or its name with the App GitHub expects it from, null where it names none. */
+type CannedCheck = string | { readonly context: string; readonly app: number | null };
+
+/**
+ * The default branch's protection, as `GET /repos/{o}/{r}/branches/{b}`
+ * gives it, its checks with no App when named alone; with `contextsOnly`,
+ * giving only their names; or a GitHubError failing that read.
+ */
 type CannedBranch =
   | { readonly protected: false }
-  | { readonly protected: true; readonly enforcementLevel: string; readonly required: readonly string[] }
+  | { readonly protected: true; readonly enforcementLevel: string; readonly required: readonly CannedCheck[]; readonly contextsOnly?: boolean }
   | GitHubError;
 
-/** A rule as `GET /repos/{o}/{r}/rules/branches/{b}` lists it: a `required_status_checks` rule's contexts, or a rule of any other type. */
-type CannedRule = { readonly requires: readonly string[] } | { readonly type: string };
+/** A rule as `GET /repos/{o}/{r}/rules/branches/{b}` lists it: a `required_status_checks` rule's checks, App 15368 beside one named alone and no `integration_id` beside one whose App is null; or a rule of any other type. */
+type CannedRule = { readonly requires: readonly CannedCheck[] } | { readonly type: string };
+
+const contextOf = (check: CannedCheck) => (typeof check === "string" ? check : check.context);
+
+/** A check as a `required_status_checks` rule lists it. */
+const ruleEntryOf = (check: CannedCheck) =>
+  typeof check === "string" ? { context: check, integration_id: 15368 } : check.app === null ? { context: check.context } : { context: check.context, integration_id: check.app };
 
 /** The active rules on the default branch, listed a hundred to a page, or a GitHubError failing their read. */
 type CannedRules = readonly CannedRule[] | GitHubError;
@@ -77,8 +91,8 @@ function repoWith(branch: CannedBranch, heads: Readonly<Record<string, CannedHea
             enabled: true,
             required_status_checks: {
               enforcement_level: branch.enforcementLevel,
-              contexts: branch.required,
-              checks: branch.required.map((context) => ({ context, app_id: null })),
+              contexts: branch.required.map(contextOf),
+              ...(branch.contextsOnly === true ? {} : { checks: branch.required.map((check) => ({ context: contextOf(check), app_id: typeof check === "string" ? null : check.app })) }),
             },
           },
         };
@@ -91,7 +105,7 @@ function repoWith(branch: CannedBranch, heads: Readonly<Record<string, CannedHea
           type: "requires" in rule ? "required_status_checks" : rule.type,
           ruleset_source_type: "Repository",
           ruleset_source: "owner/product",
-          ...("requires" in rule ? { parameters: { strict_required_status_checks_policy: false, required_status_checks: rule.requires.map((context) => ({ context, integration_id: 15368 })) } } : {}),
+          ...("requires" in rule ? { parameters: { strict_required_status_checks_policy: false, required_status_checks: rule.requires.map(ruleEntryOf) } } : {}),
         }));
       }
       const runs = /^\/repos\/owner\/product\/commits\/([0-9a-f]{40})\/check-runs\?filter=all&per_page=100&page=1$/.exec(path);
@@ -130,7 +144,7 @@ function repoWith(branch: CannedBranch, heads: Readonly<Record<string, CannedHea
 }
 
 /** A branch held to its rules for everyone, requiring these checks. */
-const requiring = (...required: string[]): CannedBranch => ({ protected: true, enforcementLevel: "everyone", required });
+const requiring = (...required: CannedCheck[]): CannedBranch => ({ protected: true, enforcementLevel: "everyone", required });
 
 /** The names of the checks a head was given, in order. */
 function namesOf(checks: readonly HeadCheck[] | "unread" | undefined): string[] | "unread" | undefined {
@@ -274,6 +288,7 @@ describe("the Required checks read", () => {
       required: ["test", "lint"],
       holdsAdmins: "yes",
       heads: {},
+      consoleCheck: { is: "not-required" },
     });
     expect(client.calls).toEqual(["/repos/owner/product", "/repos/owner/product/branches/main", "/repos/owner/product/rules/branches/main?per_page=100&page=1"]);
   });
@@ -300,7 +315,7 @@ describe("the Required checks read", () => {
     it("is unknown when the branch could not be read, every head then unread", async () => {
       const read = await readRequiredChecks(repoWith(refusal("/repos/owner/product/branches/main")), "owner/product", [head("1")], NOW);
 
-      expect(read).toEqual({ repo: "owner/product", branch: "main", readAt: NOW, required: [], holdsAdmins: "unknown", heads: { [head("1")]: "unread" } });
+      expect(read).toEqual({ repo: "owner/product", branch: "main", readAt: NOW, required: [], holdsAdmins: "unknown", heads: { [head("1")]: "unread" }, consoleCheck: { is: "unknown" } });
     });
   });
 
@@ -387,6 +402,7 @@ describe("the Required checks an active ruleset adds (#694)", () => {
       required: [],
       holdsAdmins: "unknown",
       heads: { [head("1")]: "unread" },
+      consoleCheck: { is: "unknown" },
     });
   });
 
@@ -404,6 +420,106 @@ describe("the Required checks an active ruleset adds (#694)", () => {
     it("yes when its protection requires a check, held to everyone", async () => {
       expect(await holdsAdmins(requiring("a"))).toBe("yes");
     });
+  });
+});
+
+describe("the Console check (#920)", () => {
+  const consoleCheck = (app: number | null): CannedCheck => ({ context: CONSOLE_CHECK, app });
+
+  it("is left out of the branch's list and every head's, and handed back required with the App the protection names", async () => {
+    const client = repoWith(requiring("test", consoleCheck(42)), { [head("1")]: { checkRuns: [{ name: "test", status: "completed", conclusion: "success" }] } });
+
+    const read = await readRequiredChecks(client, "owner/product", [head("1")], NOW);
+
+    expect(read.required).toEqual(["test"]);
+    expect(namesOf(read.heads[head("1")])).toEqual(["test"]);
+    expect(read.consoleCheck).toEqual({ is: "required", apps: [42] });
+  });
+
+  it("is left out the same way where an active ruleset requires it, its App, or null where a rule names none, following the protection's in the order GitHub lists the rules", async () => {
+    const client = repoWith(requiring("test", consoleCheck(42)), { [head("1")]: {} }, [{ requires: ["probe / ci", consoleCheck(7)] }, { type: "update" }, { requires: [consoleCheck(null)] }]);
+
+    const read = await readRequiredChecks(client, "owner/product", [head("1")], NOW);
+
+    expect(read.required).toEqual(["test", "probe / ci"]);
+    expect(namesOf(read.heads[head("1")])).toEqual(["test", "probe / ci"]);
+    expect(read.consoleCheck).toEqual({ is: "required", apps: [42, 7, null] });
+  });
+
+  it("is read with no App from a protection that gives only the checks' names, the others as read today", async () => {
+    const client = repoWith({ protected: true, enforcementLevel: "everyone", required: ["test", CONSOLE_CHECK], contextsOnly: true });
+
+    const read = await readRequiredChecks(client, "owner/product", [], NOW);
+
+    expect(read).toMatchObject({ required: ["test"], holdsAdmins: "yes", consoleCheck: { is: "required", apps: [null] } });
+  });
+
+  it("required alone, leaves a branch that requires nothing else requiring nothing: an empty list for every head, and no head's reports read", async () => {
+    const client = repoWith(requiring(consoleCheck(42)), { [head("1")]: { checkRuns: [{ name: CONSOLE_CHECK, status: "completed", conclusion: "failure" }] } }, [{ requires: [consoleCheck(42)] }]);
+
+    const read = await readRequiredChecks(client, "owner/product", [head("1"), head("2")], NOW);
+
+    expect(read.required).toEqual([]);
+    expect(read.heads).toEqual({ [head("1")]: [], [head("2")]: [] });
+    expect(read.consoleCheck).toEqual({ is: "required", apps: [42, 42] });
+    expect(client.calls).toEqual(["/repos/owner/product", "/repos/owner/product/branches/main", "/repos/owner/product/rules/branches/main?per_page=100&page=1"]);
+  });
+
+  it("is not required on a branch that doesn't name it, every other field as before", async () => {
+    const client = repoWith(requiring("test", "lint"), {}, [{ requires: ["probe / ci"] }]);
+
+    expect(await readRequiredChecks(client, "owner/product", [], NOW)).toEqual({
+      repo: "owner/product",
+      branch: "main",
+      readAt: NOW,
+      required: ["test", "lint", "probe / ci"],
+      holdsAdmins: "yes",
+      heads: {},
+      consoleCheck: { is: "not-required" },
+    });
+    expect((await readRequiredChecks(repoWith({ protected: false }), "owner/product", [], NOW)).consoleCheck).toEqual({ is: "not-required" });
+  });
+
+  it("is unknown when the branch could not be read, every head unread, wherever the read stopped", async () => {
+    for (const client of [repoWith(refusal("/repos/owner/product/branches/main")), repoWith(requiring(consoleCheck(42)), {}, refusal("/repos/owner/product/rules/branches/main"))]) {
+      const read = await readRequiredChecks(client, "owner/product", [head("1")], NOW);
+
+      expect(read).toMatchObject({ required: [], holdsAdmins: "unknown", heads: { [head("1")]: "unread" }, consoleCheck: { is: "unknown" } });
+    }
+  });
+
+  it("counts in whether the branch holds admins to its rules, as GitHub's own setting: a protection requiring it alone holds them by its enforcement level", async () => {
+    const holdsAdmins = async (enforcementLevel: string) => (await readRequiredChecks(repoWith({ protected: true, enforcementLevel, required: [consoleCheck(42)] }), "owner/product", [], NOW)).holdsAdmins;
+
+    expect(await holdsAdmins("everyone")).toBe("yes");
+    expect(await holdsAdmins("non_admins")).toBe("no");
+  });
+
+  it("reported on a head, failed or passed, changes nothing in that head's list", async () => {
+    const test = { name: "test", status: "completed", conclusion: "success" } as const;
+    const listOn = async (checkRuns: readonly CannedCheckRun[]) =>
+      (await readRequiredChecks(repoWith(requiring("test", consoleCheck(42)), { [head("1")]: { checkRuns } }), "owner/product", [head("1")], NOW)).heads[head("1")];
+
+    const without = await listOn([test]);
+    expect(await listOn([test, { id: 2, name: CONSOLE_CHECK, status: "completed", conclusion: "failure" }])).toEqual(without);
+    expect(await listOn([test, { id: 2, name: CONSOLE_CHECK, status: "completed", conclusion: "success" }])).toEqual(without);
+    expect(without).toEqual([{ name: "test", is: "passed", url: "https://github.com/owner/product/runs/1", at: "2026-11-12T09:05:00Z" }]);
+  });
+
+  it("is left out of the default branch's own list, as the Review's wait and the hourly tick read it, in the same shape", async () => {
+    const client = repoWith(requiring("b", consoleCheck(42), "a"), {}, [{ requires: [consoleCheck(null), "c"] }]);
+
+    expect(await readDefaultBranchRequiredChecks(client, "owner/product")).toEqual({ kind: "read", required: ["b", "a", "c"] });
+  });
+
+  it("makes the read ask for nothing it didn't ask for before", async () => {
+    const callsOf = async (branch: CannedBranch, rules: CannedRules) => {
+      const client = repoWith(branch, { [head("1")]: {} }, rules);
+      await readRequiredChecks(client, "owner/product", [head("1")], NOW);
+      return client.calls;
+    };
+
+    expect(await callsOf(requiring("test", consoleCheck(42)), [{ requires: [consoleCheck(42)] }])).toEqual(await callsOf(requiring("test"), []));
   });
 });
 
@@ -505,6 +621,7 @@ describe("the Required checks fact of a head, for the Standing rule", () => {
       [head("2")]: "unread",
       [head("3")]: [],
     },
+    consoleCheck: { is: "not-required" },
   };
 
   it("is each Required check on the head, with when its deciding report was made", () => {
