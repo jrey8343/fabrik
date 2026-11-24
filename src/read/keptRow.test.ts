@@ -44,12 +44,14 @@ const BESIDE = { ...KEPT_BESIDE, followUps: [{ title: "Tidy up", body: "Later.",
 /** A row of this release: its Standing at the current schema, `shots` on it, and its Follow-up's kind. */
 const A_CURRENT_ROW: Row = { standing: THAT_BLOCKED_AT_SCHEMA_2, plainPullRequest: null, ...BESIDE, shots: null };
 
-/** A row of this release in a repo that declares `staging` (#855): a merged pull request's, on staging, with where to try it. */
-const A_ROW_AT_STAGING: Row = {
-  ...A_CURRENT_ROW,
-  standing: ON_STAGING_AT_SCHEMA_2,
-  staging: { site: "https://staging.shop.example", pages: [{ route: "/book", url: "https://staging.shop.example/book" }], shots: [], toTry: ["/book"] },
-};
+/** Where to try a merged pull request on staging as v4.3.0 kept it on its row: before a row's `staging` had `trial` (#965). */
+const STAGING_KEPT_AT_V4_3_0 = { site: "https://staging.shop.example", pages: [{ route: "/book", url: "https://staging.shop.example/book" }], shots: [], toTry: ["/book"] };
+
+/** A row of this release in a repo that declares `staging` (#855): a merged pull request's, on staging, with where to try it and no Trial steps. */
+const A_ROW_AT_STAGING: Row = { ...A_CURRENT_ROW, standing: ON_STAGING_AT_SCHEMA_2, staging: { ...STAGING_KEPT_AT_V4_3_0, trial: null } };
+
+/** That row as v4.3.0 kept it. */
+const A_ROW_AT_STAGING_KEPT_AT_V4_3_0 = { ...A_CURRENT_ROW, standing: ON_STAGING_AT_SCHEMA_2, staging: STAGING_KEPT_AT_V4_3_0 };
 
 describe("a kept row read back", () => {
   it("kept at v3.4.1, has its Standing at the current schema, no Evidence shots and its Follow-up an idea, with every other field as kept", () => {
@@ -114,6 +116,22 @@ describe("a kept row read back", () => {
   it("of this release at Staging comes back as it is, where to try it on staging with it", () => {
     expect(readRow(A_ROW_AT_STAGING)).toBe(A_ROW_AT_STAGING);
     expect(readRow(JSON.parse(JSON.stringify(A_ROW_AT_STAGING)))).toEqual(A_ROW_AT_STAGING);
+  });
+
+  it("kept at Staging before a row's `staging` had `trial` (#965), reads with no Trial steps, its site, its pages, its shots and what to try as kept", () => {
+    const read = readRow(JSON.parse(JSON.stringify(A_ROW_AT_STAGING_KEPT_AT_V4_3_0)));
+
+    expect(read).toEqual({ ...A_CURRENT_ROW, standing: ON_STAGING_AT_SCHEMA_2, staging: { site: "https://staging.shop.example", pages: [{ route: "/book", url: "https://staging.shop.example/book" }], shots: [], toTry: ["/book"], trial: null } });
+    expect(read?.staging).toHaveProperty("trial", null);
+    expect(() => joinStaging([read!], { deployments: aDeploymentsRead({}), mainChecks: null }, "2026-11-08T13:00:00Z")).not.toThrow();
+  });
+
+  it("of this release at Staging comes back as it is with its Trial steps, each with its link", () => {
+    const trial = { summary: "A patient can now book a visit.", steps: [{ do: "Pick tomorrow.", expect: "Its free times.", route: "/book", url: "https://staging.shop.example/book" }, { do: "Open any patient.", expect: "The visit under Upcoming.", route: null, url: null }] };
+    const withSteps: Row = { ...A_ROW_AT_STAGING, staging: { ...STAGING_KEPT_AT_V4_3_0, trial } };
+
+    expect(readRow(withSteps)).toBe(withSteps);
+    expect(readRow(JSON.parse(JSON.stringify(withSteps)))).toEqual(withSteps);
   });
 
   it.each([

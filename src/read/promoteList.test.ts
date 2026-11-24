@@ -159,6 +159,36 @@ describe("the Promote list", () => {
     }
   });
 
+  it("gives an agent entry, under staging, the Trial steps its row has there, each with its staging link, null for one whose pull request keeps none, and a Plain entry none (#965)", () => {
+    const steps = {
+      summary: "A shopper now sees the cart's total before paying.",
+      steps: [
+        { route: "/cart", do: "Add any product.", expect: "The total under the list, with tax." },
+        { do: "Open any order from the list.", expect: "The same total on its page." },
+      ],
+    };
+    const plain = [{ number: 62, title: "Fix a typo", mergedAt: "2026-11-05T12:00:00Z", author: "operator", headRef: "fix-typo", closes: [] }];
+    const withSteps = facts({ trialStepsMarkers: [{ pullRequest: 60, marker: steps }, { pullRequest: 62, marker: steps }], plain, mergedSince: 11 });
+    const rows = rowsOf(withSteps, null, null, null, NOW, STAGING_READ);
+    const rowOf = (pullRequest: number) => rows.find(({ standing }) => standing.pullRequest === pullRequest);
+
+    const { entries } = promoteListOf(withSteps, STAGING_READ, NOW) ?? { entries: [] };
+
+    expect(entryOf(entries, 60)?.staging.trial).toEqual({
+      summary: "A shopper now sees the cart's total before paying.",
+      steps: [
+        { do: "Add any product.", expect: "The total under the list, with tax.", route: "/cart", url: "https://staging.shop.example/cart" },
+        { do: "Open any order from the list.", expect: "The same total on its page.", route: null, url: null },
+      ],
+    });
+    expect(rowOf(60)?.staging?.trial).toEqual(entryOf(entries, 60)?.staging.trial);
+    expect(entryOf(entries, 59)?.staging.trial).toBeNull();
+    expect(rowOf(59)?.staging?.trial).toBeNull();
+    // Whether it needs a Staging trial is still what an entry's own `trial` says.
+    expect(entryOf(entries, 60)?.trial).toEqual({ needed: true, why: "ui-evidence" });
+    expect(entries.find((entry) => entry.pullRequest === 62)).toEqual({ is: "plain", pullRequest: 62, title: "Fix a typo", mergedAt: "2026-11-05T12:00:00Z", kind: "other" });
+  });
+
   describe("an agent entry's trial result, which is what its Standing at Staging says for the same facts", () => {
     const rows = rowsOf(facts(), null, null, null, NOW, STAGING_READ);
     const standingOf = (pullRequest: number) => rows.find(({ standing }) => standing.pullRequest === pullRequest)?.standing;

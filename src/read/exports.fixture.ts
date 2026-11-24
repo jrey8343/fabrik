@@ -136,6 +136,8 @@ import {
   TRIAL_PROBLEM_LABEL,
   trialProblemIn,
   trialProblemLine,
+  trialStepsIn,
+  trialStepsMarker,
   weeksEndingAt,
   wordStanding,
 } from "./index.ts";
@@ -212,6 +214,8 @@ import type {
   StoreFacts,
   StoreStandingFacts,
   SubscriptionReading,
+  TrialStep,
+  TrialSteps,
   Week,
   WorkOutcome,
 } from "./index.ts";
@@ -390,10 +394,23 @@ const A_MERGE_AT_PRODUCTION = homeFactsOf({
 const A_DEPLOYMENTS_READ = aDeploymentsRead({ ["m".repeat(40)]: aDeployOf({ is: "running", deployment: 901, commit: "m".repeat(40), at: "2026-11-09T11:40:00Z" }) }, NOW) satisfies DeploymentsRead;
 
 /**
+ * Pull request 50's Trial steps (#965): one step that starts on a page with a
+ * fixed address, and one on a record's page, which names no route and says
+ * how to reach the record.
+ */
+const SOME_TRIAL_STEPS = {
+  summary: "A patient can now book a visit and see it on their notes.",
+  steps: [
+    { route: "/book", do: "Pick tomorrow, then any free time.", expect: "A page saying the visit is booked, with its time." },
+    { do: "Open any patient from the list, then their notes.", expect: "The visit under Upcoming." },
+  ],
+} as const satisfies TrialSteps;
+
+/**
  * Agent pull request 50 for Ticket 7, merged at 11:30 with merge commit `m…`
- * and carrying UI evidence of two routes, in a repo declaring production in
- * environment `production` and staging in `staging`, and naming the Main
- * check `e2e`.
+ * and carrying UI evidence of two routes and those Trial steps, in a repo
+ * declaring production in environment `production` and staging in `staging`,
+ * and naming the Main check `e2e`.
  */
 const A_MERGE_AT_STAGING = homeFactsOf({
   kit: {
@@ -412,6 +429,7 @@ const A_MERGE_AT_STAGING = homeFactsOf({
   },
   mergedLastDay: [aMergedLastDay("2026-11-09T11:30:00Z")],
   evidenceMarkers: [{ pullRequest: 50, marker: { run: 4410, artifact: 901, failure: null, routes: ["/book", "/patients/[patientId]/notes"] } }],
+  trialStepsMarkers: [{ pullRequest: 50, marker: SOME_TRIAL_STEPS }],
 });
 
 /** `owner/product`'s Main checks read at NOW: `e2e` green on commit `d…`. */
@@ -515,7 +533,7 @@ const AN_UNTRIED_STANDING = {
   },
 } satisfies Standing;
 
-/** Agent pull request 50's entry in that repo's Promote list: on staging, carrying UI evidence of two routes, and untried. */
+/** Agent pull request 50's entry in that repo's Promote list: on staging, carrying UI evidence of two routes and its Trial steps, each with its page on staging or none, and untried. */
 const AN_UNTRIED_ENTRY = {
   is: "agent",
   pullRequest: 50,
@@ -543,6 +561,13 @@ const AN_UNTRIED_ENTRY = {
     ],
     shots: [],
     toTry: ["/book", "/patients/[patientId]/notes"],
+    trial: {
+      summary: "A patient can now book a visit and see it on their notes.",
+      steps: [
+        { do: "Pick tomorrow, then any free time.", expect: "A page saying the visit is booked, with its time.", route: "/book", url: "https://staging.shop.example/book" },
+        { do: "Open any patient from the list, then their notes.", expect: "The visit under Upcoming.", route: null, url: null },
+      ],
+    },
   },
   trial: { needed: true, why: "ui-evidence" },
   result: { is: "untried" },
@@ -1423,6 +1448,17 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       NOW,
     ),
 
+  // Trial steps
+
+  trialStepsIn: () =>
+    trialStepsIn(
+      `The Implementer built the booking page.\n\n${trialStepsMarker(SOME_TRIAL_STEPS)}`,
+    ),
+  trialStepsMarker: () =>
+    trialStepsMarker(
+      SOME_TRIAL_STEPS,
+    ),
+
   // The Round read
 
   readRound: () =>
@@ -1893,7 +1929,7 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
       pullRequest: 47,
       ticket: 6,
       evidence: null,
-      staging: { site: "https://staging.shop.example", pages: [], shots: [], toTry: [] },
+      staging: { site: "https://staging.shop.example", pages: [], shots: [], toTry: [], trial: null },
       trial: { needed: false, why: "no-screen" },
       result: { is: "no-screen" },
       standing: {
@@ -1903,6 +1939,12 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     },
     A_PLAIN_ENTRY,
   ] satisfies readonly PromoteEntry[],
+
+  // Trial steps
+
+  TrialSteps: SOME_TRIAL_STEPS satisfies TrialSteps,
+  // One of each: with the page it starts on, and with none.
+  TrialStep: SOME_TRIAL_STEPS.steps satisfies readonly TrialStep[],
 
   // The Round read
 
