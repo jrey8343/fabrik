@@ -118,7 +118,12 @@ export interface KitConfig {
   readonly preview: PreviewConfig | null;
   /** Where the Product repo's production is (ADR-0021); null declares nothing, and nothing in the Loop reads it. */
   readonly production: ProductionConfig | null;
-  /** Where the Product repo's staging environment is (ADR-0038); null declares none, and nothing in the Loop reads it. */
+  /**
+   * Where the Product repo's staging environment is (ADR-0038); null declares
+   * none. Nothing in the Loop reads the environment itself: only whether it
+   * is declared, which is when an Implementer is asked for Trial steps and
+   * the push job keeps them on the pull request (ADR-0040).
+   */
   readonly staging: StagingConfig | null;
   /**
    * The Operator's time zone (ADR-0023), an IANA zone every time the Kit shows
@@ -324,7 +329,9 @@ export interface ProductionConfig {
  * carry in GitHub's Deployments, where the Operator tries a merged change by
  * hand before they deploy it to production (ADR-0038). Unlike production's,
  * its environment is never null: a staging link that can't say whether
- * anything is deployed is no use. Only a reader of the Kit acts on it.
+ * anything is deployed is no use. Only a reader of the Kit acts on its
+ * address and its deploys; the Loop asks only whether the block is there
+ * (ADR-0040).
  */
 export interface StagingConfig {
   /** The staging site's http(s) base address, which staging links are built from. */

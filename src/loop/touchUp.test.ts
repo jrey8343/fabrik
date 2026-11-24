@@ -6,6 +6,7 @@ import { A, B, C, D, type Fixes, finished, PullRequestOnGitHub, requestedChanges
 import { aCausedRedCheckReview, anIssue, aPullRequest, HEAD_SHA, kitConfig, snapshotOf, snapshotOfPullRequest, verdictsPostedIn } from "../__fixtures__/snapshots.ts";
 import { emptyDiffIn, implementPushOf } from "../github/apply.ts";
 import { verdictsIn } from "../github/threads.ts";
+import { trialStepsMarker } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import type { Action, BranchChanges, LoopEvent, Plan, PullRequestSnapshot, Snapshot, VerdictRecord } from "./types.ts";
 
@@ -530,6 +531,22 @@ describe("A body-only Touch-up (#751)", () => {
     expect(postedBy(plan)).toEqual([]);
     expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "push-branch" }));
     expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "mark-ready-for-review" }));
+  });
+
+  it("keeps the Trial steps it gave on the body it writes, in a repo that declares staging, so a finding about them is fixed with no commit (#963)", async () => {
+    const thread = new Thread();
+    await thread.reviewed(BODY_ONLY);
+    const { touchUp, retryFlaw } = await thread.implement();
+    const trial = { summary: "An empty cart says it is empty.", steps: [{ route: "/cart", do: "Open the cart with nothing in it.", expect: "It says the cart is empty." }] };
+    const run = finished(B, { touchUp, retryFlaw }, thread.headSha);
+    const event = { ...run, changes: NOTHING, output: JSON.stringify({ ...JSON.parse(run.output), trial }) };
+    const snapshot = await thread.onGitHub.pushJobSnapshot();
+    const bodyIn = (config = kitConfig()) => actionsOf(planFor(event, snapshot, config)).flatMap((action) => (action.kind === "edit-issue-body" ? [action.body] : []));
+
+    expect(bodyIn(kitConfig({ staging: { url: "https://staging.shop.example", environment: "staging" } }))).toEqual([
+      `Shows the empty state for an empty cart.\n\n${trialStepsMarker(trial)}\n\nCloses #7`,
+    ]);
+    expect(bodyIn()).toEqual(["Shows the empty state for an empty cart.\n\nCloses #7"]);
   });
 
   it("is no empty diff and pushes no head, so its Run record says neither", async () => {

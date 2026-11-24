@@ -15,7 +15,7 @@ import {
   requestChangesRunIn,
   verdictsIn,
 } from "../github/threads.ts";
-import { verdictMarker } from "./markers.ts";
+import { trialStepsMarker, verdictMarker } from "./markers.ts";
 import { planFor } from "./rules.ts";
 import { handBackMarkIn } from "./markers.ts";
 import type { Action, BranchChanges, LoopEvent, NamedPullRequestSnapshot, Plan, PullRequestSnapshot, Snapshot } from "./types.ts";
@@ -187,6 +187,20 @@ describe("A conflict-only run", () => {
     expect(thread.comments.at(-1)).toContain("The Implementer rebased `fabrik/ticket-7` onto `main` at 9999999 and resolved its conflicts");
     expect(thread.comments.some((comment) => comment.includes("fabrik:conflict-run-ended") || comment.includes("fabrik:hand-back"))).toBe(false);
     expect(thread.labels).not.toContain("ready-for-human");
+  });
+
+  it("that lands keeps the Trial steps it gave on the body it writes, in a repo that declares staging (#963)", () => {
+    const thread = new Thread();
+    thread.mainMovesAndConflicts(MAIN);
+    const trial = { summary: "An empty cart says it is empty.", steps: [{ route: "/cart", do: "Open the cart with nothing in it.", expect: "It says the cart is empty." }] };
+    const run = conflictRunFinished(RESOLVED);
+    const event = { ...run, output: JSON.stringify({ ...JSON.parse(run.output), trial }) };
+    const bodyIn = (config = kitConfig()) => actionsOf(planFor(event, thread.ticketSnapshot(), config)).flatMap((action) => (action.kind === "edit-issue-body" ? [action.body] : []));
+
+    expect(bodyIn(kitConfig({ staging: { url: "https://staging.shop.example", environment: "staging" } }))).toEqual([
+      `Handles the empty cart.\n\n${trialStepsMarker(trial)}\n\nCloses #7`,
+    ]);
+    expect(bodyIn()).toEqual(["Handles the empty cart.\n\nCloses #7"]);
   });
 
   it("uses no retry itself, but a flaw on its push calls for one from the Ticket's pool of two, like any other (#415)", () => {

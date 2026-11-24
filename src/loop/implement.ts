@@ -33,7 +33,9 @@ import {
   stepUpReasonMarker,
   touchUpBodyOnlyMarker,
   touchUpPushMarker,
+  trialStepsMarker,
   UNMARKED_RETRY_PUSH,
+  withoutTrialSteps,
 } from "./markers.ts";
 import { type HeldOn, heldOn, heldUntilReset, heldUntilThen, onceReset, startsWhen } from "./hold.ts";
 import { backAtGateOnStandingPass } from "./digest.ts";
@@ -224,7 +226,7 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
         head: branch,
         base,
         title: withoutMentions(title),
-        body: pullRequestBody(summary, issueNumber, section, whole?.changedTests ?? changes.changedTests ?? [], event.keptBranch?.pullRequest ?? null),
+        body: pullRequestBody(summary, issueNumber, section, trialStepsFor(parsed.output, config), whole?.changedTests ?? changes.changedTests ?? [], event.keptBranch?.pullRequest ?? null),
         draft: true,
       },
       ...previewToLink(section, config, branch, null),
@@ -474,7 +476,17 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       const evidence = evidenceFor(event, config, parsed.output, pullRequest, null);
       return {
         kind: "act",
-        actions: bodyOnlyTouchUpLanded(pullRequest, inFlight.touchUp, issueNumber, branch, parsed.output, evidence?.section ?? null, changedTestsOf(pullRequest, changes), fixes.operatorComments),
+        actions: bodyOnlyTouchUpLanded(
+          pullRequest,
+          inFlight.touchUp,
+          issueNumber,
+          branch,
+          parsed.output,
+          evidence?.section ?? null,
+          trialStepsFor(parsed.output, config),
+          changedTestsOf(pullRequest, changes),
+          fixes.operatorComments,
+        ),
       };
     }
     return {
@@ -509,7 +521,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       {
         kind: "edit-issue-body",
         issue: pullRequest.number,
-        body: pullRequestBody(parsed.output.summary, issueNumber, section, changedTestsOf(pullRequest, changes)),
+        body: pullRequestBody(parsed.output.summary, issueNumber, section, trialStepsFor(parsed.output, config), changedTestsOf(pullRequest, changes)),
       },
       // Each Spin-off's issue, before the note that names it by its number (#884).
       ...setAside.actions,
@@ -573,13 +585,14 @@ function bodyOnlyTouchUpLanded(
   branch: string,
   output: { readonly summary: string; readonly fix?: string; readonly operatorCommentsConsidered?: readonly string[] },
   evidence: string | null,
+  trialSteps: string | null,
   changedTests: readonly string[],
   operatorComments: NonNullable<ImplementRunFinished["fixes"]>["operatorComments"],
 ): Action[] {
   const { number, headSha } = pullRequest;
   return [
     // The body goes first, so the Review its label starts reads the new one.
-    { kind: "edit-issue-body", issue: number, body: pullRequestBody(output.summary, issueNumber, evidence, changedTests) },
+    { kind: "edit-issue-body", issue: number, body: pullRequestBody(output.summary, issueNumber, evidence, trialSteps, changedTests) },
     {
       kind: "comment",
       issue: number,
@@ -902,7 +915,11 @@ function landConflictRun(
   return {
     kind: "act",
     actions: [
-      { kind: "edit-issue-body", issue: pullRequest.number, body: pullRequestBody(output.summary, event.issue, section, changedTestsOf(pullRequest, changes)) },
+      {
+        kind: "edit-issue-body",
+        issue: pullRequest.number,
+        body: pullRequestBody(output.summary, event.issue, section, trialStepsFor(output, config), changedTestsOf(pullRequest, changes)),
+      },
       {
         kind: "comment",
         issue: pullRequest.number,
@@ -944,27 +961,42 @@ function pushedHead({ pushedHead: head }: BranchChanges): string[] {
 /**
  * An agent PR's body: the Implementer's summary, then the Changed existing
  * tests section when its runs changed any (#463), then the evidence section
- * when the run was UI, then the Closes line, so merging the PR closes the
- * Ticket and starts the next Dispatch check. The summary is agent text, so it
- * keeps no section or marker of its own: only the Kit's say which existing
- * tests changed and where the evidence is kept.
+ * when the run was UI, then the marker that keeps its Trial steps when the
+ * run gave them (#963, trialStepsFor), then the Closes line, so merging the
+ * PR closes the Ticket and starts the next Dispatch check. The summary is
+ * agent text, so it keeps no section or marker of its own: only the Kit's
+ * say which existing tests changed, where the evidence is kept and what the
+ * Trial steps are.
  */
 function pullRequestBody(
   summary: string,
   issueNumber: number,
   evidence: string | null,
+  trialSteps: string | null,
   changedTests: readonly string[],
   carriesOn: number | null = null,
 ): string {
   const tests = changedTestsSection(changedTests);
   return [
-    withoutChangedTests(withoutEvidence(withoutMentions(summary))),
+    withoutTrialSteps(withoutChangedTests(withoutEvidence(withoutMentions(summary)))),
     ...(tests === null ? [] : [tests]),
     ...(evidence === null ? [] : [evidence]),
+    ...(trialSteps === null ? [] : [trialSteps]),
     // The Kit's line, never the agent's, naming the PR a Kept-branch start's branch came from (#536).
     ...(carriesOn === null ? [] : [`Carries on from #${carriesOn}.`]),
     `Closes #${issueNumber}`,
   ].join("\n\n");
+}
+
+/**
+ * The marker that keeps a run's Trial steps on its pull request (#963), or
+ * null when the body carries none: the run gave no `trial` the contract
+ * took, or the Product repo declares no `staging`, whose pull requests are
+ * as they were. Each run's body is written whole, so a later run's marker
+ * takes the earlier one's place, and a run that gives none leaves none.
+ */
+function trialStepsFor({ trial }: ImplementOutput, config: KitConfig): string | null {
+  return trial === undefined || config.staging === null ? null : trialStepsMarker(trial);
 }
 
 /** The existing tests a run on its agent PR leaves the body listing: those the PR's marker lists, then the run's own. */
