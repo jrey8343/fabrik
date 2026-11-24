@@ -1,6 +1,7 @@
 // Setup's planner. Pure, no I/O: given what a Product repo holds now
 // and the Kit being set up, it returns every step that would leave the repo
 // ready to run the Loop, and nothing a working install already has.
+import { CONSOLE_CHECK } from "../kit/consoleCheck.ts";
 import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, type ProductionConfig, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH, type StagingConfig } from "../kit/config.ts";
 import { ALL_LABELS, type Label as LoopLabel, LOOP_LABELS, READY_FOR_AGENT } from "../loop/labels.ts";
 import { isTimeZone } from "../loop/readable.ts";
@@ -723,22 +724,37 @@ function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupA
   const config = resolveKitConfig({ config: configText, skillsLock: file(state, SKILLS_SOURCES_LOCK_PATH) });
   if (!config.ok) notes.push(`${KIT_CONFIG_PATH} is invalid, so the Required checks it lists weren't added to the branch: ${config.errors.join("; ")}`);
   const listedChecks = config.ok ? config.config.sandbox.checks : [];
+  // The Console's App, where the Kit config names it: Setup then requires the
+  // Console check from it, and owns the App beside that one check (ADR-0019).
+  const consoleApp = config.ok ? config.config.console.appId : null;
   const current = state.protection;
   const found = current ?? UNPROTECTED;
-  const required = [...new Set([...requiredChecks(found), ...listedChecks])];
-  if (required.length === 0) {
+  const required = [...new Set([...requiredChecks(found), ...listedChecks, ...(consoleApp === null ? [] : [CONSOLE_CHECK])])];
+  if (required.filter((context) => context !== CONSOLE_CHECK).length === 0) {
     notes.push(
       `${state.repo.defaultBranch} has no Required checks yet: list the CI checks that must pass in sandbox.checks in ${KIT_CONFIG_PATH}, then run setup again.`,
     );
   }
+  const consoleCheckFound = found.required_status_checks?.checks.find((check) => check.context === CONSOLE_CHECK);
+  const consoleCheckHeld = consoleApp === null || consoleCheckFound?.app_id === consoleApp;
   const satisfied =
     current !== null &&
     current.required_pull_request_reviews !== null &&
     bypassAllowances(current).length === 0 &&
     listedChecks.every((check) => requiredChecks(current).includes(check)) &&
+    consoleCheckHeld &&
     current.enforce_admins;
   if (satisfied) return [];
+  if (!consoleCheckHeld) {
+    notes.push(
+      `The Kit config names the Console's App (console.app_id is ${consoleApp}), so from this run on ${state.repo.defaultBranch} merges only from the Console: GitHub refuses a merge at any head that App hasn't passed, from github.com, gh and an Operator session alike, the setup PR's included. Setup can't check the Console is ready, so look for this repo in the Console before you go on. Until the Console can pass a head here, the only way to merge is the Merge gate's by-hand way past.`,
+    );
+  }
   const checks = found.required_status_checks;
+  const entry = (context: string) =>
+    context === CONSOLE_CHECK && consoleApp !== null
+      ? { context, app_id: consoleApp }
+      : (checks?.checks.find((check) => check.context === context) ?? { context });
   // Empty lists take away any bypass. GitHub rejects the field (HTTP 422) on a
   // personal account's repo, which can't have bypass allowances anyway.
   const { bypass_pull_request_allowances: _, ...reviews } = found.required_pull_request_reviews ?? NEW_PULL_REQUEST_RULE;
@@ -750,7 +766,7 @@ function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupA
         ? null
         : {
             strict: checks?.strict ?? false,
-            checks: required.map((context) => checks?.checks.find((check) => check.context === context) ?? { context }),
+            checks: required.map(entry),
           },
     required_pull_request_reviews: {
       ...reviews,
