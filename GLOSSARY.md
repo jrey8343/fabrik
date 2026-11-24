@@ -267,7 +267,7 @@ An Implementer run that fixes an Execution flaw on its Ticket's open pull reques
 _Avoid_: rerun, attempt
 
 **Touch-up**:
-An Implementer run that fixes an Execution flaw whose findings are all Small findings or marked missed earlier, on the same model as the run whose push it judged. It isn't a Retry and uses none of a Ticket's two; a Ticket gets two Touch-ups, and a third such flaw counts like any other. A Touch-up whose findings are all about the body may commit nothing: the Kit replaces the body with its summary, and the Review of the same head may give it a second Verdict.
+An Implementer run that fixes an Execution flaw whose findings are all Small findings or marked missed earlier, on the same model as the run whose push it judged. It isn't a Retry and uses none of a Ticket's two; a Ticket gets two Touch-ups, and a third such flaw counts like any other. A Touch-up whose findings are all about the body may commit nothing: the Kit replaces the body with its summary, and the Review of the same head may give it a second Verdict. So may the Retry a third flaw of such findings calls for, which still counts as a Retry.
 _Avoid_: free retry, nit fix, polish run
 
 **Design flaw**:

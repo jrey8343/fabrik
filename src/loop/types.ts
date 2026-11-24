@@ -981,11 +981,12 @@ export interface PullRequestSnapshot {
   readonly pushedSinceVerdict: boolean;
   /**
    * The head a body-only Touch-up's note since its latest Verdict names
-   * (#751), or null when none came since. That Touch-up committed nothing and
-   * rewrote the body, so it is no longer in flight, though nothing was
-   * pushed, and a Verdict may land on that head again.
+   * (#751), or a body-only Retry's (#962), or null when none came since.
+   * That run committed nothing and rewrote the body, so it is no longer in
+   * flight, though nothing was pushed, and a Verdict may land on that head
+   * again.
    */
-  readonly bodyOnlyTouchUpHead: string | null;
+  readonly bodyOnlyRunHead: string | null;
   /**
    * The Kit's note since its latest Verdict on the Retry that Verdict called
    * for, which never started (#416), or null: `restarted` when the Kit re-added

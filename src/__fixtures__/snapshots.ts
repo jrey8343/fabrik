@@ -135,7 +135,7 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     conflictRunInFlight: null,
     conflictRunOnUnreviewedDraft: false,
     pushedSinceVerdict: false,
-    bodyOnlyTouchUpHead: null,
+    bodyOnlyRunHead: null,
     retryNoteSinceVerdict: null,
     verdictPostedAt: null,
     headPushedAt: null,

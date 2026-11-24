@@ -5,7 +5,7 @@
 // the Kit. Only the Kit's own signs restart the clock (ADR-0007): a person's
 // comment, label or review never does.
 import type { RunInFlightFact } from "../github/snapshot.ts";
-import { bodyOnlyTouchUpHeadIn, countLandedNothing, pushedSinceVerdictIn, retryNoteSinceVerdictIn } from "../github/threads.ts";
+import { bodyOnlyRunHeadIn, countLandedNothing, pushedSinceVerdictIn, retryNoteSinceVerdictIn } from "../github/threads.ts";
 import { DESIGN_LABEL, DIGEST_LABEL, DISPATCH_LABEL, READY_FOR_AGENT, REPLAY_TRIGGER_LABEL, RESEARCH_LABEL, REVIEW_LABEL, TRIGGER_LABELS, type TriggerLabel } from "../loop/labels.ts";
 import { stuckTriggerReaddedMarker } from "../loop/markers.ts";
 import { stuckBarMinutes } from "../loop/recoveryWaits.ts";
@@ -159,8 +159,8 @@ function retrySilencesOn(pullRequest: OpenPullRequestFacts, facts: StandingFacts
   if (!pullRequest.draft || ticket === null || latest === undefined || latest.record.verdict !== "execution-flaw") return [];
   if (latest.record.ticketNotReady === true || latest.record.requestChangesFirst !== undefined) return [];
   const notes = pullRequest.comments.filter(({ author }) => author === facts.appLogin).map(({ body }) => body);
-  // A body-only Touch-up's note ends it too, though it pushed nothing (#751).
-  if (pushedSinceVerdictIn(notes) || bodyOnlyTouchUpHeadIn(notes) !== null || retryNoteSinceVerdictIn(notes) === "ended") return [];
+  // A body-only Touch-up's note ends it too, though it pushed nothing (#751), and so does a body-only Retry's (#962).
+  if (pushedSinceVerdictIn(notes) || bodyOnlyRunHeadIn(notes) !== null || retryNoteSinceVerdictIn(notes) === "ended") return [];
   if (pullRequest.draftEvents.some(({ kind, at }) => kind === "ready" && Date.parse(at) > Date.parse(latest.at))) return [];
   const open = facts.github.openIssues.find(({ number }) => number === ticket);
   if (open !== undefined && open.labels.length > 0 && !open.labels.includes(READY_FOR_AGENT)) return [];

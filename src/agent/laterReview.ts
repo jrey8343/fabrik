@@ -22,7 +22,7 @@ export type { PushingRun } from "../loop/runPushes.ts";
 
 /** One Implement run's `fix` comment, in the Kit's note of its push, as a later Review is given it. */
 export interface FixComment {
-  /** Which run it was: `Retry <n>`, `Touch-up <n>`, `Touch-up <n>, body only`, `Request-changes run` or `conflict-only run`. */
+  /** Which run it was: `Retry <n>`, `Touch-up <n>`, `Touch-up <n>, body only`, `Retry <n>, body only` (#962), `Request-changes run` or `conflict-only run`. */
   readonly run: string;
   /** The Kit's whole note of the push, which ends with what the run wrote. */
   readonly comment: string;
@@ -70,8 +70,7 @@ export async function readLaterReviewThread(
 
 /** How a fix comment names the run whose note it is (FixComment.run). */
 function pushingRunName({ run, retry, touchUp, bodyOnly }: RunPush): string {
-  if (run === "retry") return fixRunName("retry", retry, false);
-  if (run === "touch-up") return `${fixRunName("touch-up", touchUp, false)}${bodyOnly === true ? ", body only" : ""}`;
+  if (run === "retry" || run === "touch-up") return `${fixRunName(run, run === "retry" ? retry : touchUp, false)}${bodyOnly === true ? ", body only" : ""}`;
   return run === "request-changes-run" ? "Request-changes run" : "conflict-only run";
 }
 

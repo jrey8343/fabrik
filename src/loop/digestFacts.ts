@@ -11,7 +11,7 @@ import { operatorCommentId } from "../agent/operatorComments.ts";
 import { verdictsIn } from "../github/threads.ts";
 import { type ProductChange, productChangeBetween, type VerdictEffect, verdictEffect } from "./changeFingerprint.ts";
 import { listedFollowUpsIn } from "./followUps.ts";
-import { conflictAttemptIn, CONFLICT_RUN_MARKER, handBackMarkIn, openedSpinOffsAmong, REQUEST_CHANGES_RUN_MARKER, RETRY_PUSH_MARKER, startedReviewsIn, touchUpBodyOnlyIn, touchUpPushIn, UNMARKED_RETRY_PUSH } from "./markers.ts";
+import { conflictAttemptIn, CONFLICT_RUN_MARKER, handBackMarkIn, openedSpinOffsAmong, REQUEST_CHANGES_RUN_MARKER, retryBodyOnlyIn, RETRY_PUSH_MARKER, startedReviewsIn, touchUpBodyOnlyIn, touchUpPushIn, UNMARKED_RETRY_PUSH } from "./markers.ts";
 import { MAX_RETRIES, MAX_TOUCH_UPS, retryNumber, touchUpNumber } from "./retry.ts";
 import { isBrokenRun, type RequestChangesAsks, type Verdict, type VerdictRecord } from "./types.ts";
 import type { FollowUpKind } from "./verdict.ts";
@@ -104,6 +104,7 @@ export type RoundWhat =
   | "retry"
   | "touch-up"
   | "body-only-touch-up"
+  | "body-only-retry"
   | "request-changes-run"
   | "conflict-only-run"
   | "rebase"
@@ -116,7 +117,7 @@ export type RoundWhat =
 export interface Round {
   readonly who: RoundWho;
   readonly what: RoundWhat;
-  /** On a Retry's push: which of the Ticket's Retries it was. */
+  /** On a Retry's push, or a body-only Retry's note (#962): which of the Ticket's Retries it was. */
   readonly retry?: number;
   /** On a Touch-up's push (#750), or a body-only Touch-up's note (#751): which of the pull request's Touch-ups it was, as its note names it. */
   readonly touchUp?: number;
@@ -146,7 +147,12 @@ export interface RoundCounts {
   readonly passes: number;
   readonly executionFlaws: number;
   readonly designFlaws: number;
-  /** The Retries that pushed. One that changed nothing, or was a Broken run, is the Execution flaw the Kit gave for it. */
+  /**
+   * The Retries that pushed. One that changed nothing, or was a Broken run,
+   * is the Execution flaw the Kit gave for it. A body-only Retry (#962) pushed
+   * nothing, so it is a round of its own but not one of these, though it
+   * uses one up.
+   */
   readonly retries: number;
   /**
    * The Touch-ups that pushed (#750), which draw on their own pool, so are
@@ -331,10 +337,11 @@ export function noteRound(body: string, sofar: readonly string[], landedNothing:
   // A body-only Touch-up's note (#751) is its outcome, though it pushed nothing.
   const bodyOnly = touchUpBodyOnlyIn(body);
   if (bodyOnly !== null) return [{ ...row("implementer", "body-only-touch-up"), touchUp: bodyOnly.touchUp }];
-  if (body.startsWith(RETRY_PUSH_MARKER) || body.startsWith(UNMARKED_RETRY_PUSH)) {
-    // The Retry the latest Verdict called for, numbered as the Retry rules numbered it then.
-    return [{ ...row("implementer", "retry"), retry: retryNumber(verdictsIn(sofar).slice(0, -1), landedNothing) }];
-  }
+  // The Retry the latest Verdict called for, numbered as the Retry rules numbered it then.
+  const retry = () => retryNumber(verdictsIn(sofar).slice(0, -1), landedNothing);
+  // A body-only Retry's note (#962) is its outcome too, though it pushed nothing, and names no number of its own.
+  if (retryBodyOnlyIn(body) !== null) return [{ ...row("implementer", "body-only-retry"), retry: retry() }];
+  if (body.startsWith(RETRY_PUSH_MARKER) || body.startsWith(UNMARKED_RETRY_PUSH)) return [{ ...row("implementer", "retry"), retry: retry() }];
   if (body.startsWith(REQUEST_CHANGES_RUN_MARKER)) return [row("implementer", "request-changes-run")];
   if (body.startsWith(CONFLICT_RUN_MARKER)) return [row("implementer", "conflict-only-run")];
   if (conflictAttemptIn(body)?.outcome === "rebased") return [row("kit", "rebase")];

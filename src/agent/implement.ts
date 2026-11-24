@@ -155,7 +155,7 @@ export async function retryContext(pullRequestFile: string): Promise<PullRequest
       "## The findings to fix",
       "The latest Verdict on the PR, posted by the Kit:",
       latest.trimEnd(),
-      ...touchUpParts(verdictsIn([latest])[0]),
+      ...flawFixParts(verdictsIn([latest])[0]),
       ...fromOperator.parts,
     ],
     operatorComments: fromOperator.given,
@@ -166,10 +166,21 @@ export async function retryContext(pullRequestFile: string): Promise<PullRequest
  * The block a Touch-up's prompt carries (#750): which of the Ticket's two it
  * is, and whether every finding is about the PR's body (#751), both read from
  * the Verdict's marker, which the Kit wrote from the findings' tags, so the
- * run never judges either for itself. None on a Retry.
+ * run never judges either for itself. A Retry gets none, but for the one
+ * whose findings are all about the body (#962, ADR-0040): the pull request's
+ * Touch-ups being used, the flaw called for a Retry, which has no more to
+ * commit than a Touch-up had, so its block has it commit nothing too, and the
+ * Kit lands it as it lands that Touch-up (src/loop/implement.ts).
  */
-function touchUpParts(flaw: VerdictRecord | undefined): string[] {
-  if (flaw?.touchUp === undefined) return [];
+function flawFixParts(flaw: VerdictRecord | undefined): string[] {
+  if (flaw?.touchUp === undefined) {
+    return bodyOnly(flaw?.tags)
+      ? [
+          "## Every finding is about the pull request's body",
+          "Every finding above is about the pull request's body (`[small: body]`), so commit nothing: write a `summary` that matches the branch, which replaces the body, and a `fix` saying what you corrected. The Kit then starts the Review of the same head. This run is a Retry all the same, as the pull request's two Touch-ups are used.",
+        ]
+      : [];
+  }
   return [
     "## This run is a Touch-up",
     `This run is ${fixRunName("touch-up", flaw.touchUp)}: every finding above is tagged small or missed earlier, so fixing them uses none of the Ticket's two Retries. Work as "When you're touching up a PR" says.`,
@@ -693,8 +704,8 @@ function trialStepsPart(ui: UiConfig | null): string[] {
     "- A step may give `route`, the page it starts on: a path starting with `/`, such as `/book`, never a full URL, and with no dynamic segment such as `[patientId]`. The Kit links it on the staging site, and leaves off a `route` that is neither. Leave it out when the step carries on from where the one before it ended.",
     "- A step on a record's page gives the nearest page with a fixed address as its `route`, and says in `do` how to reach the record from there, such as \"Open any patient from the list\". Staging has its own records, so never put a record's id in a `route`.",
     "- On a retry, a Touch-up, a Request-changes run or a conflict-only run, write `trial` again for the pull request as it now stands, as you write `summary`: start from \"The pull request's current Trial steps\" when the end of this prompt has it, and change what no longer holds. A run that leaves `trial` out leaves the pull request with none.",
-    // The Reviewer judges them (#964, src/agent/review.ts), and tags its finding as one about the body, which a Touch-up may fix with no commit.
-    '- A finding about the Trial steps, under "The findings to fix", is fixed by giving `trial` again with what it names put right, on a retry and on a Touch-up alike. No commit fixes one: the Kit keeps the steps your output gives, so a Touch-up told to commit nothing gives `trial` all the same.',
+    // The Reviewer judges them (#964, src/agent/review.ts), and tags its finding as one about the body, which a Touch-up may fix with no commit, as may the Retry such a flaw calls for once the Touch-ups are used (#962).
+    '- A finding about the Trial steps, under "The findings to fix", is fixed by giving `trial` again with what it names put right, on a retry and on a Touch-up alike. No commit fixes one: the Kit keeps the steps your output gives, so a Touch-up or a retry told to commit nothing gives `trial` all the same.',
     "",
     "Add it to your output object beside the other fields:",
     "",

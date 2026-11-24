@@ -115,8 +115,8 @@ function stagingTrialGivenOf(value: unknown): StagingTrialGiven | null {
  * in them; on one that will not, it says not to judge them. A finding about
  * them is tagged `[small: body]`, as the body is where they are kept: the
  * run that fixes it gives `trial` again and has nothing to commit, which
- * only a Touch-up of body findings may do (bodyOnly, src/loop/retry.ts), and
- * a Retry that committed nothing would be an empty diff. Nothing for a
+ * a Touch-up of body findings may do, and the Retry such a flaw calls for
+ * once the Touch-ups are used (bodyOnly, src/loop/retry.ts). Nothing for a
  * Review given neither, as in a repo with no `staging` block, whose prompt
  * is as it was.
  */

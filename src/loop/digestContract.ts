@@ -452,6 +452,7 @@ const WHAT: Readonly<Record<Round["what"], string>> = {
   retry: "Retry",
   "touch-up": "Touch-up",
   "body-only-touch-up": "Body-only Touch-up",
+  "body-only-retry": "Body-only Retry",
   "request-changes-run": "A Request-changes run",
   "conflict-only-run": "A conflict-only run",
   rebase: "A rebase onto `main`",

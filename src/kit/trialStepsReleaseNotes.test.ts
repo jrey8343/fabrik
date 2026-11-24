@@ -209,10 +209,20 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Trial steps release notes, while
     expect(existsSync(join(KIT, SKILL))).toBe(true);
   });
 
-  it("say what changes with no action: nothing in the Loop where Kit config declares no staging, and in every repo the skill the hook installs and a summary's line that passes for the marker", async () => {
+  it("say what changes with no action: nothing of Trial steps where Kit config declares no staging, and in every repo the skill the hook installs, a summary's line that passes for the marker, and what a Retry of findings all about the body may do", async () => {
     const noAction = section("What changes with no action");
 
-    expect(noAction).toContain("Nothing in the Loop, in a Product repo whose Kit config declares no `staging`");
+    expect(noAction).toContain("Nothing of Trial steps, in a Product repo whose Kit config declares no `staging`");
+    expect(noAction).not.toContain("Nothing in the Loop");
+    expect(noAction).toContain("Three things come with the bump in every repo, with the block or without it:");
+    // The one rule of the Loop's that changes in every repo, which the Touch-ups' own tests hold (src/loop/touchUp.test.ts).
+    const retry = bullet(noAction, "A Retry of findings that are all about the pull request's body may commit nothing.");
+    expect(retry).toContain(`every finding tagged \`${FINDING_TAG_TEXT["small-body"]}\``);
+    expect(retry).toContain("once the pull request's two Touch-ups are used");
+    expect(retry).toContain("Such a Retry had nothing to commit, and got the Kit's own Execution flaw for committing nothing.");
+    expect(retry).toContain("It now lands as that Touch-up does: its prompt tells it to commit nothing, the Kit writes the body again from its output and starts the Review of the same head, and it is still one of the Ticket's two Retries.");
+    expect(retry).toContain("A Retry given any other finding is as it was");
+    expect(bodyOnly({ small: 1, missedEarlier: 0, counted: 0, smallBody: 1 })).toBe(true);
     // Its Implementer and its Reviewer are told what they were, and its rows are the rows they were, whatever a pull request keeps.
     expect(await toldTo(kitConfig({ ui: UI }))).not.toContain("Trial steps");
     expect(stagingTrialParts(null)).toEqual([]);
@@ -317,6 +327,11 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Trial steps release notes, while
       expect(bodyOnly({ small: 1, missedEarlier: 0, counted: 0, smallBody: 1 })).toBe(true);
       // Beside a finding of another kind the run has something to commit, and is no such Touch-up.
       expect(bodyOnly({ small: 2, missedEarlier: 0, counted: 0, smallBody: 1 })).toBe(false);
+      // Once the Touch-ups are used the flaw calls for a Retry, which may commit nothing by the same test.
+      expect(fixed).toContain("Once the pull request's two Touch-ups are used, such a flaw calls for a Retry, which may commit nothing too and is still one of the Ticket's two Retries.");
+      const known = bullet(section("Things to know"), "A finding about Trial steps alone uses a Touch-up.");
+      expect(known).toContain("calls for a Retry, which the Kit lands as it lands that Touch-up when it commits nothing");
+      expect(known).not.toContain("a Retry cannot fix one with no commit");
     });
 
     it("a pull request merged before the upgrade has none", () => {

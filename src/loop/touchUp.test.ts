@@ -602,3 +602,125 @@ describe("A body-only Touch-up (#751)", () => {
     expect(commentOf(plan)).toContain("Retry 1 of 2 starts now");
   });
 });
+
+describe("A Retry of findings that are all about the body (#962)", () => {
+  const BODY_ONLY = "verdict: execution-flaw\n\n- [small: body] The body's Trial steps name a button the branch doesn't add.";
+  const REVIEW_LABELED: LoopEvent = { kind: "pull-request-labeled", pullRequest: 50, label: "agent:review" };
+  const STAGING = { url: "https://staging.shop.example", environment: "staging" };
+  const TRIAL = { summary: "An empty cart says it is empty.", steps: [{ route: "/cart", do: "Open the cart with nothing in it.", expect: "It says the cart is empty." }] };
+
+  /** A thread whose two Touch-ups are used, each on a flaw about the body alone, and whose third such flaw called for Retry 1. */
+  async function touchUpsUsed(third = BODY_ONLY): Promise<Thread> {
+    const thread = new Thread();
+    for (const touchUp of [1, 2]) {
+      await thread.reviewed(BODY_ONLY);
+      const started = await thread.implement();
+      expect(started).toMatchObject({ touchUp });
+      await thread.finished(started, NOTHING, B);
+    }
+    expect(commentOf(await thread.reviewed(third))).toContain("Retry 1 of 2 starts now:");
+    return thread;
+  }
+
+  /** That thread once its Retry 1 committed nothing, and that run's plan. */
+  async function bodyOnlyRetryLanded(): Promise<{ thread: Thread; plan: Plan }> {
+    const thread = await touchUpsUsed();
+    const started = await thread.implement();
+    expect(started).toMatchObject({ retry: 1 });
+    expect(started).not.toHaveProperty("touchUp");
+    return { thread, plan: await thread.finished(started, NOTHING, B) };
+  }
+
+  it("that commits nothing lands as a body-only Touch-up does: the body is replaced with its summary, its fix goes under a body-only note on the head, and the Review of that head starts", async () => {
+    const { thread, plan } = await bodyOnlyRetryLanded();
+
+    expect(actionsOf(plan)).toContainEqual({ kind: "edit-issue-body", issue: 50, body: "Shows the empty state for an empty cart.\n\nCloses #7" });
+    const note = thread.comments.at(-1) ?? "";
+    expect(note.split("\n")[0]).toBe(`<!-- fabrik:retry-body-only ${A} -->`);
+    expect(note).toContain(
+      `The Implementer's Retry 1 of 2 on \`fabrik/ticket-7\` committed nothing, as every finding was about the PR's body: it rewrote the body to match ${A.slice(0, 7)}. Review runs again on ${A.slice(0, 7)}. It used one of the Ticket's two Retries.`,
+    );
+    expect(note).toContain("Guards the empty-cart case.");
+    expect(actionsOf(plan)).toContainEqual({ kind: "add-labels", issue: 50, labels: ["agent:review"] });
+    expect(postedBy(plan)).toEqual([]);
+    expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "push-branch" }));
+    expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "mark-ready-for-review" }));
+  });
+
+  it("keeps the Trial steps it gave on the body it writes, in a repo that declares staging, so a finding about them is fixed with no commit once the Touch-ups are used", async () => {
+    const thread = await touchUpsUsed();
+    const { retry, retryFlaw } = await thread.implement();
+    const run = finished(B, { retry, retryFlaw }, thread.headSha);
+    const event = { ...run, changes: NOTHING, output: JSON.stringify({ ...JSON.parse(run.output), trial: TRIAL }) };
+    const snapshot = await thread.onGitHub.pushJobSnapshot();
+    const bodyIn = (config = kitConfig()) => actionsOf(planFor(event, snapshot, config)).flatMap((action) => (action.kind === "edit-issue-body" ? [action.body] : []));
+
+    expect(bodyIn(kitConfig({ staging: STAGING }))).toEqual([`Shows the empty state for an empty cart.\n\n${trialStepsMarker(TRIAL)}\n\nCloses #7`]);
+    expect(bodyIn()).toEqual(["Shows the empty state for an empty cart.\n\nCloses #7"]);
+  });
+
+  it("is no empty diff and pushes no head, so its Run record says neither", async () => {
+    const { plan } = await bodyOnlyRetryLanded();
+    const event: LoopEvent = { ...finished(B, { retry: 1 }), output: "{}", changes: NOTHING };
+
+    expect(emptyDiffIn(plan)).toBe(false);
+    expect(implementPushOf(event, plan, { opened: null }, A)).toBeNull();
+  });
+
+  it("is no longer in flight at its note: agent:review starts a later Review of the same head, whose one Verdict lands on it", async () => {
+    const { thread } = await bodyOnlyRetryLanded();
+
+    const review = actionsOf(await thread.plan(REVIEW_LABELED)).find((action) => action.kind === "start-agent-run");
+
+    expect(review).toMatchObject({ role: "review", reviewKind: { kind: "later", lastJudged: { headSha: A } } });
+    expect(commentOf(await thread.reviewed("verdict: pass\n\nThe body now matches the branch."))).toContain("## Verdict: Pass");
+    expect(await thread.reviewed("verdict: pass\n\nStill fine.")).toEqual({ kind: "nothing", reason: `#50 already has a Verdict on ${A.slice(0, 7)}` });
+  });
+
+  it("still counts as the Retry it is: the next flaw calls for Retry 2 of 2, and the one after it sends the Ticket Back to design", async () => {
+    const { thread } = await bodyOnlyRetryLanded();
+
+    expect(commentOf(await thread.reviewed(BODY_ONLY))).toContain("Retry 2 of 2 starts now, stepped up:");
+    const second = await thread.implement();
+    expect(second).toMatchObject({ retry: 2 });
+    await thread.finished(second, NOTHING, B);
+    expect((thread.comments.at(-1) ?? "").split("\n")[0]).toBe(`<!-- fabrik:retry-body-only ${A} -->`);
+    const third = await thread.reviewed(BODY_ONLY);
+
+    expect(commentOf(third)).not.toContain("starts now");
+    expect(actionsOf(third)).toContainEqual(expect.objectContaining({ kind: "add-labels", issue: 7, labels: expect.arrayContaining(["needs-design"]) }));
+  });
+
+  it("that commits lands as any Retry's push does", async () => {
+    const thread = await touchUpsUsed();
+
+    const plan = await thread.finished(await thread.implement(), BUILT, B);
+
+    expect(actionsOf(plan)).toContainEqual({ kind: "push-branch", branch: "fabrik/ticket-7" });
+    expect((thread.comments.at(-1) ?? "").split("\n")[0]).toBe("<!-- fabrik:retry-push -->");
+  });
+
+  it.each([
+    ["a finding about a comment beside the body's", "verdict: execution-flaw\n\n- [small: body] The body is stale.\n- [small: comment] So is the doc comment on `total()`."],
+    ["an untagged finding beside the body's", "verdict: execution-flaw\n\n- [small: body] The body is stale.\n- The empty-cart case throws."],
+  ])("one with %s that commits nothing gets the empty-diff Verdict, which counts, as before", async (_, flaw) => {
+    const thread = await touchUpsUsed(flaw);
+
+    const plan = await thread.finished(await thread.implement(), NOTHING, B);
+
+    expect(commentOf(plan)).toContain("The Implementer's retry on `fabrik/ticket-7` committed no change, so there was nothing to review.");
+    expect(postedBy(plan).at(-1)).toMatchObject({ source: "empty-diff", verdict: "execution-flaw" });
+    expect(commentOf(plan)).toContain("Retry 2 of 2 starts now");
+  });
+
+  it("a Retry of a flaw the Kit gave itself, which carries no tags, that commits nothing gets the empty-diff Verdict", async () => {
+    const thread = await touchUpsUsed("verdict: execution-flaw\n\n- The empty-cart case throws.");
+    // Retry 1's empty diff is the Kit's own flaw, and calls for Retry 2.
+    await thread.finished(await thread.implement(), NOTHING, B);
+
+    const plan = await thread.finished(await thread.implement(), NOTHING, B);
+
+    expect(postedBy(plan).at(-1)).toMatchObject({ source: "empty-diff", verdict: "execution-flaw" });
+    expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "edit-issue-body" }));
+  });
+});

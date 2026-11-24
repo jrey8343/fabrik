@@ -4,7 +4,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
-import { trialStepsMarker } from "../loop/markers.ts";
+import { retryBodyOnlyMarker, trialStepsMarker } from "../loop/markers.ts";
+import { bodyOnly } from "../loop/retry.ts";
 import { FINDING_TAG_TEXT } from "../loop/verdict.ts";
 
 const root = new URL("../../", import.meta.url);
@@ -103,8 +104,48 @@ describe("The Trial steps' words and decision (#962)", () => {
     const consequences = adr.slice(adr.indexOf("\n## Consequences\n"));
 
     expect(consequences).toContain(
-      `- A finding about Trial steps is one about the pull request's body, where they are kept, so the Reviewer tags it \`${FINDING_TAG_TEXT["small-body"]}\`. The run that fixes it gives \`trial\` again and has nothing to commit for it, which a Touch-up whose findings are all about the body may do. A Retry may not, as one that commits nothing is an empty diff, so a finding about Trial steps reaches a Retry only beside a finding in the code.`,
+      `- A finding about Trial steps is one about the pull request's body, where they are kept, so the Reviewer tags it \`${FINDING_TAG_TEXT["small-body"]}\`. The run that fixes it gives \`trial\` again and has nothing to commit for it, which a Touch-up whose findings are all about the body may do.`,
     );
+    expect(consequences).not.toContain("reaches a Retry only beside a finding in the code");
+  });
+
+  it("says in its ADR what a Retry of findings all about the body may do, once the Touch-ups are used, and that the rule is the Loop's in every repo", () => {
+    const adr = read("docs/adr/0040-the-implementer-writes-a-staging-trials-steps-and-the-reviewer-judges-them.md");
+    const consequences = adr.slice(adr.indexOf("\n## Consequences\n"));
+    const tag = FINDING_TAG_TEXT["small-body"];
+
+    expect(consequences).toContain(
+      `A pull request gets two Touch-ups, so a third Execution flaw of such findings alone calls for a Retry, and that Retry may commit nothing too: where every finding of its Verdict is tagged \`${tag}\`, by the same count of the same tags, the Kit writes the body again from what the run gave, posts the run's \`fix\` under a note that ends it, and Reviews the same head again. It is still one of the Ticket's two Retries. A Retry given any finding not tagged \`${tag}\` is as it was: one that commits nothing is an empty diff.`,
+    );
+    expect(consequences).toContain("This one rule is the Loop's own ([ADR-0027](0027-an-execution-flaw-of-only-small-or-missed-earlier-findings-calls-for-a-touch-up-not-a-retry.md)), so it holds in a repo that declares no `staging` too, for any findings about the body alone.");
+    // The test the Kit counts by: every finding tagged as about the body, and none of any other kind.
+    expect(bodyOnly({ small: 2, missedEarlier: 0, counted: 0, smallBody: 2 })).toBe(true);
+    expect(bodyOnly({ small: 2, missedEarlier: 0, counted: 1, smallBody: 2 })).toBe(false);
+    // The note that ends it, as its writer opens it.
+    expect(retryBodyOnlyMarker("a".repeat(40))).toBe(`<!-- fabrik:retry-body-only ${"a".repeat(40)} -->`);
+  });
+
+  it("is pointed at from ADR-0027, in one line saying Trial steps findings carry the body's tag and what a Retry of only such findings may do", () => {
+    const earlier = read("docs/adr/0027-an-execution-flaw-of-only-small-or-missed-earlier-findings-calls-for-a-touch-up-not-a-retry.md");
+    const pointing = earlier.split("\n").filter((line) => line.includes("](0040-the-implementer-writes-a-staging-trials-steps-and-the-reviewer-judges-them.md)"));
+
+    expect(pointing).toHaveLength(1);
+    expect(pointing[0]).toBe(
+      `A finding about a pull request's Trial steps carries \`${FINDING_TAG_TEXT["small-body"]}\`, as [ADR-0040](0040-the-implementer-writes-a-staging-trials-steps-and-the-reviewer-judges-them.md) has it, and a Retry whose findings are all \`${FINDING_TAG_TEXT["small-body"]}\`, which a third such flaw calls for, may commit nothing as that Touch-up may: the Kit replaces the body and Reviews the same head again, and it is still one of the Ticket's two Retries.`,
+    );
+  });
+
+  it("says in the glossary and the README that the Retry a third flaw about the body alone calls for may commit nothing, by the note the Kit posts for it", () => {
+    const glossary = read("GLOSSARY.md");
+    const touchUp = /^\*\*Touch-up\*\*:\n(.*)$/m.exec(glossary)?.[1] ?? "";
+    const readme = read("README.md").split("\n");
+    const touchUps = readme.find((line) => line.startsWith("- **Touch-ups** (#750, ADR-0027)")) ?? "";
+    const push = readme.find((line) => line.startsWith("- **The push**: the push job runs the trust-root guard")) ?? "";
+    const marker = retryBodyOnlyMarker("a".repeat(40)).replace("a".repeat(40), "<sha>");
+
+    expect(touchUp).toContain("So may the Retry a third flaw of such findings calls for, which still counts as a Retry.");
+    expect(touchUps).toContain(`The Retry a third such flaw calls for may commit nothing too (#962, ADR-0040): its prompt says so, the Kit lands it the same way under a \`${marker}\` note, and it counts as the Retry it is.`);
+    expect(push).toContain("A retry that commits nothing is posted as an Execution-flaw Verdict with source `empty-diff`, and counts like any other, unless every finding it was given is `[small: body]` (see **Touch-ups**).");
   });
 
   it("says in its ADR which labels a Trial session puts on with the Operator's credential, by the names ADR-0038 reads", () => {

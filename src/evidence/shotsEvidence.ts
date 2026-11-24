@@ -306,7 +306,8 @@ export function producedNamedShots(marker: ShotsMarker): readonly string[] {
  * What came of a pull request's Evidence miss: the Kit sent it back with its
  * own Execution flaw, or it goes on to Review with the miss shown, because no
  * Retry is left or because no Implementer run pushed the head it is at, as
- * when a body-only Touch-up pushed nothing or the Operator pushed it.
+ * when a body-only Touch-up or a body-only Retry pushed nothing, or the
+ * Operator pushed it.
  */
 export type MissOutcome = "sent-back" | "no-retry-left" | "not-pushed";
 

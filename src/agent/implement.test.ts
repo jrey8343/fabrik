@@ -102,6 +102,36 @@ describe("A Touch-up's prompt says it is one (#750)", () => {
     expect(text).toContain("## This run is a Touch-up");
     expect(text).not.toContain(BODY_ONLY);
   });
+
+  describe("a Retry of findings that are all [small: body], the Touch-ups being used (#962)", () => {
+    /** A Reviewer's flaw that called for no Touch-up, so the run that fixes it is a Retry. */
+    const retryText = async (tags: { small: number; missedEarlier: number; counted: number; smallBody: number }, items: string[]) => {
+      const verdict = [verdictMarker({ verdict: "execution-flaw", source: "reviewer", requestChanges: false, tags, headSha: "a".repeat(40) }), ...items].join("\n");
+      return (await retryContext(await fileOf({ ...pullRequest, comments: [{ body: verdict, author: { __typename: "Bot" } }] }))).parts.join("\n");
+    };
+
+    it("is told so in a block of its own, which has it commit nothing and says it is a Retry all the same", async () => {
+      const text = await retryText({ small: 1, missedEarlier: 0, counted: 0, smallBody: 1 }, ["- [small: body] The Trial steps name a button the branch doesn't add."]);
+
+      expect(text).toContain(
+        [
+          "## Every finding is about the pull request's body",
+          `${BODY_ONLY}, so commit nothing: write a \`summary\` that matches the branch, which replaces the body, and a \`fix\` saying what you corrected. The Kit then starts the Review of the same head. This run is a Retry all the same, as the pull request's two Touch-ups are used.`,
+        ].join("\n"),
+      );
+      expect(text).not.toContain("## This run is a Touch-up");
+    });
+
+    it.each([
+      ["a [small: comment] finding beside the body's", { small: 2, missedEarlier: 0, counted: 0, smallBody: 1 }, ["- [small: body] The body is stale.", "- [small: comment] So is a doc comment."]],
+      ["an untagged finding beside the body's", { small: 1, missedEarlier: 0, counted: 1, smallBody: 1 }, ["- [small: body] The body is stale.", "- The empty cart throws."]],
+    ])("one with %s gets no such block", async (_name, tags, items) => {
+      const text = await retryText(tags, items);
+
+      expect(text).not.toContain(BODY_ONLY);
+      expect(text).not.toContain("## Every finding is about the pull request's body");
+    });
+  });
 });
 
 describe("A Retry after a Verdict on red Required checks is given each check's Failure excerpt (#775)", () => {
@@ -572,7 +602,7 @@ describe("The Implementer's context", () => {
 
         expect(await fixing(verdict, kitConfig())).not.toContain("A finding about the Trial steps");
         expect(prompt).toContain(
-          '- A finding about the Trial steps, under "The findings to fix", is fixed by giving `trial` again with what it names put right, on a retry and on a Touch-up alike. No commit fixes one: the Kit keeps the steps your output gives, so a Touch-up told to commit nothing gives `trial` all the same.',
+          '- A finding about the Trial steps, under "The findings to fix", is fixed by giving `trial` again with what it names put right, on a retry and on a Touch-up alike. No commit fixes one: the Kit keeps the steps your output gives, so a Touch-up or a retry told to commit nothing gives `trial` all the same.',
         );
       });
 

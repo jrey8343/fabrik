@@ -29,6 +29,7 @@ import {
   REQUEST_CHANGES_RUN_EMPTY_MARKER,
   REQUEST_CHANGES_RUN_MARKER,
   requestChangesRunStartedMarker,
+  retryBodyOnlyMarker,
   RETRY_PUSH_MARKER,
   stepUpReasonMarker,
   touchUpBodyOnlyMarker,
@@ -43,6 +44,7 @@ import { handBack, owedRequestChangesRun } from "./mergeGate.ts";
 import {
   bodyOnly,
   fixRunName,
+  type FlawFixInFlight,
   implementSettings,
   isRetryOrTouchUp,
   MAX_RETRIES,
@@ -270,7 +272,7 @@ function opening(ticket: number, issue: IssueSnapshot, headSha: string): PullReq
     conflictRunInFlight: null,
     conflictRunOnUnreviewedDraft: false,
     pushedSinceVerdict: false,
-    bodyOnlyTouchUpHead: null,
+    bodyOnlyRunHead: null,
     retryNoteSinceVerdict: null,
     verdictPostedAt: null,
     headPushedAt: null,
@@ -470,15 +472,16 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
   if (changes.net.length === 0 && changes.updatedFromMain !== true && mainMerge === undefined) {
     // A Request-changes run's empty diff is no Verdict, so it never costs a Retry (#388).
     if (requestChanges) return { kind: "act", actions: requestChangesRunEmpty(pullRequest, fixes, branch, snapshot, config, recorded, parsed.output, setAside) };
-    // A Touch-up whose findings were all about the body is told to commit nothing (#751): that's no empty diff.
-    if (inFlight?.kind === "touch-up" && bodyOnly(pullRequest.verdicts.at(-1)?.tags)) {
+    // A Touch-up whose findings were all about the body is told to commit nothing (#751): that's no empty diff. Nor is
+    // it for the Retry such a flaw calls for once the Touch-ups are used (#962), which has no more to commit than one.
+    if (isRetryOrTouchUp(inFlight) && bodyOnly(pullRequest.verdicts.at(-1)?.tags)) {
       // It pushes no head, so an Evidence miss on it is shown and never sent back.
       const evidence = evidenceFor(event, config, parsed.output, pullRequest, null);
       return {
         kind: "act",
-        actions: bodyOnlyTouchUpLanded(
+        actions: bodyOnlyRunLanded(
           pullRequest,
-          inFlight.touchUp,
+          inFlight,
           issueNumber,
           branch,
           parsed.output,
@@ -577,10 +580,16 @@ function pushedBy(pullRequest: PullRequestSnapshot, headSha: string, { requestCh
  * ends its time in flight but is no push, and adds agent:review, which starts
  * the Review of that head. That Review may land a second Verdict on it, and
  * the PR stays in draft until it does. Like the rest of a retry, it's silent.
+ *
+ * A Retry of such a flaw lands the same way (#962, ADR-0040): a third flaw
+ * whose findings are all `[small: body]` calls for a Retry, the Touch-ups
+ * being used, and it has no more to commit than a Touch-up had. Its note says
+ * it is a Retry, and it is one: the flaw that called for it counts toward the
+ * Ticket's two as any other does.
  */
-function bodyOnlyTouchUpLanded(
+function bodyOnlyRunLanded(
   pullRequest: PullRequestSnapshot,
-  touchUp: number,
+  run: FlawFixInFlight,
   issueNumber: number,
   branch: string,
   output: { readonly summary: string; readonly fix?: string; readonly operatorCommentsConsidered?: readonly string[] },
@@ -590,6 +599,7 @@ function bodyOnlyTouchUpLanded(
   operatorComments: NonNullable<ImplementRunFinished["fixes"]>["operatorComments"],
 ): Action[] {
   const { number, headSha } = pullRequest;
+  const head = headSha.slice(0, 7);
   return [
     // The body goes first, so the Review its label starts reads the new one.
     { kind: "edit-issue-body", issue: number, body: pullRequestBody(output.summary, issueNumber, evidence, trialSteps, changedTests) },
@@ -597,8 +607,10 @@ function bodyOnlyTouchUpLanded(
       kind: "comment",
       issue: number,
       body: [
-        touchUpBodyOnlyMarker(touchUp, headSha),
-        `The Implementer's ${fixRunName("touch-up", touchUp)} on \`${branch}\` committed nothing, as every finding was about the PR's body: it rewrote the body to match ${headSha.slice(0, 7)}. Review runs again on ${headSha.slice(0, 7)}, and no Retry was used.`,
+        run.kind === "touch-up" ? touchUpBodyOnlyMarker(run.touchUp, headSha) : retryBodyOnlyMarker(headSha),
+        `The Implementer's ${runName(run)} on \`${branch}\` committed nothing, as every finding was about the PR's body: it rewrote the body to match ${head}. Review runs again on ${head}${
+          run.kind === "touch-up" ? ", and no Retry was used." : ". It used one of the Ticket's two Retries."
+        }`,
         "",
         // Present: the on-a-PR contract requires it.
         withoutMentions(output.fix ?? ""),

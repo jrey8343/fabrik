@@ -739,6 +739,28 @@ export function touchUpBodyOnlyIn(body: string): { readonly touchUp: number; rea
 }
 
 /**
+ * The first line of the Kit's note on a PR that a body-only Retry (#962,
+ * ADR-0040) committed nothing and rewrote its body, naming the head it left
+ * the PR at: a Retry of an Execution flaw whose findings were all
+ * `[small: body]`, which the pull request's Touch-ups, once used, leave to a
+ * Retry. It is that Retry's outcome as a body-only Touch-up's note is that
+ * Touch-up's: it ends the Retry's time in flight, but is no push, and its
+ * Review may land one more Verdict on that head. It names no number, as a
+ * Retry's push note names none: the Retry rules number it from the Verdicts
+ * before it.
+ */
+export function retryBodyOnlyMarker(headSha: string): string {
+  return `<!-- fabrik:retry-body-only ${headSha} -->`;
+}
+
+const RETRY_BODY_ONLY_MARKER = /^<!-- fabrik:retry-body-only ([0-9a-f]{40}|[0-9a-f]{64}) -->(?:\n|$)/;
+
+/** The head a body-only Retry's note (#962) names, from its first line, or null for any other comment. Only a bot's comment should be passed in. */
+export function retryBodyOnlyIn(body: string): string | null {
+  return RETRY_BODY_ONLY_MARKER.exec(body)?.[1] ?? null;
+}
+
+/**
  * The first line of the Kit's note that the Retry a PR's latest Verdict called
  * for never started, and that it has re-added agent:implement for it (#416).
  * The Kit restarts each Retry once: the Retry stays in flight, so re-adding
