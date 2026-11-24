@@ -53,6 +53,7 @@ import {
   CAPTURE_RESULT_FILE,
   checkCallerWorkflow,
   commitsToCheck,
+  CONSOLE_CHECK,
   costOf,
   costPerMergedPullRequestOf,
   DEFAULT_KIT_CONFIG,
@@ -150,6 +151,7 @@ import type {
   CaptureResult,
   CaptureResultRead,
   CommitToCheck,
+  ConsoleCheckRead,
   CostFigure,
   DeploymentsRead,
   DeployOf,
@@ -1252,6 +1254,10 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       "p".repeat(40),
     ),
 
+  // The Console check
+
+  CONSOLE_CHECK: () => CONSOLE_CHECK,
+
   // The caller read
 
   readCaller: () =>
@@ -1776,6 +1782,10 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
 
   HeadCheck: { name: "test", is: "never-reported", url: null, at: null } satisfies HeadCheck,
   RequiredChecksRead: A_CHECKS_READ satisfies RequiredChecksRead,
+
+  // The Console check
+
+  ConsoleCheckRead: { is: "required", apps: [42, null] } satisfies ConsoleCheckRead,
 
   // The caller read
 

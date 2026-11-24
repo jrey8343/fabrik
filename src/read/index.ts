@@ -109,8 +109,9 @@ export { joinRuns } from "./joinRuns.ts";
 // The Required checks
 
 export { joinChecks } from "./joinChecks.ts";
+export { CONSOLE_CHECK } from "../kit/consoleCheck.ts";
 export { headsToCheck, readRequiredChecks, requiredChecksFactOf } from "./requiredChecks.ts";
-export type { HeadCheck, RequiredChecksRead } from "./requiredChecks.ts";
+export type { ConsoleCheckRead, HeadCheck, RequiredChecksRead } from "./requiredChecks.ts";
 
 // The caller read
 
