@@ -515,6 +515,17 @@ describe("The Implementer's context", () => {
       expect(part).toContain('"The pull request\'s current Trial steps"');
     });
 
+    it("promises no run that its trial is kept when the run doesn't land, and says a Request-changes run that commits nothing changes none (#962)", async () => {
+      const part = await trialPart();
+
+      expect(part).toContain(
+        "- The Kit writes them only when the run lands. A Request-changes run that commits nothing leaves the pull request's Trial steps as they were, whatever `trial` it gives: the Kit writes no body for it.",
+      );
+      // The line on a finding about them says which runs may commit nothing and still have their `trial` kept, and no more.
+      expect(part).toContain("No commit fixes one: where the run lands, the Kit writes the steps your output gives, so a Touch-up or a retry told to commit nothing gives `trial` all the same.");
+      expect(part).not.toContain("the Kit keeps the steps your output gives");
+    });
+
     it("shows an example that the output contract takes whole, with a step on a record's page that follows the rule", async () => {
       const part = await trialPart();
       const example: unknown = JSON.parse(`{${part.slice(part.indexOf('"trial": {'))}}`);
@@ -602,7 +613,7 @@ describe("The Implementer's context", () => {
 
         expect(await fixing(verdict, kitConfig())).not.toContain("A finding about the Trial steps");
         expect(prompt).toContain(
-          '- A finding about the Trial steps, under "The findings to fix", is fixed by giving `trial` again with what it names put right, on a retry and on a Touch-up alike. No commit fixes one: the Kit keeps the steps your output gives, so a Touch-up or a retry told to commit nothing gives `trial` all the same.',
+          '- A finding about the Trial steps, under "The findings to fix", is fixed by giving `trial` again with what it names put right, on a retry and on a Touch-up alike. No commit fixes one: where the run lands, the Kit writes the steps your output gives, so a Touch-up or a retry told to commit nothing gives `trial` all the same.',
         );
       });
 

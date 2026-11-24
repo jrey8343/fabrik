@@ -156,6 +156,15 @@ describe("The Trial steps' words and decision (#962)", () => {
     expect(row?.staging?.trial).toMatchObject({ summary: steps.summary });
   });
 
+  it("says in its ADR, plainly, that a Request-changes run that commits nothing drops the trial it gave, and that what such a Request changes should do is not decided", () => {
+    const adr = read("docs/adr/0040-the-implementer-writes-a-staging-trials-steps-and-the-reviewer-judges-them.md");
+    const consequences = adr.slice(adr.indexOf("\n## Consequences\n"));
+
+    expect(consequences).toContain(
+      "- A Request-changes run that commits nothing writes no body, so the `trial` it gave is dropped and the pull request's Trial steps stay as they were. A Request changes that asks only for different Trial steps therefore changes none: its run has nothing to commit, and the pull request is handed back to the Operator as not built. What such a Request changes should do is the Operator's to decide, and is not decided here.",
+    );
+  });
+
   it("is pointed at from ADR-0027, in one line saying Trial steps findings carry the body's tag and what a Retry of only such findings may do", () => {
     const earlier = read("docs/adr/0027-an-execution-flaw-of-only-small-or-missed-earlier-findings-calls-for-a-touch-up-not-a-retry.md");
     const pointing = earlier.split("\n").filter((line) => line.includes("](0040-the-implementer-writes-a-staging-trials-steps-and-the-reviewer-judges-them.md)"));

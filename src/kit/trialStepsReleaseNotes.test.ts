@@ -315,6 +315,15 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Trial steps release notes, while
       expect(trialStepsIn([trialStepsMarker({ ...STEPS, summary: "An earlier run's." }), trialStepsMarker(STEPS)].join("\n\n"))).toEqual(STEPS);
     });
 
+    it("only a run that lands writes the body: a Request-changes run that commits nothing leaves the Trial steps as they were, whatever it gave, as its prompt says", async () => {
+      const lands = bullet(section("Things to know"), "Only a run that lands writes the body.");
+      const asked = await toldTo(kitConfig({ staging: STAGING }));
+
+      expect(lands).toContain("A Request-changes run that commits nothing leaves the pull request's Trial steps as they were, whatever `trial` it gave, so a Request changes that asks only for other steps changes none");
+      expect(lands).toContain("The Implementer's prompt says so");
+      expect(asked).toContain("A Request-changes run that commits nothing leaves the pull request's Trial steps as they were, whatever `trial` it gives: the Kit writes no body for it.");
+    });
+
     it("a malformed trial never fails a run: one that is no summary and steps is left out, and a route that is no path or has a dynamic segment is left off its step", () => {
       const malformed = bullet(turnsOn, "A malformed `trial` never fails a run.");
 

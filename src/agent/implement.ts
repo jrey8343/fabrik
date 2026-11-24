@@ -685,7 +685,10 @@ const TRIAL_STEPS_EXAMPLE: TrialSteps = {
  * Ticket is a Trial problem, which the run tells by the line in the Ticket
  * it is given. A repo with no `ui` block has no UI pull request. It says
  * too how a finding of the Reviewer's about them is fixed (#964): by giving
- * `trial` again, on a retry and on a Touch-up alike, and by no commit.
+ * `trial` again, on a retry and on a Touch-up alike, and by no commit. And it
+ * says the Kit writes them only when the run lands, so that no run is
+ * promised its `trial` is kept when it is not: a Request-changes run that
+ * commits nothing writes no body (#962).
  */
 function trialStepsPart(ui: UiConfig | null): string[] {
   const whenUi =
@@ -705,7 +708,9 @@ function trialStepsPart(ui: UiConfig | null): string[] {
     "- A step on a record's page gives the nearest page with a fixed address as its `route`, and says in `do` how to reach the record from there, such as \"Open any patient from the list\". Staging has its own records, so never put a record's id in a `route`.",
     "- On a retry, a Touch-up, a Request-changes run or a conflict-only run, write `trial` again for the pull request as it now stands, as you write `summary`: start from \"The pull request's current Trial steps\" when the end of this prompt has it, and change what no longer holds. A run that leaves `trial` out keeps the ones the pull request has.",
     // The Reviewer judges them (#964, src/agent/review.ts), and tags its finding as one about the body, which a Touch-up may fix with no commit, as may the Retry such a flaw calls for once the Touch-ups are used (#962).
-    '- A finding about the Trial steps, under "The findings to fix", is fixed by giving `trial` again with what it names put right, on a retry and on a Touch-up alike. No commit fixes one: the Kit keeps the steps your output gives, so a Touch-up or a retry told to commit nothing gives `trial` all the same.',
+    '- A finding about the Trial steps, under "The findings to fix", is fixed by giving `trial` again with what it names put right, on a retry and on a Touch-up alike. No commit fixes one: where the run lands, the Kit writes the steps your output gives, so a Touch-up or a retry told to commit nothing gives `trial` all the same.',
+    // A Request-changes run that commits nothing is handed back with no body written (requestChangesRunEmpty, src/loop/implement.ts), so nothing here promises it otherwise.
+    "- The Kit writes them only when the run lands. A Request-changes run that commits nothing leaves the pull request's Trial steps as they were, whatever `trial` it gives: the Kit writes no body for it.",
     "",
     "Add it to your output object beside the other fields:",
     "",

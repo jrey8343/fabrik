@@ -796,6 +796,20 @@ describe("The Trial steps a pull request keeps, on a later run that gives none (
     expect(await bodyLeftBy(thread, started, BUILT)).toEqual(keptBody);
   });
 
+  it("a Request-changes run that commits nothing writes no body, so the trial it gave is dropped and they stay as they were", async () => {
+    const thread = keeping(requestedChanges());
+    const started = await thread.implement();
+    const run = finished(B, fixesOf(started), thread.headSha);
+    const event = { ...run, changes: NOTHING, output: JSON.stringify({ ...JSON.parse(run.output), trial: GIVEN }) };
+
+    const plan = planFor(event, await thread.onGitHub.pushJobSnapshot(), STAGING);
+    thread.onGitHub.apply(plan, { pushLands: true, tip: B });
+
+    expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "edit-issue-body" }));
+    expect(commentOf(plan)).toContain("committed nothing");
+    expect((await thread.pullRequest()).trialSteps).toEqual(KEPT);
+  });
+
   it("in a repo that declares no staging the body carries none, whatever it kept", async () => {
     const thread = keeping();
     await thread.reviewed(SMALL);
