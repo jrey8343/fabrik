@@ -33,7 +33,7 @@ import { redChecksOnMainOf, redChecksText } from "../loop/redChecks.ts";
 import type { RedRequiredChecks } from "../loop/types.ts";
 import { excerptsPassedOut, FAILURE_EXCERPTS_FILE, RERUN_FAILURE_EXCERPTS_FILE } from "../review/failureExcerpt.ts";
 import { trialStepsOf } from "../loop/implementOutput.ts";
-import { codingStandardsParts, ticketContext, type PullRequestRunContext } from "./implement.ts";
+import { A_STAGING_TRIAL_IS, codingStandardsParts, ticketContext, type PullRequestRunContext } from "./implement.ts";
 import type { StagingTrialGiven } from "./inputs.ts";
 import { type LaterReviewGiven, laterReviewParts, type PushingRun } from "./laterReview.ts";
 import { operatorInputSections } from "./operatorComments.ts";
@@ -124,7 +124,10 @@ export function stagingTrialParts(given: StagingTrialGiven | null): string[] {
   if (given === null) return [];
   const told = [
     "## Trial steps",
-    "This Product repo has a staging site, where the Operator tries a merged change by hand before they deploy it to production: a Staging trial. Trial steps are what they follow there, or an agent driving their browser follows for them, without the diff or the Ticket: a `summary` of what changed for a person using the product, then ordered steps, each with `do`, what the person does, `expect`, what they should then see, and, where it gives one, `route`, the page it starts on. The Implementer writes them in its output, and the Kit keeps them in the pull request's body, in the hidden line that starts `<!-- fabrik:trial-steps`.",
+    [
+      A_STAGING_TRIAL_IS,
+      "Trial steps are what they follow there, or an agent driving their browser follows for them, without the diff or the Ticket: a `summary` of what changed for a person using the product, then ordered steps, each with `do`, what the person does, `expect`, what they should then see, and, where it gives one, `route`, the page it starts on. The Implementer writes them in its output, and the Kit keeps them in the pull request's body, in the hidden line that starts `<!-- fabrik:trial-steps`.",
+    ].join(" "),
     `Kit code read this pull request's body and its Ticket: once merged, it will ask for ${given.willAsk ? "a" : "no"} Staging trial.`,
     ...(given.steps === null
       ? ["It carries no Trial steps."]

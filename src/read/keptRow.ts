@@ -15,7 +15,7 @@ import type { Row } from "./rows.ts";
  * Evidence shots. `staging` (#855) is not here: it is an optional key, on a
  * row only in a repo that declares `staging`, so a row kept before it is
  * already a row with none of it and reads as it was kept. Nor is its `trial`
- * (#965), a field of what the key holds and not of the row: stagingOf reads
+ * (#965), a field of what the key holds and not of the row: keptStagingOf reads
  * a `staging` kept before it.
  */
 const NOT_ON_AN_EARLIER_ROW = { shots: null } as const satisfies Partial<Row>;
@@ -49,7 +49,7 @@ function followUpsOf(kept: readonly KeptFollowUp[]): Row["followUps"] {
  * kept before a row gave its Trial steps has none, as a pull request with no
  * marker has (#965). The value itself when it has its `trial`.
  */
-function stagingOf(kept: KeptStaging): NonNullable<Row["staging"]> {
+function keptStagingOf(kept: KeptStaging): NonNullable<Row["staging"]> {
   return "trial" in kept ? (kept as NonNullable<Row["staging"]>) : { ...kept, trial: null };
 }
 
@@ -75,7 +75,7 @@ export function readRow(kept: unknown): Row | null {
   if (standing === null || (keptOwn !== null && own === null)) return null;
   const plainPullRequest = (own === keptOwn ? row.plainPullRequest : { ...row.plainPullRequest, own }) as Row["plainPullRequest"];
   const followUps = Array.isArray(row.followUps) ? followUpsOf(row.followUps) : undefined;
-  const staging = typeof row.staging === "object" && row.staging !== null ? stagingOf(row.staging) : undefined;
+  const staging = typeof row.staging === "object" && row.staging !== null ? keptStagingOf(row.staging) : undefined;
   const asKept =
     standing === row.standing &&
     plainPullRequest === row.plainPullRequest &&

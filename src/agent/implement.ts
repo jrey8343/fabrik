@@ -664,6 +664,14 @@ export async function implementContext(productDir: string, specFile: string, con
   return parts;
 }
 
+/**
+ * What a Staging trial is, as the Trial steps part of a prompt opens: the
+ * Implementer's (trialStepsPart) and the Reviewer's (stagingTrialParts,
+ * src/agent/review.ts) both start from it, so the two are told the same.
+ */
+export const A_STAGING_TRIAL_IS =
+  "This Product repo has a staging site, where the Operator tries a merged change by hand before they deploy it to production: a Staging trial.";
+
 /** The Trial steps an Implement run's prompt shows as its example, which the output contract takes whole. */
 const TRIAL_STEPS_EXAMPLE: TrialSteps = {
   summary: "Patients can now join a waitlist for a day that is fully booked, and staff see on a patient's page which days they are waiting for.",
@@ -700,7 +708,7 @@ function trialStepsPart(ui: UiConfig | null): string[] {
   const whenTrialProblem = `One does${ui === null ? "" : " too"} when its Ticket is a Trial problem, whose body carries a line such as \`${trialProblemLine(50)}\`.`;
   return [
     "## Trial steps",
-    "This Product repo has a staging site, where the Operator tries a merged change by hand before they deploy it to production: a Staging trial. Trial steps tell them what to check there, without the diff or the Ticket: what changed for a person using the product, then what to do and what they should see. The Kit keeps them on the pull request.",
+    `${A_STAGING_TRIAL_IS} Trial steps tell them what to check there, without the diff or the Ticket: what changed for a person using the product, then what to do and what they should see. The Kit keeps them on the pull request.`,
     `- Give them in \`trial\` on every run whose pull request will ask for a Staging trial. ${whenUi}${whenTrialProblem} Leave \`trial\` out on any other pull request.`,
     "- `summary` is one short paragraph, in plain language, of what changed for a person using the product: what they can now do or see, never the files or the code.",
     "- `steps` is the ordered list of what to check, one step at least. Each has `do`, what the person does, in plain words, and `expect`, what they should then see, concrete enough to check by looking: the words or the thing on the screen, never \"it works\".",

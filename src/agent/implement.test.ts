@@ -471,7 +471,10 @@ describe("The Implementer's context", () => {
       const part = await trialPart();
 
       expect(part).toContain("## Trial steps");
-      expect(part).toContain("a Staging trial");
+      // It opens as the Reviewer's part does (stagingTrialParts), from the one sentence that says what a Staging trial is.
+      expect(part.split("\n")[1]).toBe(
+        "This Product repo has a staging site, where the Operator tries a merged change by hand before they deploy it to production: a Staging trial. Trial steps tell them what to check there, without the diff or the Ticket: what changed for a person using the product, then what to do and what they should see. The Kit keeps them on the pull request.",
+      );
       expect(part).toContain("Give them in `trial`");
       expect(part).toContain("`summary` is one short paragraph, in plain language, of what changed for a person using the product");
       expect(part).toContain("`steps` is the ordered list");
