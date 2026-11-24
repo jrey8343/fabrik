@@ -7,9 +7,11 @@
 // the body lines are read from the issues themselves, so the Loop's history
 // lives on GitHub alone. A marker carrying JSON spells it with markerJson; the
 // Replay's markers, which only the Replay module reads and writes, live
-// beside its rules (src/kit/replay.ts).
+// beside its rules (src/kit/replay.ts). The marker that keeps a pull
+// request's Trial steps in its body (#963) is here too, beside the Trial
+// problem's line, where a reader of the Kit finds both.
 import { type PrototypeRequest, prototypeRequestOf } from "./designOutput.ts";
-import type { RequestChangesAnswers } from "./implementOutput.ts";
+import { type RequestChangesAnswers, type TrialSteps, trialStepsOf } from "./implementOutput.ts";
 import { fableCapsIn } from "./fableCap.ts";
 import { type HandBack, HAND_BACKS } from "./handBacks.ts";
 import type { TriggerLabel } from "./labels.ts";
@@ -1314,6 +1316,80 @@ export function trialProblemLine(pullRequest: number): string {
 /** The PR the first Trial problem's line in `body` names, or null if it has none: no Trial problem. A line quoted as code isn't one. */
 export function trialProblemIn(body: string): number | null {
   return numberOnFirstLineIn(body, TRIAL_PROBLEM_LINE);
+}
+
+/** The marker that keeps a pull request's Trial steps, matched against a whole line with its outer whitespace trimmed, its JSON captured. */
+const TRIAL_STEPS_MARKER = /^<!-- fabrik:trial-steps (\{.*\}) -->$/;
+
+/**
+ * The hidden line that keeps a pull request's Trial steps (#963, ADR-0040) in
+ * its body, which trialStepsIn reads back: the push job writes it from the
+ * `trial` an Implement run gave, in a Product repo that declares `staging`,
+ * so a reader needs only the pull request. The steps are agent text, and its
+ * JSON is markerJson's, so they can neither end the HTML comment early nor
+ * mention anyone, whatever Markdown or HTML they hold.
+ */
+export function trialStepsMarker({ summary, steps }: TrialSteps): string {
+  return `<!-- fabrik:trial-steps ${markerJson({
+    summary,
+    steps: steps.map(({ route, do: does, expect }) => ({ ...(route === undefined ? {} : { route }), do: does, expect })),
+  })} -->`;
+}
+
+/**
+ * The Trial steps a pull request's body keeps, or null when it keeps none: a
+ * pull request of a repo with no `staging` block, one whose run gave none,
+ * and every one merged before the Kit kept them. Pass it only a body the
+ * Fabrik App wrote, as the evidence marker is read: anyone can write the
+ * line. The last marker counts, the Kit's own coming after the
+ * Implementer's summary, and one that doesn't hold Trial steps
+ * (trialStepsOf) is none.
+ */
+export function trialStepsIn(body: string): TrialSteps | null {
+  const kept = body.split("\n").flatMap((line) => {
+    const trial = trialStepsFrom(TRIAL_STEPS_MARKER.exec(line.trim())?.[1]);
+    return trial === null ? [] : [trial];
+  });
+  return kept.at(-1) ?? null;
+}
+
+/**
+ * A line that looks like a Trial steps marker, matched with its outer
+ * whitespace trimmed: the marker, or anything spaced or spelled near enough
+ * to pass for it. withoutTrialSteps drops them all.
+ */
+const TRIAL_STEPS_LINE = /^<!--\s*fabrik:trial-steps\b.*-->$/;
+
+/**
+ * The text without any Trial steps marker: every line that looks like one
+ * (TRIAL_STEPS_LINE), even in a code block, each with the blank lines that
+ * set it apart. The rest stays as it was. Run on agent text, as
+ * withoutEvidence is, so only the Kit's marker says what a pull request's
+ * Trial steps are, and no run carries an old one forward.
+ */
+export function withoutTrialSteps(text: string): string {
+  const lines = text.split("\n");
+  const kept: string[] = [];
+  for (let at = 0; at < lines.length; at++) {
+    const line = lines[at] ?? "";
+    if (!TRIAL_STEPS_LINE.test(line.trim())) {
+      kept.push(line);
+      continue;
+    }
+    while (at + 1 < lines.length && (lines[at + 1] ?? "").trim() === "") at++;
+    if (at === lines.length - 1) while (kept.length > 0 && (kept.at(-1) ?? "").trim() === "") kept.pop();
+  }
+  return kept.join("\n");
+}
+
+/** The Trial steps a marker's JSON holds, or null when it doesn't parse or holds none. */
+function trialStepsFrom(json: string | undefined): TrialSteps | null {
+  if (json === undefined) return null;
+  try {
+    return trialStepsOf(JSON.parse(json));
+  } catch {
+    return null;
+  }
 }
 
 /**
