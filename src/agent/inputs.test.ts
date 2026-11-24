@@ -4,9 +4,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { GitHubError } from "../github/client.ts";
+import { type ShotsMarker, waitingShotsMarker } from "../evidence/shotsEvidence.ts";
+import { markerLine } from "../evidence/uiEvidence.ts";
 import { DEFAULT_KIT_CONFIG } from "../kit/config.ts";
 import { anIssue, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
-import { designRoundMarker, flakyCheckIssueMarker, followUpMarker, PROTOTYPE_FAILURE_ROUND_MARKER, PROTOTYPE_ROUND_MARKER, spinOffMarker } from "../loop/markers.ts";
+import {
+  designRoundMarker,
+  flakyCheckIssueMarker,
+  followUpMarker,
+  PROTOTYPE_FAILURE_ROUND_MARKER,
+  PROTOTYPE_ROUND_MARKER,
+  spinOffMarker,
+  trialProblemLine,
+  trialStepsMarker,
+} from "../loop/markers.ts";
 import { roundLineIn, roundLineOf, withoutRoundLines } from "../loop/roundLine.ts";
 import { planFor } from "../loop/rules.ts";
 import { AGENT_FAILURE_FILE } from "./failure.ts";
@@ -18,6 +29,7 @@ import {
   type Reader,
   reportFailure,
   SENT_BACK_DIFF_LIMIT,
+  stagingTrialFor,
 } from "./inputs.ts";
 
 const repo = { owner: "acme", name: "shop" };
@@ -558,6 +570,87 @@ describe("An agent job's inputs", () => {
       comments: [{ body: "<!-- fabrik:verdict … -->", author: { __typename: "Bot" } }],
       operatorComments,
     });
+  });
+
+  describe("for a Review in a Product repo that declares staging (#964)", () => {
+    const TRIAL = {
+      summary: "Patients can join a waitlist for a full day.",
+      steps: [{ route: "/book", do: "Pick a day with no free slots.", expect: 'A "Join the waitlist" button shows.' }],
+    };
+    const UI_EVIDENCE = markerLine({ run: 9100, artifact: 9202 });
+    /** The PR with this body, opened by the Fabrik App unless `author` says who else. */
+    const withBody = (body: string, author: { __typename: string } | null = { __typename: "Bot" }): Reader => ({
+      ...withThread(),
+      graphql: async <T>() => ({ repository: { pullRequest: { ...pullRequest.repository.pullRequest, body, author } } }) as T,
+    });
+    const stagingTrialOf = async (github: Reader, ticket = "As a patient…") =>
+      ((await readPullRequest(github, repo, 50, { withComments: false, operator: "operator", stagingTrial: { ticket } })) as { stagingTrial?: unknown }).stagingTrial;
+
+    it("carries the pull request's Trial steps, read from the marker in the body the Fabrik App wrote, and that it will ask for a Staging trial, as a UI pull request does", async () => {
+      const body = `Adds a waitlist.\n\n${UI_EVIDENCE}\n\n${trialStepsMarker(TRIAL)}\n\nCloses #7`;
+
+      expect(await stagingTrialOf(withBody(body))).toEqual({ willAsk: true, steps: TRIAL });
+    });
+
+    it("says a pull request that keeps no Trial steps has none, and still that it will ask", async () => {
+      expect(await stagingTrialOf(withBody(`Adds a waitlist.\n\n${UI_EVIDENCE}\n\nCloses #7`))).toEqual({ willAsk: true, steps: null });
+    });
+
+    it("will ask on a pull request whose UI evidence is Evidence shots, unless its Implementer said nothing visible changes", async () => {
+      const shots = (names: Pick<ShotsMarker, "named" | "nothingVisible">) => markerLine(waitingShotsMarker(names, 9100, { kind: "none" }));
+      const named = `Adds a waitlist.\n\n${shots({ named: [{ name: "booking: full day" }] })}\n\n${trialStepsMarker(TRIAL)}\n\nCloses #7`;
+      const nothingVisible = `Retries the API call.\n\n${shots({ named: [], nothingVisible: "Only the retry timing changed." })}\n\n${trialStepsMarker(TRIAL)}\n\nCloses #7`;
+
+      expect(await stagingTrialOf(withBody(named))).toEqual({ willAsk: true, steps: TRIAL });
+      expect(await stagingTrialOf(withBody(nothingVisible))).toEqual({ willAsk: false, steps: TRIAL });
+    });
+
+    it("will ask on a pull request with no UI evidence when its Ticket is a Trial problem, by the line in the Ticket's body, and on no other", async () => {
+      const plain = withBody(`Rounds the total once.\n\n${trialStepsMarker(TRIAL)}\n\nCloses #7`);
+
+      expect(await stagingTrialOf(plain, `The cart total reads 0 on staging.\n\n${trialProblemLine(48)}`)).toEqual({ willAsk: true, steps: TRIAL });
+      expect(await stagingTrialOf(plain)).toEqual({ willAsk: false, steps: TRIAL });
+      expect(await stagingTrialOf(withBody("Rounds the total once.\n\nCloses #7"))).toEqual({ willAsk: false, steps: null });
+    });
+
+    it.each([
+      ["a person", { __typename: "User" }],
+      ["an account GitHub no longer has", null],
+    ])("reads no marker from a body %s wrote, as anyone can write the lines", async (_who, author) => {
+      const body = `Adds a waitlist.\n\n${UI_EVIDENCE}\n\n${trialStepsMarker(TRIAL)}\n\nCloses #7`;
+
+      expect(await stagingTrialOf(withBody(body, author))).toEqual({ willAsk: false, steps: null });
+    });
+
+    it("is carried by no other run's pull request, whatever its body keeps, so a repo with no staging block reads as it did", async () => {
+      const body = `Adds a waitlist.\n\n${UI_EVIDENCE}\n\n${trialStepsMarker(TRIAL)}\n\nCloses #7`;
+
+      for (const withComments of [false, true]) {
+        const read = await readPullRequest(withBody(body), repo, 50, { withComments, operator: "operator" });
+
+        expect(read).not.toHaveProperty("stagingTrial");
+        expect(Object.keys(read as object)).toEqual(
+          withComments ? ["number", "title", "body", "comments", "operatorComments"] : ["number", "title", "body", "baseRefName", "headRefName", "headRefOid", "operatorComments"],
+        );
+      }
+    });
+  });
+});
+
+describe("Which run's pull request is read for its Staging trial (#964)", () => {
+  const STAGING = { url: "https://staging.shop.example", environment: "staging" };
+
+  it("is a Review's, in a Product repo that declares staging, read against its Ticket's body", () => {
+    expect(stagingTrialFor("review", kitConfig({ staging: STAGING }), "The cart total reads 0.")).toEqual({ ticket: "The cart total reads 0." });
+  });
+
+  it("is no Review's in a repo with no staging block, nor one whose Kit config doesn't read", () => {
+    expect(stagingTrialFor("review", kitConfig(), "The cart total reads 0.")).toBeUndefined();
+    expect(stagingTrialFor("review", null, "The cart total reads 0.")).toBeUndefined();
+  });
+
+  it.each(["implement", "digest", undefined])("is no run's of the role %s, which reads the pull request as it did", (role) => {
+    expect(stagingTrialFor(role, kitConfig({ staging: STAGING }), "The cart total reads 0.")).toBeUndefined();
   });
 });
 

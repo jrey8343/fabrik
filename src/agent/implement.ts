@@ -672,7 +672,9 @@ const TRIAL_STEPS_EXAMPLE: TrialSteps = {
  * pull request, by the repo's `ui.paths`, unless the run says nothing visible
  * changes, which only a repo that uses Evidence shots can say; and one whose
  * Ticket is a Trial problem, which the run tells by the line in the Ticket
- * it is given. A repo with no `ui` block has no UI pull request.
+ * it is given. A repo with no `ui` block has no UI pull request. It says
+ * too how a finding of the Reviewer's about them is fixed (#964): by giving
+ * `trial` again, on a retry and on a Touch-up alike, and by no commit.
  */
 function trialStepsPart(ui: UiConfig | null): string[] {
   const whenUi =
@@ -691,6 +693,8 @@ function trialStepsPart(ui: UiConfig | null): string[] {
     "- A step may give `route`, the page it starts on: a path starting with `/`, such as `/book`, never a full URL, and with no dynamic segment such as `[patientId]`. The Kit links it on the staging site, and leaves off a `route` that is neither. Leave it out when the step carries on from where the one before it ended.",
     "- A step on a record's page gives the nearest page with a fixed address as its `route`, and says in `do` how to reach the record from there, such as \"Open any patient from the list\". Staging has its own records, so never put a record's id in a `route`.",
     "- On a retry, a Touch-up, a Request-changes run or a conflict-only run, write `trial` again for the pull request as it now stands, as you write `summary`: start from \"The pull request's current Trial steps\" when the end of this prompt has it, and change what no longer holds. A run that leaves `trial` out leaves the pull request with none.",
+    // The Reviewer judges them (#964, src/agent/review.ts), and tags its finding as one about the body, which a Touch-up may fix with no commit.
+    '- A finding about the Trial steps, under "The findings to fix", is fixed by giving `trial` again with what it names put right, on a retry and on a Touch-up alike. No commit fixes one: the Kit keeps the steps your output gives, so a Touch-up told to commit nothing gives `trial` all the same.',
     "",
     "Add it to your output object beside the other fields:",
     "",

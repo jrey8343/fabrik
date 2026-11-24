@@ -5,6 +5,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
 import { trialStepsMarker } from "../loop/markers.ts";
+import { FINDING_TAG_TEXT } from "../loop/verdict.ts";
 
 const root = new URL("../../", import.meta.url);
 const read = (path: string) => readFileSync(new URL(path, root), "utf8");
@@ -85,6 +86,25 @@ describe("The Trial steps' words and decision (#962)", () => {
     );
     expect(staging).not.toContain("no Loop rule, job or prompt reads it");
     expect(staging).toContain("`null`, or leaving it out, declares none, and the repo reads exactly as it does without the block.");
+  });
+
+  it("says in the README, after it, that the Reviewer judges them on such a pull request (#964)", () => {
+    const staging = read("README.md")
+      .split("\n")
+      .find((line) => line.startsWith("- `staging` (default `null`)"));
+
+    expect(staging).toContain(
+      "and the Kit keeps them on the pull request (ADR-0040). The Reviewer judges them against the diff before the merge, on such a pull request only. Kit config is a Trust-root file",
+    );
+  });
+
+  it("says in its ADR how a finding about Trial steps is fixed: tagged as one about the body, by a run that gives trial again and commits nothing for it (#964)", () => {
+    const adr = read("docs/adr/0040-the-implementer-writes-a-staging-trials-steps-and-the-reviewer-judges-them.md");
+    const consequences = adr.slice(adr.indexOf("\n## Consequences\n"));
+
+    expect(consequences).toContain(
+      `- A finding about Trial steps is one about the pull request's body, where they are kept, so the Reviewer tags it \`${FINDING_TAG_TEXT["small-body"]}\`. The run that fixes it gives \`trial\` again and has nothing to commit for it, which a Touch-up whose findings are all about the body may do. A Retry may not, as one that commits nothing is an empty diff, so a finding about Trial steps reaches a Retry only beside a finding in the code.`,
+    );
   });
 
   it("says in its ADR which labels a Trial session puts on with the Operator's credential, by the names ADR-0038 reads", () => {
