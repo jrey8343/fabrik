@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { closingLines, prBody, setupCommand, withEarlierDone } from "./finish.ts";
 import { type BranchProtection, UNPROTECTED } from "./plan.ts";
-import { type RunSummary, stepsDone } from "./oneRun.ts";
+import { mergesFromConsole, type RunSummary, stepsDone } from "./oneRun.ts";
 
 const SUMMARY: RunSummary = {
   done: ["write .github/workflows/fabrik.yml (the caller workflow)", "create the label needs-triage"],
@@ -291,6 +291,23 @@ describe("The steps the setup branch's Kit config and the repo show done", () =>
       monitor: false,
       visualEvidence: false,
     });
+  });
+});
+
+describe("Whether the setup branch's Kit config has the setup PR merged from the Console", () => {
+  it("is so once it names the Console's App, and not where it names none", () => {
+    expect(mergesFromConsole({ kitConfig: '{ "console": { "app_id": 2471093 } }', skillsLock: null })).toBe(true);
+    expect(mergesFromConsole({ kitConfig: '{ "console": {} }', skillsLock: null })).toBe(false);
+    expect(mergesFromConsole({ kitConfig: "{}", skillsLock: null })).toBe(false);
+  });
+
+  it.each([
+    ["invalid", '{ "console": { "app_id": 2471093 }, "ui": false }'],
+    ["holding an App id that isn't a whole number", '{ "console": { "app_id": "2471093" } }'],
+    ["unreadable", '{ "console": { "app_id": 2471093 }'],
+    ["missing", null],
+  ])("isn't so with a Kit config that's %s", (_, kitConfig) => {
+    expect(mergesFromConsole({ kitConfig, skillsLock: null })).toBe(false);
   });
 });
 

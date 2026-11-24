@@ -454,6 +454,50 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(body).not.toContain("Don't merge this yet.");
   });
 
+  describe("the merge ask, from the Kit config the setup PR merges", () => {
+    const ownKitConfig = async (config: string) => {
+      await mkdir(join(checkout, ".fabrik"));
+      await writeFile(join(checkout, ".fabrik", "config.json"), config);
+      git("add", ".fabrik/config.json");
+      git("commit", "-q", "-m", "Our Kit config");
+      git("push", "-q", "origin", "main");
+    };
+
+    it("where the setup branch's Kit config holds console.app_id, says to merge from the Console in the setup PR and the closing lines", async () => {
+      await ownKitConfig('{\n  "console": { "app_id": 2471093 }\n}\n');
+      const world = aWorld();
+
+      const { code, said } = await setupOnce(world);
+
+      expect(code).toBe(0);
+      const body = world.prs[0]?.body ?? "";
+      expect(body).toContain("Merge this PR from the Console once its Required checks pass. This repo's Kit config names the Console's App (console.app_id)");
+      expect(body).not.toContain("Merge this PR yourself");
+      expect(said.some((line) => line.startsWith("Merge it from the Console once its Required checks pass."))).toBe(true);
+      expect(said.some((line) => line.startsWith("Merge it yourself"))).toBe(false);
+    });
+
+    it("on a first setup, whose starter Kit config holds no console.app_id, says to merge it yourself", async () => {
+      const world = aWorld();
+
+      await setupOnce(world);
+
+      expect(world.prs[0]?.body).toContain("Merge this PR yourself once its Required checks pass.");
+      expect(world.prs[0]?.body).not.toContain("from the Console");
+    });
+
+    it("where the setup branch's Kit config is invalid, says to merge it yourself, though it holds console.app_id", async () => {
+      await ownKitConfig('{\n  "console": { "app_id": 2471093 },\n  "ui": false\n}\n');
+      const world = aWorld();
+
+      const { said } = await setupOnce(world);
+
+      expect(world.prs[0]?.body).toContain("Merge this PR yourself once its Required checks pass.");
+      expect(world.prs[0]?.body).not.toContain("from the Console");
+      expect(said.some((line) => line.startsWith("Merge it yourself once its Required checks pass."))).toBe(true);
+    });
+  });
+
   it("with a second Subscription, the setup PR lists it in the Kit config once the wizard's stage has stored its token", async () => {
     const world = aWorld();
     const starter = await readFile(join(KIT_DIR, "templates", "fabrik-config.json"), "utf8");
