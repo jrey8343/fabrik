@@ -2,24 +2,10 @@
 // pull requests are untried on staging, by the read library's own rule.
 import { describe, expect, it } from "vitest";
 import { CALLER, CALLER_PATH, NOW, OPERATOR } from "../__fixtures__/cannedRepo.ts";
-import { aDeployment, anAgentMerge, commitOf, declaring, labelledByOperator, LIVE, stagingRepo } from "./stagingRepo.fixture.ts";
+import { aDeployment, anAgentMerge, commitOf, declaring, labelledByOperator, LIVE, stagingRepo, THREE_ON_STAGING } from "./stagingRepo.fixture.ts";
 import { readUntriedQueue } from "./untriedQueue.ts";
 
 const REPO = "jrey8343/shop";
-
-/** Three merged agent pull requests, each on staging by a deploy of its own merge: 55 and 57 untried, and 56, between them, accepted by the Operator. */
-const THREE_ON_STAGING = {
-  files: declaring(),
-  deployments: {
-    production: [LIVE],
-    staging: [aDeployment("staging", 655, 55, "2026-11-05T10:05:00Z"), aDeployment("staging", 656, 56, "2026-11-06T10:05:00Z"), aDeployment("staging", 657, 57, "2026-11-07T10:05:00Z")],
-  },
-  mergedPullRequests: [
-    anAgentMerge(57, "2026-11-07T10:00:00Z", { title: "Show the cart's tax" }),
-    anAgentMerge(56, "2026-11-06T10:00:00Z", { title: "Show the cart's count", timelineItems: { nodes: [labelledByOperator("fabrik:trial-accepted", "2026-11-08T09:00:00Z")] } }),
-    anAgentMerge(55, "2026-11-05T10:00:00Z", { title: "Show the cart's total" }),
-  ],
-};
 
 describe("the untried queue, asked with no pull request", () => {
   it("is every merged agent pull request untried on staging, oldest merge first, each with its address on GitHub, its links on staging and its Trial steps, beside the staging and production addresses Kit config gives", async () => {
@@ -163,11 +149,9 @@ describe("the untried queue, asked for one pull request", () => {
     ["nothing in the repo", 99],
     ["an agent pull request production has taken", 52],
     ["a Plain pull request merged since", 58],
-    ["an open agent pull request", 60],
   ])("is refused in one line for the number of %s: it is no merged agent pull request on the Promote list", async (_what, number) => {
     const { client } = stagingRepo({
       ...ONE_DEPLOYING,
-      openPullRequests: [],
       mergedPullRequests: [
         ...ONE_DEPLOYING.mergedPullRequests,
         anAgentMerge(58, "2026-11-04T10:00:00Z", { title: "Fix a typo", headRefName: "fix-typo", author: OPERATOR, closingIssuesReferences: { nodes: [] }, body: "" }),

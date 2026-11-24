@@ -58,6 +58,20 @@ export function aDeployment(environment: string, databaseId: number, of: number,
 /** Production as it runs: Deployment 800 of pull request 52's merge, which succeeded on 2026-11-02 and nothing has superseded. */
 export const LIVE = aDeployment("production", 800, 52, "2026-11-02T09:10:00Z");
 
+/** Three merged agent pull requests, each on staging by a deploy of its own merge: 55 and 57 untried, and 56, between them, accepted by the Operator. */
+export const THREE_ON_STAGING = {
+  files: declaring(),
+  deployments: {
+    production: [LIVE],
+    staging: [aDeployment("staging", 655, 55, "2026-11-05T10:05:00Z"), aDeployment("staging", 656, 56, "2026-11-06T10:05:00Z"), aDeployment("staging", 657, 57, "2026-11-07T10:05:00Z")],
+  },
+  mergedPullRequests: [
+    anAgentMerge(57, "2026-11-07T10:00:00Z", { title: "Show the cart's tax" }),
+    anAgentMerge(56, "2026-11-06T10:00:00Z", { title: "Show the cart's count", timelineItems: { nodes: [labelledByOperator("fabrik:trial-accepted", "2026-11-08T09:00:00Z")] } }),
+    anAgentMerge(55, "2026-11-05T10:00:00Z", { title: "Show the cart's total" }),
+  ],
+};
+
 /** One request made of the canned GitHub: a REST request, or a GraphQL one with whether it is a query or a mutation. */
 export interface Request {
   readonly method: string;

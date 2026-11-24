@@ -2,36 +2,22 @@
 // it: from a Product repo's checkout, with the credential `gh` gives, against
 // a canned GitHub that logs every request made of it.
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { chmod, readdir, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { RawRepo } from "../__fixtures__/cannedRepo.ts";
 import { tempDir } from "../__fixtures__/skillsArchive.ts";
 import { GitHubError, type ReadClient } from "../github/client.ts";
 import { forbiddenImportsFrom, runtimeImportsIn } from "../read/importWalk.ts";
-import { aDeployment, anAgentMerge, declaring, labelledByOperator, LIVE, type Request, stagingRepo } from "./stagingRepo.fixture.ts";
+import { declaring, LIVE, type Request, stagingRepo, THREE_ON_STAGING } from "./stagingRepo.fixture.ts";
 
 const KIT = resolve(import.meta.dirname, "..", "..");
 const PROGRAM = join(KIT, "src/trial/untried-queue-main.ts");
 /** The credential the checkout's `gh` gives. */
 const TOKEN = "gho_the_operators_own";
-
-/** Three merged agent pull requests, each on staging by a deploy of its own merge: 55 and 57 untried, and 56, between them, accepted by the Operator. */
-const THREE_ON_STAGING: RawRepo = {
-  files: declaring(),
-  deployments: {
-    production: [LIVE],
-    staging: [aDeployment("staging", 655, 55, "2026-11-05T10:05:00Z"), aDeployment("staging", 656, 56, "2026-11-06T10:05:00Z"), aDeployment("staging", 657, 57, "2026-11-07T10:05:00Z")],
-  },
-  mergedPullRequests: [
-    anAgentMerge(57, "2026-11-07T10:00:00Z", { title: "Show the cart's tax" }),
-    anAgentMerge(56, "2026-11-06T10:00:00Z", { title: "Show the cart's count", timelineItems: { nodes: [labelledByOperator("fabrik:trial-accepted", "2026-11-08T09:00:00Z")] } }),
-    anAgentMerge(55, "2026-11-05T10:00:00Z", { title: "Show the cart's total" }),
-  ],
-};
 
 let server: Server | null = null;
 afterEach(() => {
