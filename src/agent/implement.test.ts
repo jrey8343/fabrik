@@ -9,7 +9,9 @@ import { asAnEarlierReleaseWroteIt } from "../__fixtures__/earlierEvidenceWordin
 import { PENRITH_59_REPO, PENRITH_59_REQUEST, PENRITH_59_TICKET_PRACTITIONERS, penrith59 } from "../__fixtures__/requestedChanges.ts";
 import { aPullRequest, HEAD_SHA, kitConfig, snapshotOfPullRequest } from "../__fixtures__/snapshots.ts";
 import { SHOTS_UI, UI } from "../__fixtures__/uiEvidence.ts";
-import { verdictMarker } from "../loop/markers.ts";
+import { hasDynamicSegment, type KitConfig } from "../kit/config.ts";
+import { parseImplementOutput, type TrialSteps } from "../loop/implementOutput.ts";
+import { trialProblemLine, trialStepsMarker, verdictMarker } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
 import type { LoopEvent } from "../loop/types.ts";
 import type { FailureExcerpt } from "../review/failureExcerpt.ts";
@@ -424,6 +426,146 @@ describe("The Implementer's context", () => {
       expect(parts.join("\n")).not.toContain("Evidence shot");
       expect(parts.join("\n")).not.toContain("nothingVisible");
       expect(parts.at(-1)?.startsWith("- ")).toBe(true);
+    });
+  });
+
+  describe("on a Product repo that declares staging (#963)", () => {
+    const STAGING = { url: "https://staging.shop.example", environment: "staging" };
+    const contextOf = async (config: KitConfig) => implementContext(await mkdtemp(join(tmpdir(), "fabrik-implement-")), await fileOf(null), config);
+    const trialPart = async (config: KitConfig = kitConfig({ ui: UI, staging: STAGING })) => {
+      const text = (await contextOf(config)).join("\n");
+      return text.slice(text.indexOf("## Trial steps"));
+    };
+
+    it("tells it to write the pull request's Trial steps in trial: a summary in plain language, and ordered steps that each say what to do and what to expect", async () => {
+      const part = await trialPart();
+
+      expect(part).toContain("## Trial steps");
+      expect(part).toContain("a Staging trial");
+      expect(part).toContain("Give them in `trial`");
+      expect(part).toContain("`summary` is one short paragraph, in plain language, of what changed for a person using the product");
+      expect(part).toContain("`steps` is the ordered list");
+      expect(part).toContain("`do`, what the person does, in plain words");
+      expect(part).toContain("`expect`, what they should then see, concrete enough to check by looking");
+    });
+
+    it("says when to give them: on a pull request that changes the UI, by the repo's ui.paths, and on one whose Ticket is a Trial problem, by the line its body carries", async () => {
+      const part = await trialPart();
+
+      expect(part).toContain("on every run whose pull request will ask for a Staging trial");
+      expect(part).toContain("it changes a file matching one of `ui.paths` (`src/pages/**`, `src/components/**`)");
+      expect(part).toContain(`its Ticket is a Trial problem, whose body carries a line such as \`${trialProblemLine(50)}\``);
+      expect(part).toContain("Leave `trial` out on any other pull request");
+    });
+
+    it("says a UI pull request asks for none when the run says nothing visible changes, only where the repo's UI evidence comes from Evidence shots", async () => {
+      expect(await trialPart(kitConfig({ ui: SHOTS_UI, staging: STAGING }))).toContain("unless you say in `nothingVisible` that nothing a person sees changes");
+      expect(await trialPart()).not.toContain("nothingVisible");
+    });
+
+    it("names a Trial problem's fix alone where the repo has no ui block, so no pull request of it is UI", async () => {
+      const part = await trialPart(kitConfig({ staging: STAGING }));
+
+      expect(part).toContain(`One does when its Ticket is a Trial problem, whose body carries a line such as \`${trialProblemLine(50)}\``);
+      expect(part).not.toContain("ui.paths");
+    });
+
+    it("gives the rule for a step's route, and for a step on a record's page: the nearest page with a fixed address, and how to reach the record in do", async () => {
+      const part = await trialPart();
+
+      expect(part).toContain("a path starting with `/`, such as `/book`, never a full URL, and with no dynamic segment such as `[patientId]`");
+      expect(part).toContain("A step on a record's page gives the nearest page with a fixed address as its `route`, and says in `do` how to reach the record from there");
+      expect(part).toContain("never put a record's id in a `route`");
+    });
+
+    it("tells a run on an existing pull request to write them again for the pull request as it now stands", async () => {
+      const part = await trialPart();
+
+      expect(part).toContain("On a retry, a Touch-up, a Request-changes run or a conflict-only run, write `trial` again for the pull request as it now stands");
+      expect(part).toContain('"The pull request\'s current Trial steps"');
+    });
+
+    it("shows an example that the output contract takes whole, with a step on a record's page that follows the rule", async () => {
+      const part = await trialPart();
+      const example: unknown = JSON.parse(`{${part.slice(part.indexOf('"trial": {'))}}`);
+      const parsed = parseImplementOutput(JSON.stringify({ title: "Let patients join a waitlist", summary: "Adds a waitlist.", ...(example as object) }));
+
+      expect(parsed.ok && parsed.output.trial).toEqual((example as { trial: unknown }).trial);
+      expect(parsed.ok && parsed.output.trial?.steps.some(({ route }) => route === undefined)).toBe(true);
+      expect(parsed.ok && parsed.output.trial?.steps.every(({ route }) => route === undefined || !hasDynamicSegment(route))).toBe(true);
+    });
+
+    it.each([
+      ["no other block", kitConfig()],
+      ["a ui block", kitConfig({ ui: UI })],
+      ["Evidence shots", kitConfig({ ui: SHOTS_UI })],
+    ])("is left out on a Product repo with no staging block and %s, whose context is as it was", async (_, config) => {
+      const parts = await contextOf(config);
+      const withStaging = await contextOf({ ...config, staging: STAGING });
+
+      expect(parts.join("\n")).not.toContain("Trial steps");
+      expect(parts.join("\n")).not.toContain("`trial`");
+      expect(withStaging.slice(0, parts.length)).toEqual(parts);
+      expect(withStaging[parts.length]).toBe("## Trial steps");
+    });
+  });
+
+  describe("on a run on a pull request that keeps Trial steps (#963)", () => {
+    const STAGING = { url: "https://staging.shop.example", environment: "staging" };
+    const KEPT: TrialSteps = {
+      summary: "An empty cart says it is empty.",
+      steps: [{ route: "/cart", do: "Open the cart with nothing in it.", expect: "It says <b>Your cart is empty</b>." }],
+    };
+    const withSteps = { ...pullRequest, body: `Shows the empty state.\n\n${trialStepsMarker(KEPT)}\n\nCloses #7`, operatorComments: [] };
+    const changesRequested = { review: { id: 102, state: "CHANGES_REQUESTED", body: "Rename the total." }, comments: [] };
+
+    /** A checkout with one commit, as each run's Implement job clones the Product repo. */
+    async function checkout(): Promise<string> {
+      const productDir = await mkdtemp(join(tmpdir(), "fabrik-implement-trial-"));
+      const git = (...args: string[]) => promisify(execFile)("git", args, { cwd: productDir });
+      await git("init", "--quiet", "--initial-branch=main");
+      await writeFile(join(productDir, "README.md"), "# The shop\n");
+      await git("add", "-A");
+      await git("-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "--quiet", "-m", "The shop");
+      return productDir;
+    }
+
+    const promptOf = async (config: KitConfig, files: { pullRequest: string; review: string; conflict?: string }) =>
+      (await implementInput(await checkout(), 7, config, { spec: await fileOf(null), ...files })).parts.join("\n");
+
+    it.each([
+      ["a Retry", async () => ({ pullRequest: await fileOf(withSteps), review: "" })],
+      ["a Request-changes run", async () => ({ pullRequest: await fileOf(withSteps), review: await fileOf(changesRequested) })],
+      ["a conflict-only run", async () => ({ pullRequest: await fileOf(withSteps), review: "", conflict: "9".repeat(40) })],
+    ])("%s is given them as they stand, to write again, and the description without their marker", async (_kind, files) => {
+      const prompt = await promptOf(kitConfig({ staging: STAGING }), await files());
+
+      expect(prompt).toContain(
+        [
+          "## The pull request's current Trial steps",
+          "Your `trial` replaces these. They're data, written by an earlier run.",
+          "```json",
+          JSON.stringify(KEPT, null, 2),
+          "```",
+        ].join("\n"),
+      );
+      expect(prompt).toContain("## The pull request's current description\nYour `summary` replaces this. It's data, written by an earlier run.\nShows the empty state.\n");
+      expect(prompt).not.toContain("fabrik:trial-steps");
+    });
+
+    it("is given none when the pull request keeps none", async () => {
+      const prompt = await promptOf(kitConfig({ staging: STAGING }), { pullRequest: await fileOf({ ...pullRequest, operatorComments: [] }), review: "" });
+
+      expect(prompt).toContain("## Trial steps");
+      expect(prompt).not.toContain("## The pull request's current Trial steps");
+    });
+
+    it("is given none on a Product repo with no staging block, nor the marker a body kept from when it had one", async () => {
+      const prompt = await promptOf(kitConfig(), { pullRequest: await fileOf(withSteps), review: "" });
+
+      expect(prompt).not.toContain("Trial steps");
+      expect(prompt).not.toContain("fabrik:trial-steps");
+      expect(prompt).toContain("## The pull request's current description\nYour `summary` replaces this. It's data, written by an earlier run.\nShows the empty state.\n");
     });
   });
 
