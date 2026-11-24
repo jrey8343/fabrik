@@ -38,8 +38,9 @@ import type { PromotedFacts } from "../kit/standingStaging.ts";
 import type { TrialFacts, TrialProblemFacts } from "../kit/trialResult.ts";
 import type { CommentFacts, GitHubFacts, RepoKitFacts } from "../kit/weeklySummary.ts";
 import { sameRepo } from "../loop/blockers.ts";
+import type { TrialSteps } from "../loop/implementOutput.ts";
 import { AUDIT_LABEL, MAP_LABEL, REPLAY_LABEL, RETRO_LABEL, TRIAL_LABELS } from "../loop/labels.ts";
-import { type FollowUpsOpened, trialProblemIn } from "../loop/markers.ts";
+import { type FollowUpsOpened, trialProblemIn, trialStepsIn } from "../loop/markers.ts";
 import type { FollowUp } from "../loop/verdict.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import {
@@ -184,6 +185,12 @@ export interface ShotsMarkerFacts {
   readonly marker: ShotsMarker;
 }
 
+/** The Trial steps the body of an agent pull request the Fabrik App opened keeps in their marker (#965, ADR-0040), open or merged in the last 24 hours. */
+export interface TrialStepsMarkerFacts {
+  readonly pullRequest: number;
+  readonly marker: TrialSteps;
+}
+
 /**
  * A Deployment a gather cuts the merged pull requests at, in a repo that
  * declares `staging`: those merged after its commit came after it, and
@@ -292,6 +299,8 @@ export interface StagingFacts {
   readonly evidenceMarkers: readonly EvidenceMarkerFacts[];
   /** The shots marker of each of `unpromoted` and `promoted` that has one, as `shotsMarkers` holds an open or newly merged pull request's. */
   readonly shotsMarkers: readonly ShotsMarkerFacts[];
+  /** The Trial steps of each of `unpromoted` and `promoted` that keeps some (#965), as `trialStepsMarkers` holds an open or newly merged pull request's. No such key in facts kept from an earlier release. */
+  readonly trialStepsMarkers: readonly TrialStepsMarkerFacts[];
 }
 
 /**
@@ -355,6 +364,13 @@ export interface Facts {
    * marker of the other shape.
    */
   readonly shotsMarkers: readonly ShotsMarkerFacts[];
+  /**
+   * The Trial steps of each of those pull requests that keeps some (#965,
+   * ADR-0040): one the push job wrote in a repo that declares `staging`, so
+   * none in any other repo. No such key in facts kept from an earlier
+   * release.
+   */
+  readonly trialStepsMarkers: readonly TrialStepsMarkerFacts[];
   /**
    * In a repo whose Kit config declares `staging` (#856): what the gather
    * reads past the last day. No such key in any other repo, whose facts are
@@ -497,6 +513,7 @@ async function gatherFacts(
     }),
     evidenceMarkers: markersIn([...agent, ...mergedLastDay], appLogin, evidenceMarkerIn),
     shotsMarkers: markersIn([...agent, ...mergedLastDay], appLogin, shotsMarkerIn),
+    trialStepsMarkers: markersIn([...agent, ...mergedLastDay], appLogin, trialStepsIn),
     // No such key in a repo that declares no `staging`: its facts are what they were.
     ...(merged.staging === null ? {} : { staging: stagingFactsOf(merged.staging, repo, kit.branch, appLogin) }),
   };
@@ -777,6 +794,7 @@ function stagingFactsOf({ reach, pullRequests, mergedSince }: NonNullable<Gather
     },
     evidenceMarkers: markersIn(kept, appLogin, evidenceMarkerIn),
     shotsMarkers: markersIn(kept, appLogin, shotsMarkerIn),
+    trialStepsMarkers: markersIn(kept, appLogin, trialStepsIn),
   };
 }
 

@@ -3,7 +3,7 @@ import { GitHubError, type ReadClient, type Repo } from "../github/client.ts";
 import { wordStanding } from "../kit/standingWording.ts";
 import { endedHeldLine } from "../loop/heldLine.ts";
 import { followUpsSection, type NamedFollowUp } from "../loop/followUps.ts";
-import { FOLLOW_UPS_OPENED_MARKER, trialProblemLine, verdictMarker } from "../loop/markers.ts";
+import { FOLLOW_UPS_OPENED_MARKER, trialProblemLine, trialStepsMarker, verdictMarker } from "../loop/markers.ts";
 import { aDigestComment, aRollInComment } from "./builders.ts";
 import { type Facts, gatherRepo } from "./gather.ts";
 import { closedIssueCommentsQuery, MERGED_PULL_REQUESTS_QUERY, mergedCommentsQuery } from "./homeQueries.ts";
@@ -896,6 +896,49 @@ describe("a gather shaped for Home", () => {
           expect(facts.shotsMarkers).toEqual([]);
         });
       });
+
+      describe("and its Trial steps, where its body keeps them in their marker (#965)", () => {
+        const TRIAL = {
+          summary: "A patient can now book a visit for tomorrow.",
+          steps: [
+            { route: "/book", do: "Pick tomorrow, then any free time.", expect: "A page saying the visit is booked, with its time." },
+            { do: "Open any patient from the list.", expect: "The visit under Upcoming." },
+          ],
+        };
+        const EARLIER = { summary: "A patient can now book a visit.", steps: [{ do: "Pick any day.", expect: "Its free times." }] };
+        const keeping = (...trials: readonly (typeof TRIAL | typeof EARLIER)[]) => [body(OPEN), "", ...trials.map(trialStepsMarker)].join("\n");
+
+        it("are held for the Fabrik App's open and merged agent pull requests, keyed by pull request, the last marker in a body counting, beside its evidence marker", async () => {
+          const facts = await factsOf(
+            {
+              openPullRequests: [aRawOpenPullRequest({ number: 50, body: keeping(EARLIER, TRIAL) }), aRawOpenPullRequest({ number: 51, headRefName: "fabrik/ticket-9", body: body(OPEN) })],
+              mergedPullRequests: [aRawMergedPullRequest({ number: 49, headRefName: "fabrik/ticket-8", mergedAt: "2026-11-09T10:00:00Z", body: keeping(EARLIER) })],
+            },
+            "fabrik-app[bot]",
+          );
+
+          expect(facts.trialStepsMarkers).toEqual([
+            { pullRequest: 50, marker: TRIAL },
+            { pullRequest: 49, marker: EARLIER },
+          ]);
+          expect(facts.evidenceMarkers.map(({ pullRequest }) => pullRequest)).toEqual([50, 51, 49]);
+        });
+
+        it("are read only from a pull request the Fabrik App opened, never another bot's or a Plain one's, nor one merged more than 24 hours ago", async () => {
+          const facts = await factsOf(
+            {
+              openPullRequests: [
+                aRawOpenPullRequest({ number: 50, author: { __typename: "Bot", login: "helper" }, body: keeping(TRIAL) }),
+                aRawOpenPullRequest({ number: 70, headRefName: "fix-typo", author: OPERATOR, body: keeping(TRIAL) }),
+              ],
+              mergedPullRequests: [aRawMergedPullRequest({ number: 48, mergedAt: "2026-11-08T11:00:00Z", body: keeping(TRIAL) })],
+            },
+            "fabrik-app[bot]",
+          );
+
+          expect(facts.trialStepsMarkers).toEqual([]);
+        });
+      });
     });
 
     it("hold each comment's id on an open issue and an open agent pull request (#639)", async () => {
@@ -1257,6 +1300,26 @@ describe("a gather shaped for Home", () => {
       // What the last day's facts held is what they hold: neither merged in it.
       expect(facts.evidenceMarkers).toEqual([]);
       expect(facts.shotsMarkers).toEqual([]);
+    });
+
+    it("holds the Trial steps of each it keeps past the last day, read from a body the Fabrik App wrote, and none of them among the last day's (#965)", async () => {
+      const TRIAL = { summary: "A shopper now sees the cart's total.", steps: [{ route: "/cart", do: "Add any product.", expect: "The total under the list, with tax." }] };
+      const keeping = [marker(UI), "", trialStepsMarker(TRIAL)].join("\n");
+      const facts = await factsOf(
+        {
+          deployments: { production: [PROMOTION] },
+          mergedPullRequests: [
+            aRawMergedPullRequest({ number: 55, mergedAt: "2026-11-05T10:00:00Z", mergeCommit: { oid: "5".repeat(40) }, body: keeping }),
+            aRawMergedPullRequest({ number: 54, mergedAt: "2026-11-04T10:00:00Z", headRefName: "fabrik/ticket-11", mergeCommit: { oid: "4".repeat(40) }, body: marker(UI) }),
+            aRawMergedPullRequest({ number: 53, mergedAt: "2026-11-03T10:00:00Z", headRefName: "fix-typo", author: OPERATOR, closingIssuesReferences: { nodes: [] }, body: keeping }),
+          ],
+        },
+        "fabrik-app[bot]",
+      );
+
+      expect(facts.staging?.unpromoted.map(({ number }) => number)).toEqual([55, 54]);
+      expect(facts.staging?.trialStepsMarkers).toEqual([{ pullRequest: 55, marker: TRIAL }]);
+      expect(facts.trialStepsMarkers).toEqual([]);
     });
 
     it("holds the Trial problems that name each, from the issues GitHub cross-references to it: one whose body's line names it, and none that only mentions it, names another, or is in another repo", async () => {
