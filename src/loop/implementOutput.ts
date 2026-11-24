@@ -204,8 +204,8 @@ export function readImplementOutput(value: unknown): ImplementOutputResult {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return { ok: false, errors: ["Implementer output must be a JSON object"] };
   }
-  const { title, summary, fix, operatorCommentsConsidered: considered, routes, shots, nothingVisible, supersededBy } = value as Record<string, unknown>;
-  const trial = trialStepsOf((value as Record<string, unknown>).trial);
+  const { title, summary, fix, operatorCommentsConsidered: considered, routes, shots, nothingVisible, trial: steps, supersededBy } = value as Record<string, unknown>;
+  const trial = trialStepsOf(steps);
   const errors: string[] = [];
   if (!isText(title) || title.includes("\n") || title.length > MAX_TITLE) {
     errors.push(`title must be one non-empty line of at most ${MAX_TITLE} characters`);
