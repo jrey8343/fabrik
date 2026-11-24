@@ -30,7 +30,7 @@ Then read how the skill was run, above: with nothing, or with one pull request's
 
 ## 2. Find the work
 
-What there is to try comes from the **untried queue command**, a read-only program of the Kit that goes by the Kit's own rule, so take it from there and never from a guess made with `gh`. Run it from the root of the Product repo's checkout, as one shell command, since `$FABRIK` lasts only as long as the call. It downloads Fabrik at the release `.github/workflows/fabrik.yml` pins into a temporary folder, runs the program from it and deletes the folder, and needs Node 24.3 or later:
+What there is to try comes from the untried queue command, a read-only program of the Kit that goes by the Kit's own rule, so take it from there and never from a guess made with `gh`. Run it from the root of the Product repo's checkout, as one shell command, since `$FABRIK` lasts only as long as the call. It downloads Fabrik at the release `.github/workflows/fabrik.yml` pins into a temporary folder, runs the program from it and deletes the folder, and needs Node 24.3 or later:
 
 ```sh
 RELEASE=$(sed -n -E "s|^[[:space:]-]*uses:[[:space:]\"']*jrey8343/fabrik/[^@]*@([A-Za-z0-9._+-]+).*|\1|p" .github/workflows/fabrik.yml | head -n 1)

@@ -36,10 +36,12 @@ describe("the README's section for the Trial session, on the untried queue comma
 
     expect(headings.indexOf("## Trial session")).toBe(headings.indexOf("## Merge gate") + 1);
     expect(headings.indexOf("## Audit")).toBe(headings.indexOf("## Trial session") + 1);
-    expect(section).toContain("the **untried queue command**");
+    expect(section).toContain("What there is to try comes from the untried queue command, a read-only program of the Kit");
+    // Plain words, never set as a term: the glossary has no such entry.
+    expect(readme).not.toMatch(/\*\*untried queue[^*]*\*\*/i);
     expect(section).toContain("(ADR-0040)");
     const layout = readme.split("\n## Layout\n")[1]?.split("\n## ")[0] ?? "";
-    expect(layout).toContain("- `src/trial/` holds the **untried queue command** (see [Trial session](#trial-session))");
+    expect(layout).toContain("- `src/trial/` holds the untried queue command (see [Trial session](#trial-session))");
     expect(layout).toContain("`untried-queue-main.ts`");
     expect(layout).toContain("`untriedQueue.ts`");
   });
@@ -115,7 +117,7 @@ describe("the README's section for the Trial session, on the untried queue comma
 
 describe("the README's section for the Trial session, on the skill, /fabrik-trial (#967)", () => {
   /** The section's words on the skill: what comes before the untried queue command's own paragraph. */
-  const onTheSkill = section.split("\nWhat there is to try comes from the **untried queue command**")[0] ?? "";
+  const onTheSkill = section.split("\nWhat there is to try comes from the untried queue command")[0] ?? "";
   /** The plain bullet of them that opens with `lead`. */
   const says = (lead: string): string => onTheSkill.split("\n").find((line) => line.startsWith(`- ${lead}`)) ?? "";
 

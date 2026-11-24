@@ -71,7 +71,9 @@ describe("the Trial session skill, /fabrik-trial", () => {
 
     expect(shell(readme)).toHaveLength(5);
     expect(shell(find)).toEqual(shell(readme));
-    expect(find).toContain("the **untried queue command**");
+    expect(find).toContain("What there is to try comes from the untried queue command, a read-only program of the Kit");
+    // Plain words, never set as a term: the glossary has no such entry.
+    expect(skill).not.toMatch(/\*\*untried queue[^*]*\*\*/i);
     expect(find).toContain(`\`node "$FABRIK/${PROGRAM}" 50\``);
     expect(find).toContain("as one shell command");
     expect(find).toContain("Node 24.3 or later");
