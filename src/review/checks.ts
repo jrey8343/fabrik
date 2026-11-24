@@ -2,6 +2,8 @@
 // waits on this before the Reviewer runs: red checks the Kit re-runs once, and
 // a head still red goes to the Reviewer with its red checks (#779). Pure, no I/O.
 
+import { CONSOLE_CHECK } from "../kit/consoleCheck.ts";
+
 /** One check on the PR's head, as `gh pr checks --json name,bucket` reports it. */
 export interface CheckState {
   readonly name: string;
@@ -50,10 +52,12 @@ export interface GhChecksRun {
  * check has reported on the head, which is no checks: a Required check is
  * then pending, as unreported. Any other failure that printed nothing is an
  * error: reading it as "no checks" would leave every Required check
- * unreported, and the Review would wait out its timeout.
+ * unreported, and the Review would wait out its timeout. It skips the Console
+ * check, whatever it reported, which is never a Required check (ADR-0019): it
+ * reports only at the Console's merge, so nothing the wait gives names it.
  */
 export function checksFromGh(run: GhChecksRun): CheckState[] {
-  if (run.stdout.trim() !== "") return JSON.parse(run.stdout) as CheckState[];
+  if (run.stdout.trim() !== "") return (JSON.parse(run.stdout) as CheckState[]).filter((check) => check.name !== CONSOLE_CHECK);
   if (!run.failed || /no (required )?checks reported/i.test(run.stderr)) return [];
   throw new Error(`gh pr checks failed: ${run.stderr.trim() || "no output"}`);
 }

@@ -90,4 +90,20 @@ describe("Reading `gh pr checks` output", () => {
 
     expect(() => checksFromGh({ stdout: "", stderr, failed: true })).toThrow(/Resource not accessible by integration/);
   });
+
+  // The Console check is never a Required check (ADR-0019): it reports only at the Console's merge, as when GitHub refused it.
+  it.each(["pass", "fail", "pending", "skipping", "cancel"] as const)("skips the Console check whatever it reported (%s), reading the others it printed", (bucket) => {
+    const stdout = JSON.stringify([
+      { name: "build", bucket: "pass" },
+      { name: "Merge from the Console", bucket },
+    ]);
+
+    expect(checksFromGh({ stdout, stderr: "", failed: bucket !== "pass" })).toEqual([{ name: "build", bucket: "pass" }]);
+  });
+
+  it("reads no checks when it printed only the Console check", () => {
+    const stdout = JSON.stringify([{ name: "Merge from the Console", bucket: "fail" }]);
+
+    expect(checksFromGh({ stdout, stderr: "", failed: true })).toEqual([]);
+  });
 });

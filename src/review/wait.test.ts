@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { checksFromGh } from "./checks.ts";
 import type { FailureReader } from "./failureExcerpt.ts";
-import type { CheckDetail } from "./rerun.ts";
+import { type CheckDetail, redChecksOf } from "./rerun.ts";
 import {
   type ChecksWaitGitHub,
   conflictReport,
@@ -205,6 +206,47 @@ describe("Waiting for an agent PR's required checks", () => {
 
   it("reports any other error, such as one before the wait starts, as a crash with its message", () => {
     expect(errorReport(new Error("The Kit config is invalid"))).toEqual({ failure: "crash", detail: "The Kit config is invalid" });
+  });
+});
+
+/** The checks a `gh pr checks` run printed, read as the wait reads them. */
+const printed = (checks: readonly CheckDetail[]): CheckDetail[] =>
+  checksFromGh({ stdout: JSON.stringify(checks), stderr: "", failed: checks.some((check) => check.bucket !== "pass") }) as CheckDetail[];
+
+const actionsCheck = (name: string, bucket: CheckDetail["bucket"], run: number): CheckDetail => ({
+  name,
+  bucket,
+  link: `https://github.com/o/r/actions/runs/${run}/job/${run * 10}`,
+  workflow: "CI",
+});
+
+// The Console check is never a Required check (ADR-0019): a head may hold one when GitHub refused the Console's merge.
+describe("Waiting on a head that also holds the Console check", () => {
+  it.each(["fail", "pending"] as const)("ends green once build passed, whatever the Console check beside it (%s)", async (bucket) => {
+    const { github, options } = fakes([
+      printed([check("build", "pending"), check("Merge from the Console", bucket)]),
+      printed([check("build", "pass"), check("Merge from the Console", bucket)]),
+    ]);
+
+    expect(await waitForRequiredChecks(github, options(["build"]))).toEqual({ checks: "green", headSha: HEAD, ranNothing: [] });
+  });
+
+  it("ends red naming build alone when build failed beside a failed Console check", async () => {
+    const { github, options } = fakes([printed([check("build", "fail"), check("Merge from the Console", "fail")])]);
+
+    expect(await waitForRequiredChecks(github, options(["build"]))).toEqual({ checks: "red", headSha: HEAD, failed: ["build"] });
+  });
+
+  it("hands the red checks only the Required checks that failed, never the Console check", async () => {
+    const checks = printed([actionsCheck("build", "fail", 7), actionsCheck("lint", "pass", 7), actionsCheck("Merge from the Console", "fail", 8)]);
+    const { github, options } = fakes([checks]);
+
+    const outcome = await waitForRequiredChecks(github, options(["build", "lint"]));
+
+    expect(redChecksOf(checks, outcome.checks === "red" ? outcome.failed : [])).toEqual({
+      rerun: [{ name: "build", link: "https://github.com/o/r/actions/runs/7/job/70", run: 7 }],
+      outside: [],
+    });
   });
 });
 
