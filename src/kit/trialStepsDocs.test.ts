@@ -7,6 +7,7 @@ import { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
 import { retryBodyOnlyMarker, trialStepsMarker } from "../loop/markers.ts";
 import { bodyOnly } from "../loop/retry.ts";
 import { FINDING_TAG_TEXT } from "../loop/verdict.ts";
+import { DEFAULT_KIT_CONFIG, homeFactsOf, rowsOf } from "../read/index.ts";
 
 const root = new URL("../../", import.meta.url);
 const read = (path: string) => readFileSync(new URL(path, root), "utf8");
@@ -134,6 +135,25 @@ describe("The Trial steps' words and decision (#962)", () => {
     );
     expect(consequences).toContain("So a run that changes nothing a person sees, as a Touch-up of a stale comment, cannot take away steps the Reviewer has judged, and steps a later run should have changed and did not are the Reviewer's to find.");
     expect(adr).not.toContain("A run that leaves `trial` out leaves its pull request with none");
+  });
+
+  it("says in its ADR that a trial on a pull request that asks for no Staging trial is on its row all the same, and no longer that nobody reads it", () => {
+    const adr = read("docs/adr/0040-the-implementer-writes-a-staging-trials-steps-and-the-reviewer-judges-them.md");
+    const steps = { summary: "The booking API retries a failed save.", steps: [{ do: "Book a visit with the network off, then on.", expect: "The visit is booked once." }] };
+    // Merged agent pull request 50 carries no UI evidence and closes no Trial problem, so it asks for no Staging trial.
+    const facts = homeFactsOf({
+      kit: { repo: "owner/product", branch: "main", config: { ok: true, config: { ...DEFAULT_KIT_CONFIG, staging: { url: "https://staging.shop.example", environment: "staging" } } }, dispatch: null },
+      mergedLastDay: [{ number: 50, title: "Retry a failed save", ticket: 7, mergeCommit: "m".repeat(40), mergedAt: "2026-11-09T11:30:00Z" }],
+      trialStepsMarkers: [{ pullRequest: 50, marker: steps }],
+    });
+    const row = rowsOf(facts, null, null, null, "2026-11-09T12:00:00Z").find(({ staging }) => staging !== undefined);
+
+    expect(adr).toContain(
+      "`trial` on a pull request that asks for none is kept all the same, and read as any other is: its row and its entry on the Promote list carry it as `staging.trial`, whatever they say of whether it needs a Staging trial, and the untried queue command prints it for a pull request named by its number.",
+    );
+    expect(adr).not.toContain("read by nobody");
+    expect(row?.standing).toMatchObject({ detail: { staging: { trial: { needed: false } } } });
+    expect(row?.staging?.trial).toMatchObject({ summary: steps.summary });
   });
 
   it("is pointed at from ADR-0027, in one line saying Trial steps findings carry the body's tag and what a Retry of only such findings may do", () => {
