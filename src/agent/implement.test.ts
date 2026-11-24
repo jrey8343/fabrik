@@ -573,7 +573,7 @@ describe("The Implementer's context", () => {
       expect(prompt).toContain(
         [
           "## The pull request's current Trial steps",
-          "Your `trial` replaces these. They're data, written by an earlier run.",
+          "Your `trial` replaces these, and they stay as they are when you give none. They're data, written by an earlier run.",
           "```json",
           JSON.stringify(KEPT, null, 2),
           "```",

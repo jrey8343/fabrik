@@ -372,18 +372,22 @@ class Thread {
 
   /** The run `started` finishes with these changes; if its plan pushes, the PR is at `to`. */
   async finished(started: StartAgentRun, changes: BranchChanges, to: string): Promise<Plan> {
-    const fixes: Partial<Fixes> = {
-      ...(started.retry === undefined ? {} : { retry: started.retry }),
-      ...(started.touchUp === undefined ? {} : { touchUp: started.touchUp }),
-      ...(started.requestChanges === undefined ? {} : { review: started.requestChanges.review }),
-      ...(started.retryFlaw === undefined ? {} : { retryFlaw: started.retryFlaw }),
-      ...(started.stepUpReason == null ? {} : { stepUpReason: started.stepUpReason }),
-    };
-    return this.plan({ ...finished(to, fixes, this.headSha), changes }, await this.onGitHub.pushJobSnapshot(), to);
+    return this.plan({ ...finished(to, fixesOf(started), this.headSha), changes }, await this.onGitHub.pushJobSnapshot(), to);
   }
 }
 
 type StartAgentRun = Extract<Action, { kind: "start-agent-run" }>;
+
+/** What the run `started` says of itself as it finishes: which Retry, Touch-up or Request-changes run it was. */
+function fixesOf(started: StartAgentRun): Partial<Fixes> {
+  return {
+    ...(started.retry === undefined ? {} : { retry: started.retry }),
+    ...(started.touchUp === undefined ? {} : { touchUp: started.touchUp }),
+    ...(started.requestChanges === undefined ? {} : { review: started.requestChanges.review }),
+    ...(started.retryFlaw === undefined ? {} : { retryFlaw: started.retryFlaw }),
+    ...(started.stepUpReason == null ? {} : { stepUpReason: started.stepUpReason }),
+  };
+}
 
 const BUILT: BranchChanges = { net: [{ path: "src/cart.ts" }], commits: [{ path: "src/cart.ts" }] };
 const NOTHING: BranchChanges = { net: [], commits: [] };
@@ -722,5 +726,80 @@ describe("A Retry of findings that are all about the body (#962)", () => {
 
     expect(postedBy(plan).at(-1)).toMatchObject({ source: "empty-diff", verdict: "execution-flaw" });
     expect(actionsOf(plan)).not.toContainEqual(expect.objectContaining({ kind: "edit-issue-body" }));
+  });
+});
+
+describe("The Trial steps a pull request keeps, on a later run that gives none (#962)", () => {
+  const STAGING = kitConfig({ staging: { url: "https://staging.shop.example", environment: "staging" } });
+  const KEPT = { summary: "An empty cart says it is empty.", steps: [{ route: "/cart", do: "Open the cart with nothing in it.", expect: "It says the cart is empty." }] };
+  const GIVEN = { summary: "An empty cart says it is empty, and offers a way back.", steps: [{ route: "/cart", do: "Open the cart with nothing in it, then press Keep shopping.", expect: "The shop's front page opens." }] };
+  const BODY_ONLY = "verdict: execution-flaw\n\n- [small: body] The body says it adds a `--dry-run` flag, which the branch doesn't.";
+  const SUMMARY = "Shows the empty state for an empty cart.";
+
+  /** A thread whose pull request's body, which the Fabrik App wrote, keeps Trial steps an earlier run gave. */
+  function keeping(onGitHub = new PullRequestOnGitHub()): Thread {
+    onGitHub.body = `${SUMMARY}\n\n${trialStepsMarker(KEPT)}\n\nCloses #7`;
+    return new Thread(onGitHub);
+  }
+
+  /** The body the run `started` on `thread` leaves when it lands with `changes`, giving this `trial` or none, in a repo that declares staging or one with this config. */
+  async function bodyLeftBy(thread: Thread, started: StartAgentRun, changes: BranchChanges, trial?: unknown, config = STAGING): Promise<string[]> {
+    const run = finished(B, fixesOf(started), thread.headSha);
+    const event = { ...run, changes, output: JSON.stringify({ ...JSON.parse(run.output), ...(trial === undefined ? {} : { trial }) }) };
+    return actionsOf(planFor(event, await thread.onGitHub.pushJobSnapshot(), config)).flatMap((action) => (action.kind === "edit-issue-body" ? [action.body] : []));
+  }
+
+  const keptBody = [`${SUMMARY}\n\n${trialStepsMarker(KEPT)}\n\nCloses #7`];
+
+  it("a Touch-up of a stale comment, which changes nothing a person sees, leaves them as they were", async () => {
+    const thread = keeping();
+    await thread.reviewed(SMALL);
+
+    expect(await bodyLeftBy(thread, await thread.implement(), BUILT)).toEqual(keptBody);
+  });
+
+  it("a malformed trial is treated as left out, so it leaves them as they were too", async () => {
+    const thread = keeping();
+    await thread.reviewed(SMALL);
+
+    expect(await bodyLeftBy(thread, await thread.implement(), BUILT, { summary: GIVEN.summary, steps: [] })).toEqual(keptBody);
+  });
+
+  it("a run that gives some replaces them", async () => {
+    const thread = keeping();
+    await thread.reviewed(SMALL);
+
+    expect(await bodyLeftBy(thread, await thread.implement(), BUILT, GIVEN)).toEqual([`${SUMMARY}\n\n${trialStepsMarker(GIVEN)}\n\nCloses #7`]);
+  });
+
+  it("a body-only Touch-up that commits nothing leaves them as they were", async () => {
+    const thread = keeping();
+    await thread.reviewed(BODY_ONLY);
+
+    expect(await bodyLeftBy(thread, await thread.implement(), NOTHING)).toEqual(keptBody);
+  });
+
+  it("a Retry leaves them as they were", async () => {
+    const thread = keeping();
+    await thread.reviewed(UNTAGGED);
+    const started = await thread.implement();
+
+    expect(started).toMatchObject({ retry: 1 });
+    expect(await bodyLeftBy(thread, started, BUILT)).toEqual(keptBody);
+  });
+
+  it("a Request-changes run that pushes leaves them as they were", async () => {
+    const thread = keeping(requestedChanges());
+    const started = await thread.implement();
+
+    expect(started.requestChanges).toBeDefined();
+    expect(await bodyLeftBy(thread, started, BUILT)).toEqual(keptBody);
+  });
+
+  it("in a repo that declares no staging the body carries none, whatever it kept", async () => {
+    const thread = keeping();
+    await thread.reviewed(SMALL);
+
+    expect(await bodyLeftBy(thread, await thread.implement(), BUILT, undefined, kitConfig())).toEqual([`${SUMMARY}\n\nCloses #7`]);
   });
 });

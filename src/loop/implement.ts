@@ -228,7 +228,7 @@ export function applyImplementation(event: ImplementRunFinished, { issue, operat
         head: branch,
         base,
         title: withoutMentions(title),
-        body: pullRequestBody(summary, issueNumber, section, trialStepsFor(parsed.output, config), whole?.changedTests ?? changes.changedTests ?? [], event.keptBranch?.pullRequest ?? null),
+        body: pullRequestBody(summary, issueNumber, section, trialStepsFor(parsed.output, config, null), whole?.changedTests ?? changes.changedTests ?? [], event.keptBranch?.pullRequest ?? null),
         draft: true,
       },
       ...previewToLink(section, config, branch, null),
@@ -290,6 +290,7 @@ function opening(ticket: number, issue: IssueSnapshot, headSha: string): PullReq
     uiEvidenceMarker: null,
     shotsMarker: null,
     changedTests: [],
+    trialSteps: null,
     digests: [],
     faults: [],
     followUpsOpened: false,
@@ -486,7 +487,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
           branch,
           parsed.output,
           evidence?.section ?? null,
-          trialStepsFor(parsed.output, config),
+          trialStepsFor(parsed.output, config, pullRequest),
           changedTestsOf(pullRequest, changes),
           fixes.operatorComments,
         ),
@@ -524,7 +525,7 @@ export function applyRetryImplementation(event: ImplementRunFinished, snapshot: 
       {
         kind: "edit-issue-body",
         issue: pullRequest.number,
-        body: pullRequestBody(parsed.output.summary, issueNumber, section, trialStepsFor(parsed.output, config), changedTestsOf(pullRequest, changes)),
+        body: pullRequestBody(parsed.output.summary, issueNumber, section, trialStepsFor(parsed.output, config, pullRequest), changedTestsOf(pullRequest, changes)),
       },
       // Each Spin-off's issue, before the note that names it by its number (#884).
       ...setAside.actions,
@@ -930,7 +931,7 @@ function landConflictRun(
       {
         kind: "edit-issue-body",
         issue: pullRequest.number,
-        body: pullRequestBody(output.summary, event.issue, section, trialStepsFor(output, config), changedTestsOf(pullRequest, changes)),
+        body: pullRequestBody(output.summary, event.issue, section, trialStepsFor(output, config, pullRequest), changedTestsOf(pullRequest, changes)),
       },
       {
         kind: "comment",
@@ -974,7 +975,7 @@ function pushedHead({ pushedHead: head }: BranchChanges): string[] {
  * An agent PR's body: the Implementer's summary, then the Changed existing
  * tests section when its runs changed any (#463), then the evidence section
  * when the run was UI, then the marker that keeps its Trial steps when the
- * run gave them (#963, trialStepsFor), then the Closes line, so merging the
+ * run gave them or the PR already kept some (#963, trialStepsFor), then the Closes line, so merging the
  * PR closes the Ticket and starts the next Dispatch check. The summary is
  * agent text, so it keeps no section or marker of its own: only the Kit's
  * say which existing tests changed, where the evidence is kept and what the
@@ -1001,14 +1002,21 @@ function pullRequestBody(
 }
 
 /**
- * The marker that keeps a run's Trial steps on its pull request (#963), or
- * null when the body carries none: the run gave no `trial` the contract
- * took, or the Product repo declares no `staging`, whose pull requests are
- * as they were. Each run's body is written whole, so a later run's marker
- * takes the earlier one's place, and a run that gives none leaves none.
+ * The marker that keeps a pull request's Trial steps in the body a run
+ * writes (#963), or null when the body carries none. In a Product repo that
+ * declares `staging`, a run that gave a `trial` the contract took writes it,
+ * so a later run's steps take the earlier one's place. A run on an existing
+ * pull request, `pullRequest`, that gave none it took, by leaving it out or
+ * by a malformed one, keeps the steps that pull request already carries
+ * (#962): each run's body is written whole, so the Kit writes them again
+ * from what the snapshot read in the body the Fabrik App wrote. A first run
+ * that gives none writes none. A Product repo that declares no `staging`
+ * has no marker, whatever the run gave: its pull requests are as they were.
  */
-function trialStepsFor({ trial }: ImplementOutput, config: KitConfig): string | null {
-  return trial === undefined || config.staging === null ? null : trialStepsMarker(trial);
+function trialStepsFor({ trial }: ImplementOutput, config: KitConfig, pullRequest: Pick<PullRequestSnapshot, "trialSteps"> | null): string | null {
+  if (config.staging === null) return null;
+  const steps = trial ?? pullRequest?.trialSteps ?? null;
+  return steps === null ? null : trialStepsMarker(steps);
 }
 
 /** The existing tests a run on its agent PR leaves the body listing: those the PR's marker lists, then the run's own. */

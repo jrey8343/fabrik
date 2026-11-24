@@ -125,6 +125,17 @@ describe("The Trial steps' words and decision (#962)", () => {
     expect(retryBodyOnlyMarker("a".repeat(40))).toBe(`<!-- fabrik:retry-body-only ${"a".repeat(40)} -->`);
   });
 
+  it("says in its ADR that a run on an existing pull request that gives no trial the Kit can read keeps the steps it carries, and no longer that it leaves none (#962)", () => {
+    const adr = read("docs/adr/0040-the-implementer-writes-a-staging-trials-steps-and-the-reviewer-judges-them.md");
+    const consequences = adr.slice(adr.indexOf("\n## Consequences\n"));
+
+    expect(consequences).toContain(
+      "- A run on an existing pull request that leaves `trial` out, or gives a malformed one, keeps the Trial steps the pull request carries: the Kit reads them from the marker in the body it wrote, and writes them again in the body the run leaves. A run that gives them replaces them, and a first run that gives none writes none.",
+    );
+    expect(consequences).toContain("So a run that changes nothing a person sees, as a Touch-up of a stale comment, cannot take away steps the Reviewer has judged, and steps a later run should have changed and did not are the Reviewer's to find.");
+    expect(adr).not.toContain("A run that leaves `trial` out leaves its pull request with none");
+  });
+
   it("is pointed at from ADR-0027, in one line saying Trial steps findings carry the body's tag and what a Retry of only such findings may do", () => {
     const earlier = read("docs/adr/0027-an-execution-flaw-of-only-small-or-missed-earlier-findings-calls-for-a-touch-up-not-a-retry.md");
     const pointing = earlier.split("\n").filter((line) => line.includes("](0040-the-implementer-writes-a-staging-trials-steps-and-the-reviewer-judges-them.md)"));

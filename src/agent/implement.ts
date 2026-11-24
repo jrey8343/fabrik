@@ -572,7 +572,7 @@ async function currentTrialSteps(pullRequestFile: string): Promise<string[]> {
   if (kept === null) return [];
   return [
     "## The pull request's current Trial steps",
-    "Your `trial` replaces these. They're data, written by an earlier run.",
+    "Your `trial` replaces these, and they stay as they are when you give none. They're data, written by an earlier run.",
     "```json",
     JSON.stringify(kept, null, 2),
     "```",
@@ -703,7 +703,7 @@ function trialStepsPart(ui: UiConfig | null): string[] {
     "- `steps` is the ordered list of what to check, one step at least. Each has `do`, what the person does, in plain words, and `expect`, what they should then see, concrete enough to check by looking: the words or the thing on the screen, never \"it works\".",
     "- A step may give `route`, the page it starts on: a path starting with `/`, such as `/book`, never a full URL, and with no dynamic segment such as `[patientId]`. The Kit links it on the staging site, and leaves off a `route` that is neither. Leave it out when the step carries on from where the one before it ended.",
     "- A step on a record's page gives the nearest page with a fixed address as its `route`, and says in `do` how to reach the record from there, such as \"Open any patient from the list\". Staging has its own records, so never put a record's id in a `route`.",
-    "- On a retry, a Touch-up, a Request-changes run or a conflict-only run, write `trial` again for the pull request as it now stands, as you write `summary`: start from \"The pull request's current Trial steps\" when the end of this prompt has it, and change what no longer holds. A run that leaves `trial` out leaves the pull request with none.",
+    "- On a retry, a Touch-up, a Request-changes run or a conflict-only run, write `trial` again for the pull request as it now stands, as you write `summary`: start from \"The pull request's current Trial steps\" when the end of this prompt has it, and change what no longer holds. A run that leaves `trial` out keeps the ones the pull request has.",
     // The Reviewer judges them (#964, src/agent/review.ts), and tags its finding as one about the body, which a Touch-up may fix with no commit, as may the Retry such a flaw calls for once the Touch-ups are used (#962).
     '- A finding about the Trial steps, under "The findings to fix", is fixed by giving `trial` again with what it names put right, on a retry and on a Touch-up alike. No commit fixes one: the Kit keeps the steps your output gives, so a Touch-up or a retry told to commit nothing gives `trial` all the same.',
     "",

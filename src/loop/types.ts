@@ -14,6 +14,7 @@ import type { FableCapReading, ModelFallback } from "./fableCap.ts";
 import type { ChangeFingerprint } from "./changeFingerprint.ts";
 import type { DigestGiven, PictureOf } from "./digestContract.ts";
 import type { HoldEnded } from "./heldLine.ts";
+import type { TrialSteps } from "./implementOutput.ts";
 import type { Label, TriggerLabel } from "./labels.ts";
 import type { CheckFixMark, FlakyCheckMark, OpenedSpinOff, OperatorMentionMark, PrototypeRequestMarker } from "./markers.ts";
 import type { Fault } from "./verdict.ts";
@@ -1080,6 +1081,13 @@ export interface PullRequestSnapshot {
    * none, so a later run's push lists them beside its own.
    */
   readonly changedTests: readonly string[];
+  /**
+   * The Trial steps it keeps (#963, ADR-0040), read from the marker in the
+   * body the Fabrik App wrote (trialStepsIn, src/loop/markers.ts), or null
+   * when it keeps none. A later run that gives no `trial` the contract takes
+   * leaves them as they are: the Kit writes them into the body again (#962).
+   */
+  readonly trialSteps: TrialSteps | null;
   /**
    * The Digests on its thread (ADR-0022), oldest first: each of the Fabrik
    * App's comments whose first line is a `fabrik:digest` marker, never a

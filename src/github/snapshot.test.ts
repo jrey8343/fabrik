@@ -42,6 +42,7 @@ import {
   pushedHeadMarker,
   RESEARCH_RUN_FAILED_MARKER,
   spinOffMarker,
+  trialStepsMarker,
   verdictMarker,
 } from "../loop/markers.ts";
 import { planFor } from "../loop/rules.ts";
@@ -2060,6 +2061,34 @@ describe("Gathering the existing tests a pull request's Implement runs changed (
 
   it("ignores a marker in the body of a PR a person opened, so nobody can plant a list", async () => {
     expect(await gathered(body(["src/cart.test.ts"]), { login: "fabrik-app", __typename: "User" })).toMatchObject({ changedTests: [] });
+  });
+});
+
+describe("Gathering the Trial steps a pull request keeps (#962)", () => {
+  const pushed = { kind: "pull-request-pushed", pullRequest: 50 } as const;
+  const STEPS = { summary: "Patients can join a waitlist for a full day.", steps: [{ route: "/book", do: "Pick a day with no free slots.", expect: "A Join the waitlist button shows." }] };
+  /** An agent PR's body as the push job writes it: the summary, the Trial steps marker, then Closes. */
+  const body = ["Adds a waitlist to full days.", trialStepsMarker(STEPS), "Closes #7"].join("\n\n");
+
+  async function gathered(text: string, author: { login: string; __typename: string } | null = APP_BOT) {
+    return (await gatherSnapshot(pullRequestGitHub({ author, body: text }), repo, pushed, null, APP_LOGIN)).pullRequest;
+  }
+
+  it("reads back the steps the marker keeps, in a body the Fabrik App wrote", async () => {
+    expect((await gathered(body))?.trialSteps).toEqual(STEPS);
+  });
+
+  it("finds none on a PR whose body has no marker, or one that holds no Trial steps", async () => {
+    expect(await gathered("Adds a retry to the booking API.\n\nCloses #7")).toMatchObject({ trialSteps: null });
+    expect(await gathered('Adds a retry.\n\n<!-- fabrik:trial-steps {"summary":"A waitlist.","steps":[]} -->\n\nCloses #7')).toMatchObject({ trialSteps: null });
+  });
+
+  it.each([
+    ["a person", { login: "fabrik-app", __typename: "User" }],
+    ["another bot", { login: "other-app", __typename: "Bot" }],
+    ["a deleted account", null],
+  ])("ignores the marker in the body of a PR %s opened, so nobody can give a PR steps for a later run to keep", async (_, author) => {
+    expect(await gathered(body, author)).toMatchObject({ trialSteps: null });
   });
 });
 

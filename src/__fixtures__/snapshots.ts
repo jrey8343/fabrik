@@ -153,6 +153,7 @@ export function aPullRequest(overrides: Partial<PullRequestSnapshot> = {}): Pull
     uiEvidenceMarker: null,
     shotsMarker: null,
     changedTests: [],
+    trialSteps: null,
     digests: [],
     faults: [],
     followUpsOpened: false,

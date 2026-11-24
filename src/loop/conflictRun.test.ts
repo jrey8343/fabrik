@@ -203,6 +203,23 @@ describe("A conflict-only run", () => {
     expect(bodyIn()).toEqual(["Handles the empty cart.\n\nCloses #7"]);
   });
 
+  it("that lands and gave no Trial steps keeps the ones the pull request carries, and replaces them when it gave some (#962)", () => {
+    const thread = new Thread();
+    thread.mainMovesAndConflicts(MAIN);
+    const kept = { summary: "An empty cart says it is empty.", steps: [{ route: "/cart", do: "Open the cart with nothing in it.", expect: "It says the cart is empty." }] };
+    const given = { summary: "An empty cart says it is empty, beside main's new total.", steps: [{ route: "/cart", do: "Open the cart with nothing in it.", expect: "It says the cart is empty, and the total reads 0." }] };
+    const snapshot = thread.ticketSnapshot();
+    const keeping = { ...snapshot, pullRequest: { ...thread.pullRequest(), trialSteps: kept } };
+    const run = conflictRunFinished(RESOLVED);
+    const staging = kitConfig({ staging: { url: "https://staging.shop.example", environment: "staging" } });
+    const bodyOf = (trial?: unknown) =>
+      actionsOf(planFor({ ...run, output: JSON.stringify({ ...JSON.parse(run.output), ...(trial === undefined ? {} : { trial }) }) }, keeping, staging)).flatMap((action) => (action.kind === "edit-issue-body" ? [action.body] : []));
+
+    expect(bodyOf()).toEqual([`Handles the empty cart.\n\n${trialStepsMarker(kept)}\n\nCloses #7`]);
+    expect(bodyOf("Open the cart.")).toEqual([`Handles the empty cart.\n\n${trialStepsMarker(kept)}\n\nCloses #7`]);
+    expect(bodyOf(given)).toEqual([`Handles the empty cart.\n\n${trialStepsMarker(given)}\n\nCloses #7`]);
+  });
+
   it("uses no retry itself, but a flaw on its push calls for one from the Ticket's pool of two, like any other (#415)", () => {
     const thread = new Thread();
     thread.mainMovesAndConflicts(MAIN);

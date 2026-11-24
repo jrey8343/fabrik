@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { NOW } from "../__fixtures__/cannedRepo.ts";
 import { KIT, RELEASED_NOTES } from "../__fixtures__/repoScan.ts";
-import { kitConfig } from "../__fixtures__/snapshots.ts";
+import { anIssue, aPullRequest, HEAD_SHA, kitConfig, snapshotOf } from "../__fixtures__/snapshots.ts";
 import { UI } from "../__fixtures__/uiEvidence.ts";
 import { implementContext } from "../agent/implement.ts";
 import { stagingTrialParts } from "../agent/review.ts";
@@ -18,6 +18,7 @@ import { parseImplementOutput } from "../loop/implementOutput.ts";
 import { ALL_LABELS } from "../loop/labels.ts";
 import { withoutTrialSteps } from "../loop/markers.ts";
 import { bodyOnly } from "../loop/retry.ts";
+import { planFor } from "../loop/rules.ts";
 import { FINDING_TAG_TEXT } from "../loop/verdict.ts";
 import { EXPORT_CALLS, EXPORT_SHAPES } from "../read/exports.fixture.ts";
 import {
@@ -273,16 +274,43 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Trial steps release notes, while
       expect(trialStepsIn(`Adds booking.\n\n${marker}\n\nCloses #7`)).toEqual(STEPS);
     });
 
-    it("every run that lands on a pull request writes them again, shown the ones it keeps, and one that leaves trial out leaves none", async () => {
-      const again = bullet(turnsOn, "Every run that lands on a pull request writes them again.");
+    it("a run that lands on a pull request and gives them replaces the ones it keeps, shown them to start from, and one that leaves trial out, or gives a malformed one, keeps them", async () => {
+      const again = bullet(turnsOn, "A run that lands on a pull request and gives them replaces the ones it keeps.");
       const asked = await toldTo(kitConfig({ staging: STAGING }));
+      /** The body a Retry on pull request 50, which keeps STEPS, leaves when its output gives this `trial` or none. */
+      const bodyAfter = (trial?: unknown): string | undefined => {
+        const run = "https://github.com/owner/product/actions/runs/1/attempts/1";
+        const plan = planFor(
+          {
+            kind: "implement-run-finished",
+            issue: 7,
+            output: JSON.stringify({ title: "Book a visit", summary: "Adds booking.", fix: "Shows the visit's time.", ...(trial === undefined ? {} : { trial }) }),
+            branch: "fabrik/ticket-7",
+            base: "fabrik/ticket-7",
+            changes: { net: [{ path: "src/book.ts" }], commits: [{ path: "src/book.ts" }] },
+            fixes: { pullRequest: 50, headSha: HEAD_SHA, runUrl: run },
+            runUrl: run,
+          },
+          snapshotOf(anIssue({ number: 7, labels: ["ready-for-agent"], openPullRequests: [50] }), {
+            pullRequest: aPullRequest({ verdicts: [{ verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: HEAD_SHA }], trialSteps: STEPS }),
+          }),
+          kitConfig({ staging: STAGING }),
+        );
+        return plan.kind === "act" ? plan.actions.flatMap((action) => (action.kind === "edit-issue-body" ? [action.body] : []))[0] : undefined;
+      };
+      const later = { ...STEPS, summary: "A patient can now book a visit, see it on their notes and cancel it." };
 
       expect(again).toContain("a later run's marker takes the earlier one's place");
       expect(again).toContain("is shown the pull request's current Trial steps to start from");
-      expect(again).toContain("A run that leaves `trial` out leaves the pull request with no marker");
+      expect(again).toContain("A run that leaves `trial` out, or gives a malformed one, keeps the steps the pull request already carries");
+      expect(again).not.toContain("leaves the pull request with no marker");
+      expect(again).toContain("A first run that gives none writes none.");
       expect(asked).toContain("On a retry, a Touch-up, a Request-changes run or a conflict-only run, write `trial` again for the pull request as it now stands");
       expect(asked).toContain('"The pull request\'s current Trial steps"');
-      expect(asked).toContain("A run that leaves `trial` out leaves the pull request with none.");
+      expect(asked).toContain("A run that leaves `trial` out keeps the ones the pull request has.");
+      expect(bodyAfter()).toBe(`Adds booking.\n\n${trialStepsMarker(STEPS)}\n\nCloses #7`);
+      expect(bodyAfter({ summary: "A visit can be booked.", steps: [] })).toBe(`Adds booking.\n\n${trialStepsMarker(STEPS)}\n\nCloses #7`);
+      expect(bodyAfter(later)).toBe(`Adds booking.\n\n${trialStepsMarker(later)}\n\nCloses #7`);
       // The last marker in a body is the one that counts.
       expect(trialStepsIn([trialStepsMarker({ ...STEPS, summary: "An earlier run's." }), trialStepsMarker(STEPS)].join("\n\n"))).toEqual(STEPS);
     });
