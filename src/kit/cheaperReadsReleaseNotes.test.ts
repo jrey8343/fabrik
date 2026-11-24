@@ -83,13 +83,13 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The cheaper reads release notes, whi
   const notes = read(NOTES);
   const changed = section(notes, "What changed");
 
-  it("open with what they are the notes for, and the releasing guide lists them last among the drafted notes", () => {
+  it("open with what they are the notes for, and the releasing guide lists them after the Kit-opens-issues notes among the drafted notes", () => {
     expect(notes.split("\n")[0]).toBe("# Release notes: The read library asks GitHub for less");
     expect(notes).toMatch(/^The notes for the minor release in which the read library asks GitHub for less \(\[#894\]\(https:\/\/github\.com\/jrey8343\/fabrik\/issues\/894\)\)/m);
     expect(notes).toContain("Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.");
     const drafted = read("docs/releasing.md").split("\n").find((line) => line.includes("Notes drafted ahead of a release are in `docs/release-notes/`"));
     expect(drafted).toContain(
-      "(release-notes/kit-opens-issues.md), and the cheaper reads minor's ([#894](https://github.com/jrey8343/fabrik/issues/894)) are [the read library asks GitHub for less](release-notes/cheaper-reads.md).",
+      "(release-notes/kit-opens-issues.md), the cheaper reads minor's ([#894](https://github.com/jrey8343/fabrik/issues/894)) are [the read library asks GitHub for less](release-notes/cheaper-reads.md)",
     );
   });
 
