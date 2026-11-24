@@ -124,7 +124,7 @@ describe("the README's section for the Trial session, on the skill, /fabrik-tria
 
     expect(onTheSkill).not.toBe(section);
     expect(opening).toContain("A Trial session is a Staging trial the Operator runs with an agent driving their own browser (ADR-0040)");
-    expect(opening).toContain("The Operator starts one by running `/fabrik-trial`, or `/fabrik-trial <pull request>` for one pull request, in a local Claude Code session in the Product repo's checkout");
+    expect(opening).toContain("The Operator starts one by running `/fabrik-trial`, or `/fabrik-trial <pull request number>` for one pull request, in a local Claude Code session in the Product repo's checkout");
     expect(opening).toContain("with Claude in Chrome connected");
     expect(opening).toContain("(`skills/fabrik-trial/SKILL.md`)");
     expect(existsSync(new URL("skills/fabrik-trial/SKILL.md", root))).toBe(true);
