@@ -1139,6 +1139,27 @@ describe("The Kit config template", () => {
     expect(template).not.toContain("allow_fable");
   });
 
+  it("sets no console block, in the template or the README's defaults block, so a first setup is covered by no Console", () => {
+    const section = readme.slice(readme.indexOf("## Kit config"));
+    const block = /```json\n([\s\S]*?)```/.exec(section)?.[1] ?? "";
+
+    expect(JSON.parse(template)).not.toHaveProperty("console");
+    expect(JSON.parse(block)).not.toHaveProperty("console");
+    expect(resolveKitConfig({ config: block })).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  it("documents console.app_id in the README's Kit config section, after staging and before operator", () => {
+    const section = readme.slice(readme.indexOf("## Kit config"), readme.indexOf("### Extra skills"));
+    const opening = "- `console.app_id` (default unset)";
+    const bullet = section.split("\n").find((line) => line.startsWith(opening)) ?? "";
+
+    expect(section.indexOf(opening)).toBeGreaterThan(section.indexOf("- `staging` (default `null`)"));
+    expect(section.indexOf(opening)).toBeLessThan(section.indexOf("- `operator` is"));
+    expect(bullet).toContain("a check run named `Merge from the Console` expected from that App");
+    expect(bullet).toContain("ADR-0019");
+    expect(bullet).toContain("the starter Kit config never sets it");
+  });
+
   it("documents the Fable opt-in in the README's Kit config section, with its guards and ADR-0034", () => {
     const section = readme.slice(readme.indexOf("## Kit config"), readme.indexOf("### Extra skills"));
 
