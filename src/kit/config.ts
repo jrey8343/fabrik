@@ -3,6 +3,7 @@
 import { knownTimeZone, spelled } from "../loop/readable.ts";
 import { AGENT_ROLES, type AgentRole as AgentRoleName } from "../loop/types.ts";
 import { FULL_SHA, REPOSITORY } from "../skills/lock.ts";
+import { CONSOLE_CHECK } from "./consoleCheck.ts";
 
 export interface AgentRole {
   readonly model: string;
@@ -783,7 +784,7 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
     effort: reviewAsSet.effort ?? defaults.roles.digest.effort,
     timeoutMinutes: defaults.roles.digest.timeoutMinutes,
   };
-  const requiredChecks = sandbox.stringList("checks") ?? defaults.sandbox.checks;
+  const requiredChecks = sandbox.stringList("checks", notTheConsoleCheck) ?? defaults.sandbox.checks;
   const upToPreview = {
     ...defaults,
     sandbox: {
@@ -848,6 +849,13 @@ export function timeZoneNote(configText: string | null): string | null {
   const value = (raw as Record<string, unknown>)["time_zone"];
   if (value === undefined || value === null || knownTimeZone(value) !== null) return null;
   return `\`time_zone\` in ${KIT_CONFIG_PATH} is ${JSON.stringify(value)}, which isn't an IANA time zone, such as Europe/London, so the Kit writes its times in UTC.`;
+}
+
+/** Why a check `sandbox.checks` lists can't be a Required check, or null when it can: the Console check never is (ADR-0019). */
+function notTheConsoleCheck(name: string): string | null {
+  return name === CONSOLE_CHECK
+    ? "that is the Console check, which is never a Required check; Setup requires it from the Console's App where console.app_id names it"
+    : null;
 }
 
 /** A field left out (undefined) takes its default; an explicit null is kept. */

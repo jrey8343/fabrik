@@ -15,8 +15,10 @@ import {
   UI_VIEWPORTS,
   withRouteOn,
 } from "./config.ts";
+import { CONSOLE_CHECK } from "./consoleCheck.ts";
 
 const root = new URL("../../", import.meta.url);
+const consoleCheckSource = readFileSync(new URL("consoleCheck.ts", import.meta.url), "utf8");
 const template = readFileSync(new URL("templates/fabrik-config.json", root), "utf8");
 const readme = readFileSync(new URL("README.md", root), "utf8");
 
@@ -2153,6 +2155,24 @@ describe("The console block, whose app_id says the Console covers a Product repo
     const result = resolveKitConfig({ config: JSON.stringify({ console: { app_id: 0 }, staging: { environment: "staging" } }) });
 
     expect(result).toEqual({ ok: false, errors: ["staging.url is missing", "console.app_id must be a whole number of at least 1"] });
+  });
+});
+
+describe("The Console check, which is never a Required check", () => {
+  it("is the check run named Merge from the Console, in a module that imports nothing", () => {
+    expect(CONSOLE_CHECK).toBe("Merge from the Console");
+    expect(consoleCheckSource).not.toMatch(/^\s*import\b/m);
+  });
+
+  it.each([{}, { console: { app_id: 1234567 } }])("is refused in sandbox.checks, by its index, with %j", (rest) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ sandbox: { checks: ["test", "Merge from the Console"] }, ...rest }) });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        `sandbox.checks[1] is "Merge from the Console": that is the Console check, which is never a Required check; Setup requires it from the Console's App where console.app_id names it`,
+      ],
+    });
   });
 });
 
