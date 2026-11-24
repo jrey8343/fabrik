@@ -553,6 +553,31 @@ describe("The Implementer's context", () => {
       expect(prompt).not.toContain("fabrik:trial-steps");
     });
 
+    describe("with a finding about its Trial steps to fix (#964)", () => {
+      const flaw = (tags: object, finding: string) =>
+        [verdictMarker({ verdict: "execution-flaw", source: "reviewer", requestChanges: false, headSha: "a".repeat(40), ...tags }), finding].join("\n");
+      const RETRY = flaw({}, "- The empty cart throws.\n- [small: body] The Trial steps never open the cart, which is what the diff changes.");
+      const TOUCH_UP = flaw(
+        { tags: { small: 1, missedEarlier: 0, counted: 0, smallBody: 1 }, touchUp: 1 },
+        "- [small: body] The second step expects a banner the diff does not produce.",
+      );
+      const fixing = async (verdict: string, config: KitConfig) =>
+        promptOf(config, { pullRequest: await fileOf({ ...withSteps, comments: [{ body: verdict, author: { __typename: "Bot" } }] }), review: "" });
+
+      it.each([
+        ["a retry", RETRY],
+        ["a Touch-up", TOUCH_UP],
+      ])("%s is told it is fixed by giving trial again, which no commit does, and on a repo with no staging block nothing of it", async (_kind, verdict) => {
+        const prompt = await fixing(verdict, kitConfig({ staging: STAGING }));
+
+        expect(await fixing(verdict, kitConfig())).not.toContain("A finding about the Trial steps");
+        expect(prompt).toContain(
+          '- A finding about the Trial steps, under "The findings to fix", is fixed by giving `trial` again with what it names put right, on a retry and on a Touch-up alike. No commit fixes one: the Kit keeps the steps your output gives, so a Touch-up told to commit nothing gives `trial` all the same.',
+        );
+      });
+
+    });
+
     it("is given none when the pull request keeps none", async () => {
       const prompt = await promptOf(kitConfig({ staging: STAGING }), { pullRequest: await fileOf({ ...pullRequest, operatorComments: [] }), review: "" });
 
