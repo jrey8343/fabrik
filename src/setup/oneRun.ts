@@ -143,6 +143,8 @@ export interface RunSummary {
   readonly appInstalledOn?: string;
   /** Whether the Kit config the setup PR merges, the setup branch's, pauses Dispatch. */
   readonly pausesDispatch?: boolean;
+  /** Whether the Kit config the setup PR merges, the setup branch's, names the Console's App (console.app_id), so the merge is asked for from the Console. Absent counts as false. */
+  readonly mergesFromConsole?: boolean;
   /** Which finishing steps the Kit config the setup PR merges, and the repo, already show done, so the closing lines leave out their notes. Absent counts as not done. */
   readonly alreadyDone?: StepsDone;
 }

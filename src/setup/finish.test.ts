@@ -50,6 +50,40 @@ describe("The setup PR's body", () => {
     expect(prBody({ release: "v1.4.2", defaultBranch: "main", summary: SUMMARY })).not.toContain(paused);
   });
 
+  it("where the Kit config it merges names the Console's App, says to merge it from the Console, naming console.app_id", () => {
+    const body = prBody({ release: "v1.4.2", defaultBranch: "main", summary: { ...SUMMARY, mergesFromConsole: true } });
+
+    expect(body).toContain(
+      "Merge this PR from the Console once its Required checks pass. This repo's Kit config names the Console's App (console.app_id), so GitHub refuses a merge from anywhere else, github.com and gh included. " +
+        "The Console already shows this PR. The Loop starts once the caller workflow is on main.",
+    );
+    expect(body).not.toContain("yourself");
+  });
+
+  it("where the Kit config it merges names the Console's App, says to merge it from the Console after the tokens to store by hand", () => {
+    const body = prBody({ release: "v1.4.2", defaultBranch: "main", summary: { ...SUMMARY, storeByHand: [BY_HAND], mergesFromConsole: true } });
+
+    expect(body).toContain(`- ${BY_HAND}\n\nThen merge this PR from the Console once its Required checks pass. This repo's Kit config names the Console's App (console.app_id)`);
+    expect(body).not.toMatch(/merge this PR yourself/i);
+  });
+
+  it("with the wizard's blockers, doesn't ask for the merge, though the Kit config it merges names the Console's App", () => {
+    const body = prBody({ release: "v1.4.2", defaultBranch: "main", summary: { ...BLOCKED, storeByHand: [BY_HAND], mergesFromConsole: true } });
+
+    expect(body).toContain("Don't merge this yet.");
+    expect(body).not.toMatch(/merge this PR (yourself|from the Console)/i);
+  });
+
+  it("says what it says today, word for word, where the Kit config it merges doesn't name the Console's App", () => {
+    const today = prBody({ release: "v1.4.2", defaultBranch: "main", summary: SUMMARY });
+
+    expect(today).toContain(
+      "Merge this PR yourself once its Required checks pass. It needs no approving review, and as the repo's admin you're the Merge gate ruleset's one bypass actor. " +
+        "The Loop starts once the caller workflow is on main.",
+    );
+    expect(prBody({ release: "v1.4.2", defaultBranch: "main", summary: { ...SUMMARY, mergesFromConsole: false } })).toBe(today);
+  });
+
   it("keeps what an earlier run did, so a run that picks up the same PR adds to its list", () => {
     const earlier = prBody({ release: "v1.4.2", defaultBranch: "main", summary: BLOCKED });
 
@@ -113,6 +147,41 @@ describe("The closing lines", () => {
       `Run setup again to walk the wizard for them: ${COMMAND}\nThe Kit's first runs also need these, which no wizard stage stores, so you store them yourself, as For the Operator says:\n- ${BY_HAND}\n\nThen:`,
     );
     expect(text).not.toMatch(/merge it yourself/i);
+  });
+
+  it("where the Kit config the setup PR merges names the Console's App, ask for the merge from the Console", () => {
+    const summary = { ...SUMMARY, mergesFromConsole: true };
+    const text = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary }).join("\n");
+
+    expect(text).toMatch(/^Merge it from the Console once its Required checks pass\. This repo's Kit config names the Console's App \(console\.app_id\)/m);
+    expect(text).not.toMatch(/yourself/);
+  });
+
+  it("where the Kit config the setup PR merges names the Console's App, ask for the merge from the Console after the tokens to store by hand", () => {
+    const summary = { ...SUMMARY, storeByHand: [BY_HAND], mergesFromConsole: true };
+    const text = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary }).join("\n");
+
+    expect(text).toContain(`- ${BY_HAND}\nThen merge it from the Console once its Required checks pass. `);
+    expect(text).not.toMatch(/merge it yourself/i);
+  });
+
+  it("with the wizard's blockers, don't ask for the merge, though the Kit config the setup PR merges names the Console's App", () => {
+    const summary = { ...BLOCKED, storeByHand: [BY_HAND], mergesFromConsole: true };
+    const text = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary }).join("\n");
+
+    expect(text).toContain("Don't merge it yet.");
+    expect(text).not.toMatch(/merge it (yourself|from the Console)/i);
+  });
+
+  it("say what they say today, word for word, where the Kit config the setup PR merges doesn't name the Console's App", () => {
+    const inputs = { release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7" };
+    const today = closingLines({ ...inputs, summary: SUMMARY });
+
+    expect(today).toContain(
+      "Merge it yourself once its Required checks pass. It needs no approving review, and as the repo's admin you're the Merge gate ruleset's one bypass actor. " +
+        "The Loop starts once the caller workflow is on main.",
+    );
+    expect(closingLines({ ...inputs, summary: { ...SUMMARY, mergesFromConsole: false } })).toEqual(today);
   });
 
   it("give the finishing guidance, naming the setup command wherever it says to run setup again", () => {
