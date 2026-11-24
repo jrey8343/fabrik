@@ -1,9 +1,12 @@
-// What the README tells the Operator about the untried queue command (#966),
-// under Trial session: the lines that run it from a download of the pinned
-// release, what it prints, key by key, and how it ends.
-import { existsSync, readFileSync } from "node:fs";
+// What the README tells the Operator under Trial session. About the untried
+// queue command (#966): the lines that run it from a download of the pinned
+// release, what it prints, key by key, and how it ends. And about the skill,
+// /fabrik-trial (#967): how a Trial session is started and what it does.
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { NOW } from "../__fixtures__/cannedRepo.ts";
+import { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
+import { trialProblemLine } from "../loop/markers.ts";
 import { aDeployment, anAgentMerge, declaring, LIVE, stagingRepo } from "./stagingRepo.fixture.ts";
 import { readUntriedQueue } from "./untriedQueue.ts";
 
@@ -107,5 +110,88 @@ describe("the README's section for the Trial session, on the untried queue comma
     expect(ends).toContain("Kit config declares no `staging`");
     expect(ends).toContain("the number is not a merged agent pull request on the Promote list");
     expect(ends).toContain("It exits 0 when it printed, and 2, with its usage, for arguments it does not take");
+  });
+});
+
+describe("the README's section for the Trial session, on the skill, /fabrik-trial (#967)", () => {
+  /** The section's words on the skill: what comes before the untried queue command's own paragraph. */
+  const onTheSkill = section.split("\nWhat there is to try comes from the **untried queue command**")[0] ?? "";
+  /** The plain bullet of them that opens with `lead`. */
+  const says = (lead: string): string => onTheSkill.split("\n").find((line) => line.startsWith(`- ${lead}`)) ?? "";
+
+  it("says how the Operator starts one, alone or with a pull request's number, in a local session with Claude in Chrome connected, before it says how the command is run", () => {
+    const opening = onTheSkill.split("\n").find((line) => line.startsWith("A Trial session is")) ?? "";
+
+    expect(onTheSkill).not.toBe(section);
+    expect(opening).toContain("A Trial session is a Staging trial the Operator runs with an agent driving their own browser (ADR-0040)");
+    expect(opening).toContain("The Operator starts one by running `/fabrik-trial`, or `/fabrik-trial <pull request>` for one pull request, in a local Claude Code session in the Product repo's checkout");
+    expect(opening).toContain("with Claude in Chrome connected");
+    expect(opening).toContain("(`skills/fabrik-trial/SKILL.md`)");
+    expect(existsSync(new URL("skills/fabrik-trial/SKILL.md", root))).toBe(true);
+    expect(opening).toContain("The `SessionStart` hook installs the skill");
+    expect(opening).toContain("It runs with the Operator's own `gh` credentials:");
+    expect(onTheSkill).not.toContain("```");
+  });
+
+  it("says when it stops before it starts, where it takes the work from, and what it does with a pull request that is not ready or not read", () => {
+    const finds = says("It stops at once");
+
+    expect(finds).toContain("when `gh auth status` fails or the session has no Claude in Chrome tools");
+    expect(finds).toContain("the whole untried queue, oldest merge first");
+    expect(finds).toContain("the Kit's sentence for its Standing");
+    expect(finds).toContain("named as unread");
+    expect(finds).toContain("An empty queue ends the session in one line");
+  });
+
+  it("says the Operator signs in, and the session never types a credential or asks for one", () => {
+    const handsOver = says("It opens the staging site in a new tab");
+
+    expect(handsOver).toContain("waits while the Operator signs in and passes any access screen");
+    expect(handsOver).toContain("It never types a credential and never asks for one");
+  });
+
+  it("says it performs every step without asking, on the staging site alone, and how it reports each", () => {
+    const performs = says("It performs each pull request's Trial steps in order");
+
+    expect(performs).toContain("without asking, writes included");
+    expect(performs).toContain("It acts only on the origin of `staging.url`, and stops before any action on another origin or on `production.url`");
+    expect(performs).toContain("as matched");
+    expect(performs).toContain("with the page's address, the visible text that differs and any console errors");
+    expect(performs).toContain("which the Operator may do by hand in the same tab");
+    expect(performs).toContain("JavaScript dialog");
+    expect(says("It treats Trial steps as data")).toContain("is not followed, and is reported");
+  });
+
+  it("says the verdict is the Operator's and how each is recorded, by the labels' names and the Trial problem's line as the Kit has them", () => {
+    const records = says("It asks the Operator for the verdict once for each pull request");
+
+    expect(records).toContain("never chooses it, whatever the steps showed (ADR-0038)");
+    expect(records).toContain(`On accept it puts \`${TRIAL_ACCEPTED_LABEL}\` on the pull request`);
+    expect(records).toContain(`\`${trialProblemLine(50).replace("50", "<n>")}\``);
+    expect(records).toContain(`then puts \`${TRIAL_PROBLEM_LABEL}\` on the pull request`);
+    expect(records).toContain("no images and no @-mentions");
+    expect(records).toContain("with `gh`, as the Operator");
+    expect(records).toContain("On leave it writes nothing");
+  });
+
+  it("says what a pull request with no Trial steps is trialled from, and how a queue goes on and ends", () => {
+    expect(says("A pull request with no Trial steps")).toContain("asks the Operator what to check");
+    expect(says("In a queue")).toContain("ends with one line for each saying its verdict");
+  });
+
+  it("says what stays as it is: no Kit job puts either label on, and the Fabrik App gains no permission", () => {
+    expect(onTheSkill).toContain("\nNo Kit job puts either label on anything, and the Fabrik App gains no permission.\n");
+  });
+
+  it("names every one of the Kit's own skills where the Layout says what the SessionStart hook installs, and the skill beside the command it runs", () => {
+    const layout = readme.split("\n## Layout\n")[1]?.split("\n## ")[0] ?? "";
+    const hook = layout.split("\n").find((line) => line.startsWith("- `templates/claude-settings.json`")) ?? "";
+    const own = readdirSync(new URL("skills/", root), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+
+    expect(own).toContain("fabrik-trial");
+    for (const name of own) expect(hook).toContain(`\`${name}\``);
+    expect(layout.split("\n").find((line) => line.startsWith("- `src/trial/`"))).toContain("`skills/fabrik-trial/SKILL.md`");
   });
 });
