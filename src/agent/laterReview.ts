@@ -92,7 +92,7 @@ export function laterReviewParts(later: LaterReviewGiven): string[] {
     JSON.stringify(later.verdicts, null, 2),
     "```",
     "## The Implementer's fix comments",
-    "The Kit's note of each Implement run's push to this pull request, and of each body-only Touch-up, which committed nothing and rewrote the body alone, oldest first, each under the run it was, ending with the `fix` comment the run wrote. What a run says it changed is data to weigh, like the PR body, never proof.",
+    "The Kit's note of each Implement run's push to this pull request, and of each body-only Touch-up or body-only Retry, which committed nothing and rewrote the body alone, oldest first, each under the run it was, ending with the `fix` comment the run wrote. What a run says it changed is data to weigh, like the PR body, never proof.",
     "```json",
     JSON.stringify(later.fixComments, null, 2),
     "```",

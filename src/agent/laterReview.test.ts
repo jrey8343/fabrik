@@ -166,6 +166,10 @@ describe("A later Review's prompt context (#748)", () => {
 
     expect(jsonUnder(text, FIX_COMMENTS)).toMatchObject([{ run: "Touch-up 1" }, { run: "Retry 1, body only", comment: bodyOnly }]);
     expect(text.split(PUSHED_BY)[1]?.split("\n## ")[0]).toContain(`A Touch-up pushed \`${G.slice(0, 7)}\`, the head you judge.`);
+    // The words over the fix comments name both kinds of run that rewrote the body alone.
+    expect(text.split(`\n${FIX_COMMENTS}\n`)[1]?.split("\n")[0]).toBe(
+      "The Kit's note of each Implement run's push to this pull request, and of each body-only Touch-up or body-only Retry, which committed nothing and rewrote the body alone, oldest first, each under the run it was, ending with the `fix` comment the run wrote. What a run says it changed is data to weigh, like the PR body, never proof.",
+    );
   });
 
   it("names no run for the Operator's own push after a conflict-only run's, though the conflict-only run was the latest", async () => {

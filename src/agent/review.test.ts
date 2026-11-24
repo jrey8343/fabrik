@@ -927,12 +927,14 @@ describe("A Review's prompt on a Full Review and on a later Review", () => {
     expect(section).toContain("data to weigh, like the PR body, never proof");
   });
 
-  it("on a later Review of the last judged head itself, after a body-only Touch-up (#751), judges the body, the criteria and the fixes, with no code changed", async () => {
+  it("on a later Review of the last judged head itself, after a body-only Touch-up (#751) or a body-only Retry (#962), judges the body, the criteria and the fixes, with no code changed", async () => {
     const section = sectionOf(reviewPromptFor(await template(), later()), LATER_REVIEW);
 
     expect(section).toContain(
-      "When the head you judge is the last judged head, a body-only Touch-up committed nothing and rewrote the body alone: no code changed, so judge whether the body now matches the branch, the acceptance criteria and whether the latest Verdict's findings were fixed.",
+      "When the head you judge is the last judged head, a body-only Touch-up or a body-only Retry committed nothing and rewrote the body alone: no code changed, so judge whether the body now matches the branch, the acceptance criteria and whether the latest Verdict's findings were fixed.",
     );
+    // What it is given names both kinds too.
+    expect(section).toContain("the Kit's note of each Implement run's push to it, and of each body-only Touch-up or body-only Retry, oldest first, with the `fix` comment the run wrote;");
   });
 
   it("on a later Review of a conflict-only run's push adds the conflict-only paragraph, and on any other push leaves it out", async () => {
