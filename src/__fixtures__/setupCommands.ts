@@ -99,6 +99,8 @@ export function aReadyOperator(productDir: string, release = "v1.4.2"): Record<s
     "git merge-tree --write-tree": { code: 128, stderr: "fatal: not something we can merge" },
     // The default branch holds no Kit config.
     "git cat-file -e": { code: 128, stderr: "fatal: path '.fabrik/config.json' does not exist" },
+    // Nor a caller workflow.
+    [`git show ${HEAD_SHA}:.github/workflows/fabrik.yml`]: { code: 128, stderr: `fatal: path '.github/workflows/fabrik.yml' does not exist in '${HEAD_SHA}'` },
     "op account list --format json": { stdout: JSON.stringify([PERSONAL]) },
     "op vault list --format json": { stdout: "[]" },
     // What setup gathers about the repo and the fabrik-runs store.

@@ -75,7 +75,7 @@ export function timeZoneIn(caller: string): string | null {
 }
 
 /** Semver majors, where each 0.x minor is a major of its own. */
-function compareMajors(a: string, b: string): number {
+export function compareMajors(a: string, b: string): number {
   const [aMajor, aMinor] = majorLine(a);
   const [bMajor, bMinor] = majorLine(b);
   return aMajor !== bMajor ? aMajor - bMajor : aMinor - bMinor;

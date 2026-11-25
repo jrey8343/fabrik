@@ -5,7 +5,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type Answer, aReadyOperator, fakeCommands } from "../__fixtures__/setupCommands.ts";
+import { type Answer, aReadyOperator, fakeCommands, HEAD_SHA } from "../__fixtures__/setupCommands.ts";
 import { tempDir } from "../__fixtures__/skillsArchive.ts";
 import { gatherDeployments, gatherEnvironment, gatherState, readEnvironmentPolicy } from "./gather.ts";
 
@@ -239,7 +239,7 @@ describe("Reading production's environment for Setup's report, when the checkout
       await writeFile(join(dir, KIT_CONFIG), config);
     }
     const commands = fakeCommands({ ...aReadyOperator(dir), ...script });
-    const state = await gatherState(commands.run, dir, REPO, [KIT_CONFIG]);
+    const state = await gatherState(commands.run, dir, REPO, [KIT_CONFIG], HEAD_SHA);
     return { production: state.production, asked: commands.calls.map((call) => call.line).filter((line) => /environments\/|--env/.test(line)) };
   }
   const naming = (environment: string | null) => JSON.stringify({ production: { url: "https://clinic.example.com", environment } });
@@ -291,5 +291,33 @@ describe("Reading production's environment for Setup's report, when the checkout
 
     expect(production).toBeNull();
     expect(asked).toEqual(["gh api repos/acme/clinic/environments/fabrik"]);
+  });
+});
+
+describe("Reading the caller workflow the default branch holds", () => {
+  const CALLER = ".github/workflows/fabrik.yml";
+  const AT_THE_TIP = `git show ${HEAD_SHA}:${CALLER}`;
+
+  /** What Setup gathers of acme/clinic from a checkout whose own caller workflow is the setup branch's, with git answering for the default branch's tip. */
+  async function gathered(script: Record<string, Answer> = {}) {
+    const dir = await tempDir("setup-gather");
+    await mkdir(join(dir, ".github/workflows"), { recursive: true });
+    await writeFile(join(dir, CALLER), "# the setup branch's\n");
+    const commands = fakeCommands({ ...aReadyOperator(dir), ...script });
+    return { state: await gatherState(commands.run, dir, REPO, [CALLER], HEAD_SHA), calls: commands.calls.map((call) => call.line) };
+  }
+
+  it("reads it from the default branch's tip on origin, as the checks found it, and never from the checkout's own copy", async () => {
+    const { state, calls } = await gathered({ [AT_THE_TIP]: { stdout: "# the default branch's\n" } });
+
+    expect(state.defaultBranchCaller).toBe("# the default branch's\n");
+    expect(state.files[CALLER]).toBe("# the setup branch's\n");
+    expect(calls).toContain(AT_THE_TIP);
+  });
+
+  it("gives none when the default branch's tip has no caller workflow, though the checkout has one", async () => {
+    const { state } = await gathered();
+
+    expect(state.defaultBranchCaller).toBeNull();
   });
 });

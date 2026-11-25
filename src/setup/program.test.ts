@@ -101,6 +101,7 @@ const READ_ONLY = [
   /^git ls-remote /,
   /^git merge-base --is-ancestor /,
   /^git cat-file -e /,
+  /^git show /,
   /^gh api (?!--method)/,
   /^gh repo view /,
   /^gh (label|secret|issue) list /,
@@ -385,6 +386,10 @@ describe("The setup program", () => {
       "- A credential that can reach production belongs in an environment held to main alone, or in a role taken by OIDC whose trust names that environment and not the whole repo. Only test and preview credentials sit at repo level.",
     ];
     const NOTE = "- main has no Required checks yet: list the CI checks that must pass in sandbox.checks in .fabrik/config.json, then run setup again.";
+    // The Kit's own token at repo level is a note's, never the report's: the default branch has no caller workflow yet, so it stays (#931).
+    const STAYS =
+      "- The repo-level Actions secret FABRIK_OP_PUSH_TOKEN stays for now, since the Kit main pins names no environment and reads it. " +
+      "Once the setup PR is merged, run setup again and it deletes it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
 
     it.each<[string, string[], Options, string[]]>([
       ["with --plan", ["--plan"], {}, []],
@@ -395,7 +400,7 @@ describe("The setup program", () => {
 
       expect(code).toBe(0);
       expect(said).toContain("Setup would:");
-      expect(said.slice(said.indexOf("For the Operator:"))).toEqual(["For the Operator:", NOTE, "", ...REPORT, ...after]);
+      expect(said.slice(said.indexOf("For the Operator:"))).toEqual(["For the Operator:", STAYS, NOTE, "", ...REPORT, ...after]);
     });
 
     it("says a repo with no secret of its own holds none, and whether the environment the checkout's Kit config names for production is held", async () => {

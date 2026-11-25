@@ -1,6 +1,7 @@
 // Setup's planner. Pure, no I/O: given what a Product repo holds now
 // and the Kit being set up, it returns every step that would leave the repo
 // ready to run the Loop, and nothing a working install already has.
+import { checkCallerWorkflow } from "../kit/caller.ts";
 import { CONSOLE_CHECK } from "../kit/consoleCheck.ts";
 import { KIT_ENVIRONMENT } from "../kit/environment.ts";
 import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, type ProductionConfig, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH, type StagingConfig } from "../kit/config.ts";
@@ -13,6 +14,7 @@ import type { SetupKit } from "./kit.ts";
 import {
   CALLER_PATH,
   callerUpdate,
+  compareMajors,
   DEPENDABOT_PATH,
   dependabotUpdate,
   type FileUpdate,
@@ -40,6 +42,12 @@ export interface ProductState {
   };
   /** The text of each file Setup writes or merges, or null when the repo lacks it. */
   readonly files: Readonly<Record<string, string | null>>;
+  /**
+   * The caller workflow as the default branch's tip on origin holds it, or
+   * null when it has none. The checkout's own copy, in `files`, can be the
+   * setup branch's, and the Kit that runs is the one the default branch pins.
+   */
+  readonly defaultBranchCaller: string | null;
   readonly labels: readonly string[];
   readonly secrets: readonly string[];
   /** The repo's `fabrik` environment, whose secrets are the Kit's tokens (ADR-0004), or null when the repo has none. */
@@ -273,6 +281,24 @@ export type SetupAction =
       readonly repo?: string;
     }
   | {
+      /**
+       * Deletes a repo-level Actions secret that carries the name of one of
+       * the Kit's tokens, once the Kit the default branch pins reads the
+       * environment's and nothing reads this one.
+       */
+      readonly kind: "delete-repo-secret";
+      /** The secret's name. */
+      readonly secret: string;
+      /** The service account whose token it holds, which only the Operator can delete, on 1Password's site. */
+      readonly account: string;
+      /** The environment that holds the token the Kit reads now. */
+      readonly environment: string;
+      /** The default branch, whose caller workflow pins that Kit. */
+      readonly branch: string;
+      /** The repo, as `owner/name`, that holds the secret when it isn't the Product repo. */
+      readonly repo?: string;
+    }
+  | {
       readonly kind: "protect-branch";
       readonly branch: string;
       /** The protection as found, or null when the branch has none. */
@@ -350,7 +376,7 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
   for (const name of ALL_LABELS) {
     if (!present.has(name.toLowerCase())) actions.push({ kind: "create-label", name, ...LOOP_LABELS[name] });
   }
-  actions.push(...secrets(state));
+  actions.push(...secrets(state, kit, notes));
   actions.push(...protection(state, kit, notes));
   actions.push(...mergeGate(state));
   actions.push(...runStore(state.store, kit, answers, notes));
@@ -987,9 +1013,11 @@ export function sandboxVault(repo: ProductState["repo"]): string {
  * of its name doesn't count. 1Password shows a token only once and GitHub
  * never gives a secret back, so a missing one can only be made with a new
  * account, named apart from the ones whose tokens sat at repo level; one the
- * environment holds is left alone.
+ * environment holds is left alone. A repo-level secret of a token's name is
+ * an old account's: it is deleted once the Kit the default branch pins names
+ * the environment, after every new account is made, and stays until then.
  */
-function secrets(state: ProductState): SetupAction[] {
+function secrets(state: ProductState, kit: SetupKit, notes: string[]): SetupAction[] {
   const sandbox = sandboxVault(state.repo);
   const roles = [
     { role: "agent", vaults: [FABRIK_VAULT], secret: "FABRIK_OP_AGENT_TOKEN" },
@@ -1005,7 +1033,88 @@ function secrets(state: ProductState): SetupAction[] {
     const name = `fabrik-${state.repo.owner}-${state.repo.name}-${role}-env`;
     actions.push({ kind: "create-service-account", name, vaults, secret, environment: KIT_ENVIRONMENT });
   }
+  // The names Setup gave the accounts before the tokens moved to the environment: a new one's with no `-env`.
+  const atRepoLevel = roles
+    .filter(({ secret }) => state.secrets.includes(secret))
+    .map(({ role, secret }) => ({ secret, account: `fabrik-${state.repo.owner}-${state.repo.name}-${role}` }));
+  if (kitNamesEnvironment(state.defaultBranchCaller, kit.release)) {
+    const deletions = deleteRepoSecrets(atRepoLevel, KIT_ENVIRONMENT, state.repo.defaultBranch);
+    actions.push(...deletions);
+    notes.push(...oldAccountsNotes(deletions));
+  } else if (atRepoLevel.length > 0) {
+    // The Kit the default branch pins names no environment, so its jobs are given the repo-level values, on every ref (#846).
+    const one = atRepoLevel.length === 1;
+    const them = one ? "it" : "them";
+    notes.push(
+      `The repo-level Actions ${one ? "secret" : "secrets"} ${listed(atRepoLevel.map(({ secret }) => secret))} ${one ? "stays" : "stay"} for now, since the Kit ${state.repo.defaultBranch} pins names no environment and reads ${them}. ` +
+        `Once the setup PR is merged, run setup again and it deletes ${them}: ${setupCommand(kit.release)}`,
+    );
+  }
   return actions;
+}
+
+/**
+ * Whether the Kit a caller workflow pins names the fabrik environment in each
+ * job that reads a token, so that nothing reads the repo-level tokens: the
+ * caller pins one release, of Setup's own major or a later one. Every release
+ * from this major on names the environment, so no version is written down.
+ */
+export function kitNamesEnvironment(caller: string | null, release: string): boolean {
+  if (caller === null) return false;
+  const pins = checkCallerWorkflow(caller);
+  return pins.ok && compareMajors(pins.release, release) >= 0;
+}
+
+/** One of the Kit's tokens as a repo-level Actions secret holds it: the secret's name, and the service account whose token it is. */
+export interface RepoLevelToken {
+  readonly secret: string;
+  readonly account: string;
+}
+
+/**
+ * The steps that delete these repo-level secrets, one each, for a repo whose
+ * default branch pins a Kit that reads the environment's. The Product repo's
+ * own unless `repo` names another, as `owner/name`. They go after every
+ * `create-service-account` step of that repo, so the environment holds each
+ * name first, and a stop in one of those leaves the repo-level secrets.
+ */
+export function deleteRepoSecrets(tokens: readonly RepoLevelToken[], environment: string, defaultBranch: string, repo?: string): SetupAction[] {
+  return tokens.map(({ secret, account }) => ({
+    kind: "delete-repo-secret",
+    secret,
+    account,
+    environment,
+    branch: defaultBranch,
+    ...(repo === undefined ? {} : { repo }),
+  }));
+}
+
+/**
+ * The notes that name the old service accounts, for the `delete-repo-secret`
+ * steps among these: one note for each repo that has such a step, the Product
+ * repo's first, and another repo's with that repo named first, as its other
+ * notes are. `op` has no command that deletes an account, so that is the
+ * Operator's, on 1Password's site. Setup can say it only on the run that
+ * deletes the secrets: once they are gone, it can't tell that the accounts
+ * aren't.
+ */
+export function oldAccountsNotes(actions: readonly SetupAction[]): string[] {
+  const deletions = actions.flatMap((action) => (action.kind === "delete-repo-secret" ? [action] : []));
+  const named = new Set(deletions.flatMap(({ repo }) => repo ?? []));
+  const repos = [...(deletions.some(({ repo }) => repo === undefined) ? [undefined] : []), ...named];
+  return repos.map((repo) => {
+    const accounts = deletions.filter((deletion) => deletion.repo === repo).map(({ account }) => account);
+    const one = accounts.length === 1;
+    return (
+      `${repo === undefined ? "" : `${repo}: `}Once the repo-level ${one ? "secret is" : "secrets are"} deleted, delete the old service ${one ? "account" : "accounts"} ${listed(accounts)} on 1Password's site. ` +
+      `${one ? "Its token still works" : "Their tokens still work"} until you do, though ${one ? "it sits" : "they sit"} nowhere on GitHub.`
+    );
+  });
+}
+
+/** Names as a sentence lists them: `a`, `a and b`, `a, b and c`. */
+function listed(names: readonly string[]): string {
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
 /**

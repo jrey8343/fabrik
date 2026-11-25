@@ -253,6 +253,11 @@ export function worldScript(world: World, origin?: Origin): Record<string, Answe
       environment.secrets.add(args[2]!);
       return {};
     },
+    // A repo-level secret of the checkout's repo. The world holds no other repo's, and no answer for one.
+    "gh secret delete": ({ args, line }) => {
+      if (args.length !== 3) throw new Error(`The world has no answer for: ${line}`);
+      return world.secrets.delete(args[2]!) ? {} : { code: 1, stderr: `failed to delete secret ${args[2]}: HTTP 404: Not Found` };
+    },
     "op vault list --format json": () => names(world.vaults),
     "op vault create": ({ args }) => {
       world.vaults.add(args.slice(2).join(" "));
