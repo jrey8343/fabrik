@@ -61,10 +61,9 @@ export function afterApplying(state: ProductState, plan: SetupPlan): ProductStat
         next = { ...next, vaults: [...next.vaults, action.name] };
         break;
       case "create-service-account":
-        next =
-          action.repo === undefined
-            ? { ...next, secrets: [...next.secrets, action.secret] }
-            : { ...next, store: { ...next.store, secrets: [...next.store.secrets, action.secret] } };
+        if (action.repo !== undefined) next = { ...next, store: { ...next.store, secrets: [...next.store.secrets, action.secret] } };
+        // The Product repo's go into its environment, which the plan's first step holds, and never to repo level.
+        else if (next.environment !== null) next = { ...next, environment: { ...next.environment, secrets: [...next.environment.secrets, action.secret] } };
         break;
       case "protect-branch":
         next = { ...next, protection: action.protection };

@@ -1398,7 +1398,8 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(said[said.indexOf("Setup would:") + 1]).toBe(`- hold the fabrik environment to main alone: rules ${before} → main`);
       expect(environmentOf(world)?.policy).toEqual({ protected_branches: false, custom_branch_policies: true });
       expect(rulesOf(world)).toEqual([{ name: "main", type: "branch" }]);
-      expect([...environmentOf(world)!.secrets]).toEqual(["STRIPE_KEY"]);
+      // Its own secret stays, beside the three tokens the run's later steps store in it.
+      expect([...environmentOf(world)!.secrets]).toEqual(["STRIPE_KEY", "FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"]);
     });
 
     it("adds the rule naming the default branch before it deletes any other, then reads the rules back", async () => {
@@ -1514,6 +1515,33 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       ]);
       expect(world.environments.size).toBe(0);
       expect(changedElsewhere(world, log)).toEqual(NOTHING);
+    });
+  });
+
+  describe("the three tokens, stored in the fabrik environment under new service accounts (ADR-0004)", () => {
+    const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
+    const made = (log: string[]) => log.filter((line) => line.startsWith("op service-account create "));
+
+    it("on a fresh repo, makes the environment, then the three -env accounts, each stored in the fabrik environment, and sets no repo-level secret", async () => {
+      const world = aWorld();
+
+      const { code, said, complaints, log } = await setupOnce(world);
+
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(said.slice(said.indexOf("Setup would:"), said.indexOf(`On ${BRANCH}.`)).filter((line) => line.includes("service account"))).toEqual([
+        '- create the read-only service account "fabrik-acme-clinic-agent-env" (reads "Fabrik") and store it as FABRIK_OP_AGENT_TOKEN in the fabrik environment',
+        '- create the read-only service account "fabrik-acme-clinic-implement-env" (reads "Fabrik", "Fabrik Sandbox · clinic") and store it as FABRIK_OP_IMPLEMENT_TOKEN in the fabrik environment',
+        '- create the read-only service account "fabrik-acme-clinic-push-env" (reads "Fabrik App") and store it as FABRIK_OP_PUSH_TOKEN in the fabrik environment',
+      ]);
+      expect(made(log)).toEqual([
+        "op service-account create fabrik-acme-clinic-agent-env --vault Fabrik:read_items --raw",
+        "op service-account create fabrik-acme-clinic-implement-env --vault Fabrik:read_items --vault Fabrik Sandbox · clinic:read_items --raw",
+        "op service-account create fabrik-acme-clinic-push-env --vault Fabrik App:read_items --raw",
+      ]);
+      expect(index(log, /^gh api --method PUT repos\/acme\/clinic\/environments\/fabrik /)).toBeLessThan(index(log, /^op service-account create /));
+      expect([...environmentOf(world)!.secrets]).toEqual(TOKENS);
+      expect([...world.secrets]).toEqual([]);
     });
   });
 

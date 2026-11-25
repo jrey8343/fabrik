@@ -126,17 +126,17 @@ describe("Re-running setup", () => {
     expect(planSetup(installed(), kit).actions).toEqual([]);
   });
 
-  it("repairs a missing label and a missing secret, and nothing else", () => {
+  it("repairs a missing label and a secret the fabrik environment lacks, and nothing else", () => {
     const working = installed();
     const broken = {
       ...working,
       labels: working.labels.filter((l) => l !== "needs-design"),
-      secrets: working.secrets.filter((s) => s !== "FABRIK_OP_PUSH_TOKEN"),
+      environment: { ...working.environment!, secrets: working.environment!.secrets.filter((s) => s !== "FABRIK_OP_PUSH_TOKEN") },
     };
 
     const actions = planSetup(broken, kit).actions.map((a) => `${a.kind} ${"name" in a ? a.name : ""}`);
 
-    expect(actions).toEqual(["create-label needs-design", "create-service-account fabrik-acme-clinic-push"]);
+    expect(actions).toEqual(["create-label needs-design", "create-service-account fabrik-acme-clinic-push-env"]);
   });
 
   it("restores a stable shim the repo lost, and rewrites only Kit-owned files", () => {
@@ -551,35 +551,43 @@ describe("The fabrik environment, held to the default branch (ADR-0004)", () => 
 
     const after = afterApplying(state, planSetup(state, kit));
 
-    expect(after.environment).toEqual({ branches: "selected", rules: [expect.objectContaining({ name: "main", type: "branch" })], secrets: ["STRIPE_KEY"] });
+    // Its own secret stays, beside the three tokens the plan's later steps store in it.
+    expect(after.environment).toEqual({
+      branches: "selected",
+      rules: [expect.objectContaining({ name: "main", type: "branch" })],
+      secrets: ["STRIPE_KEY", "FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"],
+    });
     expect(planSetup(after, kit).actions).toEqual([]);
   });
 });
 
-describe("Service accounts and Actions secrets (ADR-0004)", () => {
+describe("Service accounts, their tokens the secrets of the fabrik environment (ADR-0004)", () => {
   function accounts(state: ProductState) {
     return planSetup(state, kit).actions.flatMap((a) => (a.kind === "create-service-account" ? [a] : []));
   }
 
-  it("creates three read-only service accounts, each reading only its role's vaults, stored as its Actions secret", () => {
+  it("on a fresh repo, creates three read-only service accounts named -env, each reading only its role's vaults, stored in the fabrik environment", () => {
     expect(accounts(aCleanProduct())).toEqual([
       {
         kind: "create-service-account",
-        name: "fabrik-acme-clinic-agent",
+        name: "fabrik-acme-clinic-agent-env",
         vaults: ["Fabrik"],
         secret: "FABRIK_OP_AGENT_TOKEN",
+        environment: "fabrik",
       },
       {
         kind: "create-service-account",
-        name: "fabrik-acme-clinic-implement",
+        name: "fabrik-acme-clinic-implement-env",
         vaults: ["Fabrik", "Fabrik Sandbox · clinic"],
         secret: "FABRIK_OP_IMPLEMENT_TOKEN",
+        environment: "fabrik",
       },
       {
         kind: "create-service-account",
-        name: "fabrik-acme-clinic-push",
+        name: "fabrik-acme-clinic-push-env",
         vaults: ["Fabrik App"],
         secret: "FABRIK_OP_PUSH_TOKEN",
+        environment: "fabrik",
       },
     ]);
   });
@@ -602,10 +610,48 @@ describe("Service accounts and Actions secrets (ADR-0004)", () => {
     expect(lastVault).toBeLessThan(firstAccount);
   });
 
-  it("replaces only the service account whose Actions secret is missing", () => {
-    const state = aCleanProduct({ secrets: ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_PUSH_TOKEN", "STRIPE_KEY"] });
+  const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
+  /** A fabrik environment held to main, with these secrets. */
+  const held = (secrets: readonly string[]): EnvironmentState => ({ branches: "selected", rules: [{ id: 1, name: "main", type: "branch" }], secrets });
 
-    expect(accounts(state).map((a) => a.secret)).toEqual(["FABRIK_OP_IMPLEMENT_TOKEN"]);
+  it("on a repo whose three tokens sit at repo level only, as one already on the Kit, creates three new accounts in the environment", () => {
+    const onTheKit = aCleanProduct({ secrets: [...TOKENS, "STRIPE_KEY"], environment: null });
+
+    expect(accounts(onTheKit).map((a) => [a.name, a.secret, a.environment])).toEqual([
+      ["fabrik-acme-clinic-agent-env", "FABRIK_OP_AGENT_TOKEN", "fabrik"],
+      ["fabrik-acme-clinic-implement-env", "FABRIK_OP_IMPLEMENT_TOKEN", "fabrik"],
+      ["fabrik-acme-clinic-push-env", "FABRIK_OP_PUSH_TOKEN", "fabrik"],
+    ]);
+    expect(accounts({ ...onTheKit, environment: held([]) })).toHaveLength(3);
+  });
+
+  it.each<[string, readonly string[]]>([
+    ["none of them", []],
+    ["all three", TOKENS],
+    ["one of them, beside a secret of the repo's own", ["FABRIK_OP_IMPLEMENT_TOKEN", "STRIPE_KEY"]],
+  ])("creates no account on a repo whose environment holds all three, with %s at repo level", (_, repoLevel) => {
+    expect(accounts(aCleanProduct({ secrets: repoLevel, environment: held([...TOKENS, "STRIPE_KEY"]) }))).toEqual([]);
+  });
+
+  it("creates only the account of the role whose token the environment lacks, though a repo-level secret carries its name", () => {
+    const state = aCleanProduct({ secrets: TOKENS, environment: held(["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_PUSH_TOKEN", "STRIPE_KEY"]) });
+
+    expect(accounts(state).map((a) => a.name)).toEqual(["fabrik-acme-clinic-implement-env"]);
+  });
+
+  it("plans every account after the step that holds the environment, so no token is stored before its rule is in and read back", () => {
+    const { actions } = planSetup(aCleanProduct({ secrets: TOKENS }), kit);
+
+    expect(actions[0]?.kind).toBe("hold-environment");
+    expect(actions.findIndex((a) => a.kind === "create-service-account")).toBeGreaterThan(0);
+  });
+
+  it("names each step with its account, the vaults it reads, its secret and the fabrik environment", () => {
+    expect(accounts(aCleanProduct()).map(describeAction)).toEqual([
+      'create the read-only service account "fabrik-acme-clinic-agent-env" (reads "Fabrik") and store it as FABRIK_OP_AGENT_TOKEN in the fabrik environment',
+      'create the read-only service account "fabrik-acme-clinic-implement-env" (reads "Fabrik", "Fabrik Sandbox · clinic") and store it as FABRIK_OP_IMPLEMENT_TOKEN in the fabrik environment',
+      'create the read-only service account "fabrik-acme-clinic-push-env" (reads "Fabrik App") and store it as FABRIK_OP_PUSH_TOKEN in the fabrik environment',
+    ]);
   });
 });
 

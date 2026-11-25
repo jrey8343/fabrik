@@ -252,8 +252,10 @@ export type SetupAction =
       readonly name: string;
       /** Vaults it may read items from, and nothing else. */
       readonly vaults: readonly string[];
-      /** The Actions secret its token is stored as. */
+      /** The secret its token is stored as. */
       readonly secret: string;
+      /** The environment whose secret it is. A step that names none stores a repo-level Actions secret. */
+      readonly environment?: string;
       /** The repo, as `owner/name`, that holds the secret when it isn't the Product repo. */
       readonly repo?: string;
     }
@@ -915,9 +917,13 @@ export function sandboxVault(repo: ProductState["repo"]): string {
 }
 
 /**
- * The repo's three read-only service accounts, one per job role (ADR-0004).
- * 1Password shows a token only once, so a missing Actions secret can only be
- * repaired with a new account; one whose secret is present is left alone.
+ * The repo's three read-only service accounts, one per job role, each one's
+ * token a secret of the fabrik environment (ADR-0004). A token is missing
+ * when the environment lacks it, wherever else it sits: a repo-level secret
+ * of its name doesn't count. 1Password shows a token only once and GitHub
+ * never gives a secret back, so a missing one can only be made with a new
+ * account, named apart from the ones whose tokens sat at repo level; one the
+ * environment holds is left alone.
  */
 function secrets(state: ProductState): SetupAction[] {
   const sandbox = sandboxVault(state.repo);
@@ -931,9 +937,9 @@ function secrets(state: ProductState): SetupAction[] {
     if (!state.vaults.includes(vault)) actions.push({ kind: "create-vault", name: vault });
   }
   for (const { role, vaults, secret } of roles) {
-    if (state.secrets.includes(secret)) continue;
-    const name = `fabrik-${state.repo.owner}-${state.repo.name}-${role}`;
-    actions.push({ kind: "create-service-account", name, vaults, secret });
+    if (state.environment?.secrets.includes(secret)) continue;
+    const name = `fabrik-${state.repo.owner}-${state.repo.name}-${role}-env`;
+    actions.push({ kind: "create-service-account", name, vaults, secret, environment: KIT_ENVIRONMENT });
   }
   return actions;
 }
