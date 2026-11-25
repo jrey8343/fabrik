@@ -96,11 +96,22 @@ describe("The SessionStart hook entry", () => {
     });
   });
 
-  it("names no archive host, and keeps the Kit's name, by which Setup finds its entry in a Product repo's settings", async () => {
+  it("downloads no archive, and keeps the Kit's name, by which Setup finds its entry in a Product repo's settings", async () => {
     const command = await hookCommand();
 
-    expect(command).not.toContain("codeload.github.com");
-    expect(command).toContain("https://github.com/jrey8343/fabrik");
+    expect(command).not.toContain("curl");
+    expect(command).not.toContain("tar.gz");
+    expect(command).toContain('git -C "$d" fetch -q --depth 1 https://github.com/jrey8343/fabrik "refs/tags/$v"');
+  });
+
+  it("is described in the README's Layout as fetching Fabrik and each Skills source by git's own shallow fetch from github.com", async () => {
+    const readme = await readFile(resolve(import.meta.dirname, "..", "..", "README.md"), "utf8");
+    const layout = readme.split("\n## Layout\n")[1]?.split("\n## ")[0] ?? "";
+    const bullet = layout.split("\n").find((line) => line.startsWith("- `templates/claude-settings.json`"));
+
+    expect(bullet).toBe(
+      "- `templates/claude-settings.json` holds the `SessionStart` hook entry a Product repo merges into `.claude/settings.json`, and disables the `mattpocock-skills` plugin there. The entry reads the release from `fabrik.yml`, fetches Fabrik at that tag by git's own shallow fetch from `github.com` (public, no credentials, and served to a cloud session for a repo that isn't attached), and runs `src/session/start.ts`, which installs the skills that release's `skills.lock.json` pins, the same commit the Kit step installs in Actions, plus Fabrik's own `skills/` (`fabrik-live-design`, `fabrik-pair`, `fabrik-trial` and `fabrik-visual-evidence`). The skills are fetched the same way, each Skills source at its pinned commit, in a cloud session, at a terminal and in an AFK run alike. It also removes the `fabrik-setup` skill earlier releases installed there, and warns the Operator while their personal skills hold an old copy of it.",
+    );
   });
 
   it("gives the hook two minutes, and disables the skills plugin, so every session runs the pinned skills", async () => {
