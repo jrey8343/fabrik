@@ -1,6 +1,6 @@
 # Releasing Fabrik
 
-The Operator cuts every Fabrik release by hand. A Product repo pins one release in its caller workflow (ADR-0003), and each release pins everything under it, so a release tag is the whole version of the Kit a run used.
+The Operator cuts every Fabrik release by hand, at a terminal, with the release key (see **One-time repository settings**). A Product repo pins one release in its caller workflow (ADR-0003), and each release pins everything under it, so a release tag is the whole version of the Kit a run used. A release tag reaches every Product repo's runs on its default branch, so cutting one is the factory's production deploy. No release is cut from a phone, and an Operator session leaves a release step for the laptop.
 
 ## What a release pins
 
@@ -39,19 +39,28 @@ Whatever the kind, a release whose workflows ask a caller job for a permission t
 
 ## Cutting a release
 
-1. Make sure `main` is green in CI and holds every bump you want in this release.
-2. List what changed since the last release, and pick the version as above:
+1. Make sure `main` is green in CI and holds every bump you want in this release, and that the hold on the tags stands: two tag rulesets, both `active`; `true`; `1`. If any is off, stop and put it right (see **One-time repository settings**) before you tag.
+
+   ```sh
+   gh api repos/jrey8343/fabrik/rulesets --jq '.[] | select(.target=="tag") | "\(.name): \(.enforcement)"'
+   gh api repos/jrey8343/fabrik/immutable-releases --jq .enabled
+   gh api repos/jrey8343/fabrik/keys --jq length
+   ```
+
+2. List what changed since the last release, and pick the version as above. Read the list as what the release ships: `main` is open to an Operator session, so a commit you don't recognise stops the release until you know where it came from.
 
    ```sh
    git fetch --tags origin
-   git log --oneline "$(git describe --tags --abbrev=0 origin/main)..origin/main"
+   last=$(git describe --tags --abbrev=0 origin/main)
+   git log --oneline "$last..origin/main"
+   git diff --stat "$last..origin/main"
    ```
 
-3. Tag the `main` commit with an exact, annotated tag. Never move or reuse a tag, and never publish a moving major tag such as `v1`: Product repos pin exact tags, and Dependabot proposes each new one.
+3. Tag the `main` commit with an exact, annotated tag, and push it with the release key. GitHub refuses a new tag from anything else, your `gh` token included, and refuses a moved or deleted tag from everyone. The push goes through the key's host alias, and 1Password asks you to approve it. Never move or reuse a tag, and never publish a moving major tag such as `v1`: Product repos pin exact tags, and Dependabot proposes each new one.
 
    ```sh
    git tag -a v1.3.0 -m "Fabrik v1.3.0" origin/main
-   git push origin v1.3.0
+   git push git@fabrik-release:jrey8343/fabrik.git v1.3.0
    ```
 
 4. Check the release against the Console before its notes say what the Console needs. Do it for every release, patch, minor and major alike. The Console reads the Kit through the read library and is the one reader with a suite, so its `bun run validate`, not a guess, says what a reader of the read library needs: v4.0.0's notes said the Console needed nothing but its pin moved, and with only that its typecheck and 227 of its unit tests failed ([#794](https://github.com/jrey8343/fabrik/issues/794)). The check comes after the tag because the Console's Kit pin accepts only a release tag (`vX.Y.Z`).
@@ -108,3 +117,58 @@ The Pilot is the canary. A release goes to other Product repos only after it has
 
 - Settings, Actions, General: allow GitHub Actions to create and approve pull requests, so the skills bump can open its PR.
 - Dependabot version updates are on (`.github/dependabot.yml` turns them on once it's on `main`).
+- **The hold on the tags.** No tag in `fabrik` is ever moved or deleted, by anyone, and a new one is made only with the release key. A cloud session can't push a tag itself, but it can push a branch whose workflow makes, moves or publishes one with the run's own token, and `main` is open to it. Step 1 of **Cutting a release** reads the hold back before every release, and nothing watches it in between. It was put on by [Operator step: put the hold on `fabrik`'s release tags](https://github.com/jrey8343/fabrik/issues/866), with these commands:
+  - **Two tag rulesets over every tag** (`~ALL`, not only `v*`). One refuses moving and deleting, and nobody may bypass it. The other refuses creating, and only a deploy key may bypass it. So the release key can make a tag and can't move or delete one, and a session, a workflow it pushes and your own `gh` token are all refused a new tag.
+
+    ```sh
+    gh api --method POST repos/jrey8343/fabrik/rulesets --input - <<'EOF'
+    {"name":"Tags: no move, no delete, nobody may bypass","target":"tag","enforcement":"active",
+     "bypass_actors":[],
+     "conditions":{"ref_name":{"include":["~ALL"],"exclude":[]}},
+     "rules":[{"type":"update"},{"type":"deletion"}]}
+    EOF
+    gh api --method POST repos/jrey8343/fabrik/rulesets --input - <<'EOF'
+    {"name":"Tags: creating, the release key may bypass","target":"tag","enforcement":"active",
+     "bypass_actors":[{"actor_id":null,"actor_type":"DeployKey","bypass_mode":"always"}],
+     "conditions":{"ref_name":{"include":["~ALL"],"exclude":[]}},
+     "rules":[{"type":"creation"}]}
+    EOF
+    ```
+
+  - **Immutable releases, switched on.** A published release's tag can't be moved or deleted by anyone, its name can't be used again, and its assets are locked. It covers no release published before it was switched on, which the rulesets cover, and it outlasts a ruleset being switched off. A botched release's name is spent for good, as step 3 already has it.
+
+    ```sh
+    gh api --method PUT repos/jrey8343/fabrik/immutable-releases
+    ```
+
+    The call answers `204` at once, but step 1's read goes on answering `false` for about a minute after it, so wait a minute before you read it back. Calling it a second time doesn't make it read back sooner.
+
+  - **The release key:** `fabrik`'s one deploy key, with write. Its private half lives in 1Password and is never exported. 1Password's SSH agent serves it, and each push with it asks for a Touch ID approval, so nothing in your terminal, a Pairing session included, cuts a release unasked. Its public half is `~/.ssh/fabrik-release.pub`. With exactly one deploy key, a second one is easy to spot: step 1 stops on any count but `1`. A deploy key with write reaches every branch too, `main` included, since GitHub has none cut to tags alone.
+
+    ```sh
+    gh api --method POST repos/jrey8343/fabrik/keys \
+      -f title="The Operator's release key" \
+      -f key="$(cat ~/.ssh/fabrik-release.pub)" -F read_only=false
+    ```
+
+  - **The host alias,** `fabrik-release` in `~/.ssh/config`, so 1Password's agent serves this one connection and no other. `ssh -T git@fabrik-release` answers with the repo's name after a Touch ID approval.
+
+    ```
+    Host fabrik-release
+      HostName github.com
+      User git
+      IdentityAgent "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+      IdentityFile ~/.ssh/fabrik-release.pub
+      IdentitiesOnly yes
+    ```
+
+    The agent's socket is there only once **Use the SSH Agent** is ticked in 1Password's Settings, Developer: opening its setup walkthrough without finishing it leaves none. With no socket, `ssh` fails with "Permission denied (publickey)", after a warning that `~/.ssh/fabrik-release.pub` is an unprotected private key, which it isn't.
+
+  - **A lost key is replaced, never recovered or copied.** Make a new SSH key item (Ed25519) in 1Password and save its public half to `~/.ssh/fabrik-release.pub`. Then delete the old deploy key and add the new one, as above: two calls with your `gh` token, after the read that finds the old key's id:
+
+    ```sh
+    gh api repos/jrey8343/fabrik/keys --jq '.[] | "\(.id) \(.title)"'
+    gh api --method DELETE repos/jrey8343/fabrik/keys/<id>
+    ```
+
+  - **The way past, when the key can't be used:** on github.com, switch the ruleset on creating off (Settings, Rules, Rulesets), push the tag with your `gh` token (`git push origin v1.3.0`), and switch the ruleset back on at once. It needs your own sign-in to github.com. The ruleset on moving and deleting stays on, so nothing moves a tag.
