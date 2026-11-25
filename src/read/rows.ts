@@ -24,6 +24,7 @@ import { type CaptureFailure, captureFailureSentence, hasDynamicSegment } from "
 import { producedNamedShots, type ShotsFailure } from "../evidence/shotsEvidence.ts";
 import type { RunInFlightFact } from "../github/snapshot.ts";
 import { type ProductionConfig, productionPageUrl, stagingPageUrl, withRouteOn } from "../kit/config.ts";
+import { operatorSessionIn } from "../kit/operatorSession.ts";
 import { pairedOwnStandingsOf, type Standing, type StandingFacts, standingsOf } from "../kit/standing.ts";
 import { plainSinceOf } from "../kit/standingPlain.ts";
 import { asksAStagingTrial, isMergedStanding, mergesHeld } from "../kit/standingStaging.ts";
@@ -140,6 +141,16 @@ export interface Row {
    * them unless a hundred comments follow it, when it reads as `none`.
    */
   readonly digest: DigestRead | null;
+  /**
+   * On a row whose Standing names an open issue, whatever its Standing, a
+   * Decision's and a `ready-for-human` issue's alike (#951): the address of
+   * the Operator session that last reported itself there, by the Operator's
+   * newest marker comment (operatorSessionIn), or null. Null on any other
+   * row, and on every row of the store. It is worked out from the last
+   * hundred comments of the issue, which the gather reads, so a reader
+   * parses nothing: it draws the address.
+   */
+  readonly operatorSession: string | null;
 }
 
 /** An issue's newest prototype round, as its hidden line records it. */
@@ -368,11 +379,27 @@ function checksFactOf(checks: RowsChecks): Readonly<Record<string, RequiredCheck
 
 /**
  * A row with every field but the Standing, its title and its last word at
- * its empty default: nothing related, mentioned or followed up, and no
- * Ticket's state.
+ * its empty default: nothing related, mentioned or followed up, no Ticket's
+ * state, and no Operator session.
  */
 export function bareRowOf(standing: Standing, title: string, lastWord: Row["lastWord"]): Row {
-  return { standing, title, lastWord, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null, shots: null, production: null, prototype: null, digest: null };
+  return {
+    standing,
+    title,
+    lastWord,
+    related: [],
+    mentions: [],
+    relatedTo: null,
+    followUps: [],
+    ticketClosed: null,
+    plainPullRequest: null,
+    evidence: null,
+    shots: null,
+    production: null,
+    prototype: null,
+    digest: null,
+    operatorSession: null,
+  };
 }
 
 /**
@@ -399,7 +426,14 @@ function rowOf(standing: Standing, facts: Facts, owns: ReadonlyMap<number, Stand
     ...(staging === null ? {} : { staging }),
     prototype: issue === null ? null : prototypeOf(facts, issue),
     digest: pullRequest === null ? null : digestOn(facts, pullRequest),
+    operatorSession: issue === null ? null : operatorSessionOn(facts, issue),
   };
+}
+
+/** The Operator session that last reported itself on open issue `issue`, from its comments as the gather read them; null when the facts hold no such issue. */
+function operatorSessionOn({ github, operator }: Facts, issue: number): string | null {
+  const open = github.openIssues.find(({ number }) => number === issue);
+  return open === undefined ? null : operatorSessionIn(open.comments, operator);
 }
 
 /**

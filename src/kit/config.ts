@@ -148,6 +148,13 @@ export interface KitConfig {
      * listed file exists; only a reader of the Kit (the Console) acts on it.
      */
     readonly heldWorkflows: readonly string[];
+    /**
+     * The name of this repo's own Session environment, which holds what the
+     * repo attaches to its Operator sessions; null, when the key is left out,
+     * leaves them in the bare one. Valid with or without `app_id`. Read it
+     * through `sessionEnvironmentOf`, which gives the bare one's name for null.
+     */
+    readonly sessionEnvironment: string | null;
   };
 }
 
@@ -604,7 +611,7 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   // UTC until the Operator gives their time zone, as Setup writes it.
   timeZone: null,
   // The Console covers a repo only once the Operator gives its App's id; the starter never does.
-  console: { appId: null, heldWorkflows: [] },
+  console: { appId: null, heldWorkflows: [], sessionEnvironment: null },
 };
 
 /** Where the Kit config lives in a Product repo (ADR-0005). */
@@ -841,7 +848,7 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
   };
 }
 
-/** The `console` block; left out, or with no `app_id`, it covers nothing and holds no workflow. */
+/** The `console` block; left out, or with no `app_id`, it covers nothing and holds no workflow, and with no `session_environment` it names no Session environment of its own. */
 function readConsole(block: Reader, defaults: KitConfig): KitConfig["console"] {
   const appId = block.wholeNumber("app_id", 1);
   const heldWorkflows = block.stringList("held_workflows", checkWorkflowFile);
@@ -852,7 +859,16 @@ function readConsole(block: Reader, defaults: KitConfig): KitConfig["console"] {
       `${block.fieldName("held_workflows")} is valid only beside ${block.fieldName("app_id")}: a Held workflow reads its Start check by that App's id`,
     );
   }
-  return { appId: appId ?? defaults.console.appId, heldWorkflows: heldWorkflows ?? defaults.console.heldWorkflows };
+  const sessionEnvironment = block.string("session_environment", checkSessionEnvironment);
+  return {
+    appId: appId ?? defaults.console.appId,
+    heldWorkflows: heldWorkflows ?? defaults.console.heldWorkflows,
+    sessionEnvironment: sessionEnvironment ?? defaults.console.sessionEnvironment,
+  };
+}
+
+function checkSessionEnvironment(name: string): string | null {
+  return name === "" ? "a Session environment's name can't be empty" : null;
 }
 
 /** Names each entry of `names` that an earlier one already lists, compared as written: GitHub's workflow file names are case-sensitive. */

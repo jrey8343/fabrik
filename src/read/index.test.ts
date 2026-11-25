@@ -304,7 +304,7 @@ describe("the read library's kept Standings and rows (#793)", () => {
 
     expect(standing).toEqual({ ...A_STANDING_KEPT_AT_SCHEMA_1, schema: 2, detail: { blockers, hiddenBlockers: 0 } });
     expect(wordStanding(standing!, NOW, "UTC").sentence).toBe("Blocked by #7 and #9.");
-    expect(row).toEqual({ ...A_ROW_KEPT_AT_V3_4_1, standing, shots: null });
+    expect(row).toEqual({ ...A_ROW_KEPT_AT_V3_4_1, standing, shots: null, operatorSession: null });
     expect(joinRuns([row!], { repo: "acme/shop", readAt: NOW, runs: [], tick: { lastStartedAt: NOW } }, NOW)).toEqual([row]);
   });
 

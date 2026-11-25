@@ -4,8 +4,8 @@
 // Skills sources. Run as
 //   node src/skills/fetch.ts <product checkout> [role]
 // where a role installs only that role's Extra skills (the Auditor's, none),
-// and none installs every pick. Each download is content-addressed by commit,
-// so the SHA is the pin.
+// and none installs every pick. Each source is fetched at its commit by git's
+// own shallow fetch from github.com, so the SHA is the pin.
 import { execFile } from "node:child_process";
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -47,27 +47,55 @@ export interface InstalledSkills {
   readonly sha: string;
   /** The Base skills this fetch installed, empty when the right ones were already there. */
   readonly skills: readonly string[];
-  /** Whether it downloaded the Base skills, rather than finding that commit already installed. */
+  /** Whether it fetched the Base skills, rather than finding that commit already installed. */
   readonly fetched: boolean;
   /** The Extra skills now installed, by the name they install as. */
   readonly extraSkills: readonly string[];
   /**
    * Why the requested Extra skills weren't installed: Kit config errors (only
    * when the repo asks for Extra skills), a source that couldn't be
-   * downloaded, or what the manifest check found. The Base skills are
+   * fetched, or what the manifest check found. The Base skills are
    * installed either way.
    */
   readonly errors: readonly string[];
 }
 
-/** Downloads a URL's bytes, failing on anything but success. */
-export type Download = (url: string) => Promise<Buffer>;
+/**
+ * Fetches one repository at one commit into a folder that doesn't exist yet,
+ * leaving the commit's files checked out there, and fails with why.
+ */
+export type FetchSource = (repository: string, sha: string, folder: string) => Promise<void>;
 
-const downloadFromGitHub: Download = async (url) => {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Downloading ${url} failed: ${response.status}`);
-  return Buffer.from(await response.arrayBuffer());
+/**
+ * Git's own shallow fetch of the commit from github.com, then a checkout of
+ * what was fetched: public, with no credentials, and served to a cloud session
+ * for a repo that isn't attached, where an archive is refused. It fails with
+ * git's last fatal line on stderr.
+ */
+const fetchFromGitHub: FetchSource = async (repository, sha, folder) => {
+  try {
+    await run("git", ["init", "-q", folder]);
+    await run("git", ["-C", folder, "fetch", "-q", "--depth", "1", `https://github.com/${repository}`, sha]);
+    await run("git", ["-C", folder, "checkout", "-q", "FETCH_HEAD"]);
+  } catch (error) {
+    throw new Error(whyGitFailed(error));
+  }
 };
+
+/**
+ * Why a git command failed: its last `fatal:` line on stderr, leaving out the
+ * advice git prints under it, else its last line, else the error's own message.
+ */
+function whyGitFailed(error: unknown): string {
+  const stderr = typeof error === "object" && error !== null && "stderr" in error ? String(error.stderr) : "";
+  const lines = stderr.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+  return lines.findLast((line) => line.startsWith("fatal:")) ?? lines.at(-1) ?? messageOf(error);
+}
+
+/** An error's own message, or what was thrown, as text. */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /** Fabrik's own skills, the folders under the Kit's skills/. */
 const KIT_SKILLS_DIR = "skills";
@@ -78,9 +106,9 @@ interface Wanted {
   readonly sha: string;
   /** The skill names wanted from it; the Base source wants every one its manifest lists. */
   readonly skills: readonly string[];
-  /** Where the downloaded archive was extracted; undefined when the record says it's already installed. */
-  readonly extracted?: string;
-  /** The manifest text, null when the source has none; undefined when it wasn't downloaded. */
+  /** Where the source was fetched and checked out; undefined when the record says it's already installed. */
+  readonly fetchedInto?: string;
+  /** The manifest text, null when the source has none; undefined when it wasn't fetched. */
   readonly manifest?: string | null;
 }
 
@@ -90,15 +118,16 @@ interface Wanted {
  * Product checkout. Actions and the SessionStart hook both call it with Fabrik
  * checked out at the pinned release, so both install the same commits.
  *
- * Each source's archive is downloaded at most once, and not at all when the
- * install record shows the same pin and skills already there. Skills the Kit
- * installed earlier that are no longer wanted are removed; a folder the
- * install record doesn't name is never touched.
+ * Each source is fetched at its commit at most once, and not at all when the
+ * install record shows the same pin and skills already there. Base skills that
+ * can't be fetched throw; a Skills source that can't be is named in `errors`.
+ * Skills the Kit installed earlier that are no longer wanted are removed; a
+ * folder the install record doesn't name is never touched.
  */
 export async function fetchSkills(
   kitDir: string,
   productDir: string,
-  download: Download = downloadFromGitHub,
+  fetchFrom: FetchSource = fetchFromGitHub,
   { install = "every" }: FetchOptions = {},
 ): Promise<InstalledSkills> {
   const lock = readSkillsLock(await readFile(join(kitDir, SKILLS_LOCK_PATH), "utf8"));
@@ -115,14 +144,16 @@ export async function fetchSkills(
 
   const work = await mkdtemp(join(tmpdir(), "fabrik-skills-"));
   try {
-    const fetchSource = async (repository: string, sha: string) => {
-      const extracted = join(work, `${repository.replace("/", "-")}-${sha}`);
-      const archive = `${extracted}.tar.gz`;
-      await writeFile(archive, await download(`https://codeload.github.com/${repository}/tar.gz/${sha}`));
-      await mkdir(extracted);
-      await run("tar", ["-xzf", archive, "-C", extracted, "--strip-components=1"]);
-      const manifest = await readFile(join(extracted, PLUGIN_MANIFEST_PATH), "utf8").catch(() => null);
-      return { extracted, manifest };
+    // One source at its commit, into its own folder under `work`, with its manifest.
+    const fetchPinned = async (repository: string, sha: string) => {
+      const fetchedInto = join(work, `${repository.replace("/", "-")}-${sha}`);
+      try {
+        await fetchFrom(repository, sha, fetchedInto);
+      } catch (error) {
+        throw new Error(`${repository} at ${shortSha(sha)} could not be fetched from github.com: ${messageOf(error)}`);
+      }
+      const manifest = await readFile(join(fetchedInto, PLUGIN_MANIFEST_PATH), "utf8").catch(() => null);
+      return { fetchedInto, manifest };
     };
 
     const base = installedFrom(lock.repository);
@@ -130,14 +161,14 @@ export async function fetchSkills(
     if (base?.sha === lock.sha) {
       baseWanted = { ...lock, skills: base.skills };
     } else {
-      const fetched = await fetchSource(lock.repository, lock.sha);
+      const fetched = await fetchPinned(lock.repository, lock.sha);
       // The Base source must have a manifest; without one there's nothing to install.
       const folders = skillFolders(fetched.manifest ?? "{}");
       baseWanted = { ...lock, skills: folders.map((folder) => folder.name), ...fetched };
     }
 
     const extras: Wanted[] = [];
-    const downloadErrors: string[] = [];
+    const fetchErrors: string[] = [];
     for (const source of config?.skillsSources ?? []) {
       const skills = picks.filter((pick) => pick.source === source.repository).map((pick) => pick.name);
       if (skills.length === 0) continue;
@@ -146,10 +177,9 @@ export async function fetchSkills(
         extras.push({ ...source, skills });
       } else {
         try {
-          extras.push({ ...source, skills, ...(await fetchSource(source.repository, source.sha)) });
+          extras.push({ ...source, skills, ...(await fetchPinned(source.repository, source.sha)) });
         } catch (error) {
-          const reason = error instanceof Error ? error.message : String(error);
-          downloadErrors.push(`${source.repository} at ${shortSha(source.sha)} could not be downloaded: ${reason}`);
+          fetchErrors.push(messageOf(error));
         }
       }
     }
@@ -162,14 +192,14 @@ export async function fetchSkills(
             roles: pickingRoles(install),
             // A source the record shows unchanged passed this check when it was installed.
             manifests: new Map(
-              extras.flatMap((source) => (source.extracted === undefined ? [] : [[source.repository, source.manifest ?? null]])),
+              extras.flatMap((source) => (source.fetchedInto === undefined ? [] : [[source.repository, source.manifest ?? null]])),
             ),
             baseSkills: baseWanted.skills,
             kitSkills: await kitSkillNames(kitDir),
           });
-    const errors = [...downloadErrors, ...checkErrors];
+    const errors = [...fetchErrors, ...checkErrors];
     const wanted = errors.length === 0 ? [baseWanted, ...extras] : [baseWanted];
-    const changed = wanted.some((source) => source.extracted !== undefined);
+    const changed = wanted.some((source) => source.fetchedInto !== undefined);
     const wantedNames = new Set(wanted.flatMap((source) => source.skills));
     const dropped = record.flatMap((source) => source.skills).filter((name) => !wantedNames.has(name));
     if (!changed && dropped.length === 0 && record.length === wanted.length) {
@@ -181,20 +211,20 @@ export async function fetchSkills(
     await rm(join(dest, OLD_SKILLS_MARKER), { force: true });
     for (const name of dropped) await rm(join(dest, name), { recursive: true, force: true });
     for (const source of wanted) {
-      if (source.extracted === undefined) continue;
+      if (source.fetchedInto === undefined) continue;
       const folders = skillFolders(source.manifest ?? "{}");
       for (const name of source.skills) {
         const folder = folders.find((candidate) => candidate.name === name);
         if (folder === undefined) continue;
         const target = join(dest, name);
         await rm(target, { recursive: true, force: true });
-        // verbatimSymlinks keeps a link as a link rather than following it out of the archive.
-        await cp(join(source.extracted, folder.from), target, { recursive: true, verbatimSymlinks: true });
+        // verbatimSymlinks keeps a link as a link rather than following it out of the checkout.
+        await cp(join(source.fetchedInto, folder.from), target, { recursive: true, verbatimSymlinks: true });
       }
     }
     const next: InstallRecord = wanted.map(({ repository, sha, skills }) => ({ repository, sha, skills }));
     await writeFile(recordPath, `${JSON.stringify(next, null, 2)}\n`);
-    const fetched = baseWanted.extracted !== undefined;
+    const fetched = baseWanted.fetchedInto !== undefined;
     return {
       sha: lock.sha,
       skills: fetched ? baseWanted.skills : [],
@@ -253,7 +283,7 @@ if (import.meta.main) {
   const kitDir = resolve(import.meta.dirname, "..", "..");
   // An agent job names its role, and gets only that role's Extra skills.
   const install = (role ?? "every") as SkillsToInstall;
-  fetchSkills(kitDir, productDir, downloadFromGitHub, { install }).then(
+  fetchSkills(kitDir, productDir, fetchFromGitHub, { install }).then(
     ({ sha, skills, fetched, extraSkills, errors }) => {
       console.log(
         fetched

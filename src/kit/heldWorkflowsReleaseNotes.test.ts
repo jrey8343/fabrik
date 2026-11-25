@@ -79,9 +79,11 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Held workflows release notes, wh
       kit = await loadSetupKit(KIT, "v9.0.0");
     });
     const noAction = section(notes, "What changes with no action");
-    /** The report's lines after the one on the repo-level secrets, for a repo holding the two workflows and this Kit config. */
+    /** The report's lines after the one on the repo-level secrets, for a repo holding the two workflows and this Kit config, but those on a job that can take a role off the default branch, which are #918's. */
     const lines = (config: string) =>
-      planSetup(aCleanProduct({ workflows: { "deploy.yml": DEPLOY, "promote.yml": PROMOTE }, files: { ".fabrik/config.json": config } }), kit).report.slice(1);
+      planSetup(aCleanProduct({ workflows: { "deploy.yml": DEPLOY, "promote.yml": PROMOTE }, files: { ".fabrik/config.json": config } }), kit)
+        .report.slice(1)
+        .filter((line) => !line.startsWith(".github/workflows/"));
 
     it("is quoted as planSetup gives it, for a workflow Kit config lists and one it doesn't", () => {
       expect(textBlocks(noAction)).toEqual([lines(LISTING).join("\n")]);
@@ -145,7 +147,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Held workflows release notes, wh
   it("give as new exactly the two exports the read library's entry holds under their own heading, each with what it gives", () => {
     const added = bullet(section(notes, "For a reader of the read library"), "New exports");
     const named = [...new Set([...added.matchAll(/`([^`]+)`/g)].map((match) => match[1] ?? ""))].filter((name) => !(name in HELD_IN) && name !== "src/read/index.ts");
-    const heading = read("src/read/index.ts").split("\n// Held workflows and the Start check\n")[1] ?? "";
+    const heading = read("src/read/index.ts").split("\n// Held workflows and the Start check\n")[1]?.split("\n// ")[0] ?? "";
 
     expect(named.toSorted()).toEqual(NEW_EXPORTS.toSorted());
     expect(heading.trim()).toBe(`export { ${NEW_EXPORTS.join(", ")} } from "../kit/startCheck.ts";`);
@@ -156,8 +158,8 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Held workflows release notes, wh
 
   it("give KitConfig.console.heldWorkflows and the default as the read library's entry gives them", () => {
     const kitConfig = bullet(section(notes, "For a reader of the read library"), "`KitConfig.console.heldWorkflows`");
-    expect(kitConfig).toContain("`DEFAULT_KIT_CONFIG` has `console: { appId: null, heldWorkflows: [] }`.");
-    expect(entry.DEFAULT_KIT_CONFIG.console).toEqual({ appId: null, heldWorkflows: [] });
+    expect(kitConfig).toContain("`DEFAULT_KIT_CONFIG` has `console: { appId: null, heldWorkflows: [], sessionEnvironment: null }`.");
+    expect(entry.DEFAULT_KIT_CONFIG.console).toEqual({ appId: null, heldWorkflows: [], sessionEnvironment: null });
     expect(read("src/kit/config.ts")).toContain("readonly heldWorkflows: readonly string[];");
     expect(section(notes, "For a reader of the read library")).toContain("Nothing the entry exported is removed or changes meaning.");
   });
@@ -288,7 +290,7 @@ const HELD_IN: Readonly<Record<string, readonly [file: string, text: string]>> =
     "src/setup/plan.ts",
     "Kit config is invalid, so setup can't say whether console.held_workflows lists it.",
   ],
-  "[]": ["src/kit/config.ts", "console: { appId: null, heldWorkflows: [] }"],
+  "[]": ["src/kit/config.ts", "console: { appId: null, heldWorkflows: [], sessionEnvironment: null }"],
   console: ["src/kit/config.ts", `file.object("console")`],
   app_id: ["src/kit/config.ts", `block.wholeNumber("app_id", 1)`],
   ".yml": ["src/kit/config.ts", "a workflow's file name ends in .yml or .yaml"],
@@ -298,7 +300,7 @@ const HELD_IN: Readonly<Record<string, readonly [file: string, text: string]>> =
   "KitConfig.console.heldWorkflows": ["src/kit/config.ts", "readonly heldWorkflows: readonly string[];"],
   "console.heldWorkflows": ["src/kit/config.ts", "defaults.console.heldWorkflows"],
   "console.appId": ["src/kit/config.ts", "defaults.console.appId"],
-  "console: { appId: null, heldWorkflows: [] }": ["src/kit/config.ts", "console: { appId: null, heldWorkflows: [] }"],
+  "console: { appId: null, heldWorkflows: [], sessionEnvironment: null }": ["src/kit/config.ts", "console: { appId: null, heldWorkflows: [], sessionEnvironment: null }"],
   // In the titles of the other parts' Specs.
   fabrik: ["src/kit/environment.ts", `KIT_ENVIRONMENT = "fabrik"`],
   "setup.sh": ["setup.sh", "#!"],

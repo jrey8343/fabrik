@@ -50,6 +50,7 @@ import {
   factsOf,
   standingFactsOf,
   storeFactsOf,
+  BARE_SESSION_ENVIRONMENT,
   CAPTURE_RESULT_FILE,
   checkCallerWorkflow,
   commitsToCheck,
@@ -114,6 +115,7 @@ import {
   runnerTimeOf,
   runsInFlightFactOf,
   runwayOf,
+  sessionEnvironmentOf,
   SHOT_IMAGE_MAX_BYTES,
   SHOT_LIMIT,
   SHOT_NAME_MAX_LENGTH,
@@ -932,7 +934,7 @@ export const A_STANDING_KEPT_AT_SCHEMA_1 = {
   detail: { blockers: [9, 7] },
 } as const;
 
-/** That Ticket's row as a reader kept it at v3.4.1: its Standing at schema 1, and no `shots`, which a row gained at v4.1.0. */
+/** That Ticket's row as a reader kept it at v3.4.1: its Standing at schema 1, and no `shots`, which a row gained at v4.1.0, nor `operatorSession` (#951). */
 export const A_ROW_KEPT_AT_V3_4_1 = {
   standing: A_STANDING_KEPT_AT_SCHEMA_1,
   title: "Sign the contract",
@@ -1226,7 +1228,7 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   joinRuns: () =>
     joinRuns(
-      [{ standing: A_KEPT_STANDING, title: "Build the thing", lastWord: null, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null, shots: null, production: null, prototype: null, digest: null }],
+      rowsOf(homeFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }) }), null, null, null, NOW),
       { ...A_RUNS_READ, runs: [{ ...A_RUN_IN_FLIGHT, issue: 7, pullRequest: null, kind: "first", retry: null }] },
       NOW,
     ),
@@ -1653,6 +1655,14 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       "promote.yml",
     ),
   START_CHECK_MINUTES: () => START_CHECK_MINUTES,
+
+  // Operator sessions
+
+  BARE_SESSION_ENVIRONMENT: () => BARE_SESSION_ENVIRONMENT,
+  sessionEnvironmentOf: () =>
+    sessionEnvironmentOf(
+      { ...DEFAULT_KIT_CONFIG, console: { ...DEFAULT_KIT_CONFIG.console, sessionEnvironment: "product-sessions" } },
+    ),
 };
 
 /** One value of every type the entry exports, keyed by its name. */
@@ -1669,7 +1679,7 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   // Kit config and the caller's pin
 
   CallerCheck: { ok: true, release: "v1.2.3" } satisfies CallerCheck,
-  KitConfig: { ...DEFAULT_KIT_CONFIG, maxInFlight: 3, console: { appId: 1234567, heldWorkflows: ["promote.yml"] } } satisfies KitConfig,
+  KitConfig: { ...DEFAULT_KIT_CONFIG, maxInFlight: 3, console: { appId: 1234567, heldWorkflows: ["promote.yml"], sessionEnvironment: null } } satisfies KitConfig,
   KitConfigResult: { ok: false, errors: ["maxInFlight is not a Kit config field"] } satisfies KitConfigResult,
   KitConfigSources: {
     config: '{ "max_in_flight": 3 }',
@@ -1765,6 +1775,8 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
     production: { site: "https://shop.example", tracked: true, pages: [{ route: "/book?when=today", url: "https://shop.example/book?when=today" }] },
     prototype: { round: 2, comment: 5003, postedAt: "2026-11-08T21:00:00Z", waiting: true, route: "/book", captures: { run: 4420, artifact: 902 } },
     digest: A_READABLE_DIGEST,
+    // The Operator session that last reported itself on Ticket 7 (#951).
+    operatorSession: "https://claude.ai/code/session_01GcsNdk1yVNhd1T31USEtv1",
   } satisfies Row,
   StoreFacts: {
     kind: "store",

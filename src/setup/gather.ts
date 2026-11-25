@@ -4,7 +4,8 @@
 // with its default branch and its own fabrik environment.
 // With git it reads the caller workflow the default branch holds.
 // For Setup's report it reads production's environment too, when the Kit
-// config names one, and the checkout's workflows. It only reads.
+// config names one, the checkout's workflows, and each environment a job of
+// them that asks for id-token: write names. It only reads.
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
@@ -17,9 +18,11 @@ import {
   type BranchProtection,
   type DeploymentsSeen,
   type EnvironmentPolicy,
+  type EnvironmentRead,
   type EnvironmentRule,
   type EnvironmentState,
   FABRIK_VAULT,
+  idTokenJobs,
   MERGE_GATE_RULESET,
   type MergeGateRuleset,
   type ProductionEnvironment,
@@ -61,7 +64,29 @@ export async function gatherState(
   const readyForAgent = await gatherReadyForAgent(run, cwd, labels);
   const production = await gatherProduction(run, cwd, `${repo.owner}/${repo.name}`, files[KIT_CONFIG_PATH] ?? null);
   const workflows = await gatherWorkflows(productDir);
-  return { repo, files, defaultBranchCaller, labels, secrets, environment, production, vaults, fabrikItems, protection, mergeGate, store, readyForAgent, workflows };
+  const idTokenEnvironments = await gatherIdTokenEnvironments(run, cwd, `${repo.owner}/${repo.name}`, workflows);
+  return { repo, files, defaultBranchCaller, labels, secrets, environment, production, vaults, fabrikItems, protection, mergeGate, store, readyForAgent, workflows, idTokenEnvironments };
+}
+
+/**
+ * Each environment a job of `idTokenJobs` names, for Setup's report, read once
+ * each: which refs it lets through, never its secrets' names, with a null
+ * policy for one the repo doesn't have. A refused read is given with GitHub's
+ * answer, never thrown: Setup never blocks on its report. The repo is
+ * `owner/name`.
+ */
+async function gatherIdTokenEnvironments(run: Run, cwd: string, repo: string, workflows: Readonly<Record<string, string>>): Promise<Record<string, EnvironmentRead>> {
+  const names = [...new Set(idTokenJobs(workflows).flatMap(({ environment }) => (environment === null ? [] : [environment])))];
+  const read = await Promise.all(
+    names.map(async (name): Promise<readonly [string, EnvironmentRead]> => {
+      try {
+        return [name, { policy: await readEnvironmentPolicy(run, cwd, repo, name) }];
+      } catch (error) {
+        return [name, { refused: refusedAnswer(error) }];
+      }
+    }),
+  );
+  return Object.fromEntries(read);
 }
 
 /**
@@ -96,8 +121,13 @@ async function gatherProduction(run: Run, cwd: string, repo: string, kitConfig: 
   try {
     return { name, policy: await readEnvironmentPolicy(run, cwd, repo, name) };
   } catch (error) {
-    return { name, policy: null, refused: error instanceof RefusedRead ? error.answer : error instanceof Error ? error.message : String(error) };
+    return { name, policy: null, refused: refusedAnswer(error) };
   }
+}
+
+/** GitHub's answer to a read it refused, or the error's own message for any other failure. */
+function refusedAnswer(error: unknown): string {
+  return error instanceof RefusedRead ? error.answer : error instanceof Error ? error.message : String(error);
 }
 
 /** A read GitHub refused. Its message names the read and GitHub's answer, and the answer is kept apart for a line that gives it alone. */

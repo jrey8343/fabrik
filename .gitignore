@@ -6,3 +6,5 @@ node_modules/
 
 # Claude Code agent worktrees
 .claude/worktrees/
+# The skills fabrik's own SessionStart hook installs (src/session/start.ts --kit)
+.claude/skills/
