@@ -13,6 +13,7 @@ import { PlanNotApplied, ReplayTicketTaken } from "../github/apply.ts";
 import { UnverifiedBundle } from "../github/branch.ts";
 import { GitHubError, gitHubMessageOf, refusalOf } from "../github/client.ts";
 import { actionPhrase, describeAction } from "../github/describePlan.ts";
+import { handOffFrom } from "../github/events.ts";
 import { RESUME_LABELS } from "../loop/heldRun.ts";
 import { handBackMarker, IMPLEMENT_RUN_FAILED_MARKER, RESEARCH_RUN_FAILED_MARKER } from "../loop/markers.ts";
 import type { Action, AgentRole } from "../loop/types.ts";
@@ -136,6 +137,22 @@ export function pushLanding(input: PushJobInput, runUrl: string): Landing | null
     case "nothing":
       return null;
   }
+}
+
+/**
+ * The issue or pull request a claim job's run is for, from its Actions event
+ * alone, so it is known before any call to GitHub can fail: the issue the
+ * event names; on a review's own run, the pull request its event names in
+ * place of an issue; and on a hand-off's run, the pull request its inputs
+ * name, as a claim runs only once the Kit job's read found the review on that
+ * pull request. Null when the event names none.
+ */
+export function claimTargetOf(eventName: string, payload: Record<string, unknown>): number | null {
+  const numberOf = (named: unknown): number | null => {
+    const number = (named as { number?: unknown } | null | undefined)?.number;
+    return typeof number === "number" ? number : null;
+  };
+  return numberOf(payload["issue"]) ?? numberOf(payload["pull_request"]) ?? handOffFrom(eventName, payload)?.pullRequest ?? null;
 }
 
 /** What the claim job lands: the claim of the issue its run is for, when the event names one. */

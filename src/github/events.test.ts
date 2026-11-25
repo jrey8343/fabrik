@@ -9,6 +9,7 @@ import {
   agentRunEventFrom,
   checkBuiltAsPlanned,
   auditEventFrom,
+  handOffFrom,
   loopEventFrom,
   prototypeEventFrom,
   researchEventFrom,
@@ -179,6 +180,47 @@ describe("A comment on a pull request", () => {
       reviewer: "operator",
       reviewerIsBot: false,
     });
+  });
+});
+
+describe("A review's hand-off", () => {
+  it("is a workflow_dispatch whose inputs name the pull request and the review", () => {
+    expect(handOffFrom("workflow_dispatch", { inputs: { pull_request: "45", review: "123" } })).toEqual({ pullRequest: 45, review: 123 });
+  });
+
+  it.each([
+    ["no pull request", { review: "123" }],
+    ["no review", { pull_request: "45" }],
+    ["an empty pull request", { pull_request: "", review: "123" }],
+    ["an empty review", { pull_request: "45", review: "" }],
+    ["pull request 0", { pull_request: "0", review: "123" }],
+    ["review 0", { pull_request: "45", review: "0" }],
+    ["a negative pull request", { pull_request: "-45", review: "123" }],
+    ["a negative review", { pull_request: "45", review: "-123" }],
+    ["a pull request with more than digits", { pull_request: "45abc", review: "123" }],
+    ["a review with more than digits", { pull_request: "45", review: " 123" }],
+    ["a pull request that is no whole number", { pull_request: "4.5", review: "123" }],
+    ["a review in another notation", { pull_request: "45", review: "0x7b" }],
+    ["a review written as an exponent", { pull_request: "45", review: "1e3" }],
+    ["a pull request that is no text", { pull_request: 45, review: "123" }],
+  ])("is none when its inputs hold %s", (_case, inputs) => {
+    expect(handOffFrom("workflow_dispatch", { inputs })).toBeNull();
+  });
+
+  it.each([
+    ["with no inputs", {}],
+    ["whose inputs are null, as a manual one's with none", { inputs: null }],
+  ])("is none for a dispatch %s", (_case, payload) => {
+    expect(handOffFrom("workflow_dispatch", payload)).toBeNull();
+  });
+
+  it("is none for any other event, whatever inputs its payload holds", () => {
+    expect(handOffFrom("pull_request_review", { inputs: { pull_request: "45", review: "123" } })).toBeNull();
+  });
+
+  it("is no Loop event by itself: the Loop acts on the review the run reads, never on the inputs", () => {
+    expect(loopEventFrom("workflow_dispatch", { inputs: { pull_request: "45", review: "123" } })).toBeNull();
+    expect(loopEventFrom("workflow_dispatch", { inputs: null })).toBeNull();
   });
 });
 
