@@ -19,6 +19,8 @@
 # run on a fresh VM, load the Fabrik App key through the push service account,
 # mint an App token, and never check out or run Product code. They check out
 # only Fabrik itself, at the exact commit the caller pinned.
+#
+# Each job that reads OP_PUSH_TOKEN names the caller repo's fabrik environment, as loop.yml's do (ADR-0004).
 name: Fabrik scheduled tick
 
 on:
@@ -88,6 +90,9 @@ jobs:
     name: Tick
     needs: kit
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: 10
     # One tick at a time per repo; a tick that's queued behind another waits. loop.yml's push job on a push
     # to the default branch shares the group, so its conflict check and the tick's take turns (#341).
@@ -151,6 +156,9 @@ jobs:
     needs: [kit, tick]
     if: ${{ !cancelled() && needs.tick.result == 'success' && needs.tick.outputs.dispatch == 'true' }}
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     # The default roles.dispatch.timeout_minutes: the tick reads no Kit config before its jobs start.
     timeout-minutes: 10
     # loop.yml's Dispatch job's group: one check at a time per repo, so two
@@ -189,6 +197,9 @@ jobs:
     needs: [kit, tick]
     if: ${{ !cancelled() && needs.tick.result == 'success' && needs.tick.outputs.design-queue == 'true' }}
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: 10
     # loop.yml's Design queue job's group: one check at a time per repo, so two
     # can't both fill the same free slot.
@@ -228,6 +239,9 @@ jobs:
     needs: [kit, tick]
     if: ${{ !cancelled() && needs.kit.result == 'success' }}
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: 10
     concurrency:
       group: fabrik-skills-bump
@@ -293,6 +307,9 @@ jobs:
     needs: [kit, tick]
     if: ${{ !cancelled() && needs.kit.result == 'success' }}
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: 5
     continue-on-error: true
     # One at a time per repo, so two Ticks can't both find no comment and both post one.
@@ -357,6 +374,9 @@ jobs:
     name: Monitor
     needs: kit
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: 10
     concurrency:
       group: fabrik-monitor
