@@ -1905,6 +1905,10 @@ describe("Setup's report on a Product repo's own credentials", () => {
       expect(report.slice(1)).toEqual(["Production's environment, live, isn't held to trunk alone (main), so a run on another ref that names it is given its secrets."]);
     });
 
+    it("drops control characters from the name the Kit config gives, such as a terminal escape, since the report is printed to the terminal", () => {
+      expect(onProduction(null, "live\u001b]52;c;ZXZpbA==\u0007\u009b2J")).toEqual(["Production's environment, live]52;c;ZXZpbA==2J, isn't on this repo."]);
+    });
+
     it("says nothing of production when the Kit config names no environment for it", () => {
       expect(planSetup(aCleanProduct({ production: null }), kit).report).toEqual([NONE_OF_ITS_OWN]);
     });

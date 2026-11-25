@@ -438,11 +438,13 @@ function ownSecrets(state: ProductState): string[] {
  * one: whether it is held to the default branch alone, by the test the
  * `fabrik` environment is held to (environmentHeld), with its rules as the
  * plan writes them when it isn't, or that the repo has none of that name.
+ * Whoever can write the Kit config wrote the name, so it keeps no control
+ * characters, such as a terminal escape, for the Operator's terminal to print.
  */
 function productionHeld({ production, repo: { defaultBranch } }: ProductState): string[] {
   if (production === null) return [];
   const { name, policy } = production;
-  const named = `Production's environment, ${name},`;
+  const named = `Production's environment, ${name.replace(/[\u0000-\u001f\u007f-\u009f]/g, "")},`;
   if (policy === null) return [`${named} isn't on this repo.`];
   if (environmentHeld(policy, defaultBranch)) return [`${named} is held to ${defaultBranch} alone.`];
   return [`${named} isn't held to ${defaultBranch} alone (${namedPolicy(policy)}), so a run on another ref that names it is given its secrets.`];
