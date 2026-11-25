@@ -26,7 +26,7 @@ import type { Prompt } from "./prompt.ts";
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
 /** The usage line, as the Operator runs setup: through the bootstrap command, which fills in the checkout and takes the release either way. */
 const BOOTSTRAP_USAGE =
-  "Usage: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- [release | --release=<release>] [--account=<1Password account>]" +
+  "Usage: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/<release>/setup.sh | bash -s -- <release> [--account=<1Password account>]" +
   " [--time-zone=<IANA zone> | --no-time-zone] [--second-subscription | --no-second-subscription] [--paused | --no-paused]" +
   " [--production-url=<address> | --no-production] [--production-environment=<Deployments environment>]" +
   " [--staging-url=<address> | --no-staging] [--staging-environment=<Deployments environment>] [--plan]";
@@ -389,7 +389,7 @@ describe("The setup program", () => {
     // The Kit's own token at repo level is a note's, never the report's: the default branch has no caller workflow yet, so it stays (#931).
     const STAYS =
       "- The repo-level Actions secret FABRIK_OP_PUSH_TOKEN stays for now, since the Kit main pins names no environment and reads it. " +
-      "Once the setup PR is merged, run setup again and it deletes it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
+      "Once the setup PR is merged, run setup again and it deletes it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/v1.4.2/setup.sh | bash -s -- v1.4.2";
 
     it.each<[string, string[], Options, string[]]>([
       ["with --plan", ["--plan"], {}, []],

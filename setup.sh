@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Fabrik's bootstrap script. The Operator runs Setup with it, in their own
-# terminal, from the root of the Product repo's clone:
-#   curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- [release] [setup's flags]
+# terminal, from the root of the Product repo's clone. It is fetched at the
+# release it runs, never from main, and named that release:
+#   curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/<release>/setup.sh | bash -s -- <release> [setup's flags]
+# or, for Fabrik's latest release, with the tag gh gives for it:
+#   v=$(gh release view --repo jrey8343/fabrik --json tagName --jq .tagName) &&
+#     curl -fsSL "https://raw.githubusercontent.com/jrey8343/fabrik/$v/setup.sh" | bash -s -- "$v" [setup's flags]
 # The release can also be named as --release=<release>, anywhere among the
 # flags. It checks for Node 24.3 or later and gh, finds the release (Fabrik's
 # latest unless one is named, as an exact tag), downloads it into a temporary folder,
