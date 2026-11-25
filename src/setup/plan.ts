@@ -74,11 +74,11 @@ export interface ProductState {
    */
   readonly workflows: Readonly<Record<string, string>>;
   /**
-   * Each environment a job of `roleJobs` names, read once each for Setup's
+   * Each environment a job of `idTokenJobs` names, read once each for Setup's
    * report. An environment missing here is read as one the repo has none of:
    * either way it isn't held to the default branch alone.
    */
-  readonly roleEnvironments: Readonly<Record<string, EnvironmentRead>>;
+  readonly idTokenEnvironments: Readonly<Record<string, EnvironmentRead>>;
 }
 
 /**
@@ -510,7 +510,7 @@ const KIT_SECRETS: readonly string[] = KIT_ROLES.map((role) => KIT_TOKENS[role])
  * and a named Session environment with no `.fabrik/operator-session.md`.
  */
 function setupReport(state: ProductState, config: KitConfigResult): string[] {
-  return [...ownSecrets(state), ...productionHeld(state), ...heldWorkflowLines(state, config), ...offDefaultBranchRoles(state), ...unsaidSessionEnvironment(state, config)];
+  return [...ownSecrets(state), ...productionHeld(state), ...heldWorkflowLines(state, config), ...idTokenJobLines(state), ...unsaidSessionEnvironment(state, config)];
 }
 
 /**
@@ -526,7 +526,7 @@ function unsaidSessionEnvironment(state: ProductState, config: KitConfigResult):
 }
 
 /** A job that asks for `id-token: write`, by its workflow's file name, its own name and the environment it names, or null for none. */
-export interface RoleJob {
+export interface IdTokenJob {
   readonly file: string;
   readonly job: string;
   readonly environment: string | null;
@@ -539,7 +539,7 @@ export interface RoleJob {
  * `id-token: write` in every repo. Gather reads the environments these name,
  * and the report says which of them can take a role off the default branch.
  */
-export function roleJobs(workflows: Readonly<Record<string, string>>): RoleJob[] {
+export function idTokenJobs(workflows: Readonly<Record<string, string>>): IdTokenJob[] {
   return Object.keys(workflows)
     .filter((file) => file !== CALLER_FILE)
     .toSorted()
@@ -548,18 +548,18 @@ export function roleJobs(workflows: Readonly<Record<string, string>>): RoleJob[]
 
 /**
  * The report's lines on each job that can take a role off the default branch:
- * one of `roleJobs` that names no environment, so a run on any branch can, or
+ * one of `idTokenJobs` that names no environment, so a run on any branch can, or
  * that names one not held to the default branch alone, by the test the
  * `fabrik` environment is held to (environmentHeld). One the repo doesn't
  * have isn't held; one whose read GitHub refused couldn't be read, with the
  * first line of GitHub's answer, as Setup can't say whether it is held. Setup
  * can't read a role's trust, so it judges none.
  */
-function offDefaultBranchRoles({ workflows, roleEnvironments, repo: { defaultBranch } }: ProductState): string[] {
-  return roleJobs(workflows).flatMap(({ file, job, environment }) => {
+function idTokenJobLines({ workflows, idTokenEnvironments, repo: { defaultBranch } }: ProductState): string[] {
+  return idTokenJobs(workflows).flatMap(({ file, job, environment }) => {
     const named = `.github/workflows/${printable(file)}: its job \`${printable(job)}\` asks for id-token: write`;
     if (environment === null) return [`${named} and names no environment, so a run on any branch can take a role this repo's trust allows.`];
-    const read = Object.hasOwn(roleEnvironments, environment) ? roleEnvironments[environment]! : { policy: null };
+    const read = Object.hasOwn(idTokenEnvironments, environment) ? idTokenEnvironments[environment]! : { policy: null };
     const namedEnvironment = `${named} and names the environment \`${printable(environment)}\`,`;
     if ("refused" in read) return [`${namedEnvironment} which couldn't be read (${answerOf(read.refused)}), so Setup can't say whether it is held to the default branch alone.`];
     if (environmentHeld(read.policy, defaultBranch)) return [];

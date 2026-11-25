@@ -22,12 +22,12 @@ import {
   type EnvironmentRule,
   type EnvironmentState,
   FABRIK_VAULT,
+  idTokenJobs,
   MERGE_GATE_RULESET,
   type MergeGateRuleset,
   type ProductionEnvironment,
   productionEnvironmentIn,
   type ProductState,
-  roleJobs,
   type RunStoreState,
 } from "./plan.ts";
 import { CALLER_PATH, DEPENDABOT_PATH, STORE_CALLER_PATH } from "./shims.ts";
@@ -64,19 +64,19 @@ export async function gatherState(
   const readyForAgent = await gatherReadyForAgent(run, cwd, labels);
   const production = await gatherProduction(run, cwd, `${repo.owner}/${repo.name}`, files[KIT_CONFIG_PATH] ?? null);
   const workflows = await gatherWorkflows(productDir);
-  const roleEnvironments = await gatherRoleEnvironments(run, cwd, `${repo.owner}/${repo.name}`, workflows);
-  return { repo, files, defaultBranchCaller, labels, secrets, environment, production, vaults, fabrikItems, protection, mergeGate, store, readyForAgent, workflows, roleEnvironments };
+  const idTokenEnvironments = await gatherIdTokenEnvironments(run, cwd, `${repo.owner}/${repo.name}`, workflows);
+  return { repo, files, defaultBranchCaller, labels, secrets, environment, production, vaults, fabrikItems, protection, mergeGate, store, readyForAgent, workflows, idTokenEnvironments };
 }
 
 /**
- * Each environment a job of `roleJobs` names, for Setup's report, read once
+ * Each environment a job of `idTokenJobs` names, for Setup's report, read once
  * each: which refs it lets through, never its secrets' names, with a null
  * policy for one the repo doesn't have. A refused read is given with GitHub's
  * answer, never thrown: Setup never blocks on its report. The repo is
  * `owner/name`.
  */
-async function gatherRoleEnvironments(run: Run, cwd: string, repo: string, workflows: Readonly<Record<string, string>>): Promise<Record<string, EnvironmentRead>> {
-  const names = [...new Set(roleJobs(workflows).flatMap(({ environment }) => (environment === null ? [] : [environment])))];
+async function gatherIdTokenEnvironments(run: Run, cwd: string, repo: string, workflows: Readonly<Record<string, string>>): Promise<Record<string, EnvironmentRead>> {
+  const names = [...new Set(idTokenJobs(workflows).flatMap(({ environment }) => (environment === null ? [] : [environment])))];
   const read = await Promise.all(
     names.map(async (name): Promise<readonly [string, EnvironmentRead]> => {
       try {

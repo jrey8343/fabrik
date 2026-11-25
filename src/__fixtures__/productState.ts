@@ -17,7 +17,7 @@ export function aCleanProduct(overrides: Partial<ProductState> = {}): ProductSta
     store: noStore(),
     readyForAgent: 0,
     workflows: {},
-    roleEnvironments: {},
+    idTokenEnvironments: {},
     ...overrides,
   };
 }

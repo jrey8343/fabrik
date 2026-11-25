@@ -2642,58 +2642,58 @@ describe("Setup's report on what an Operator session could reach", () => {
   const workflow = (on: readonly string[], jobs: readonly string[], top: readonly string[] = []) =>
     ["name: Some workflow", ...on, ...top, "jobs:", ...jobs, ""].join("\n");
   /** One job of this name asking for id-token: write by its own permissions:, with these lines more. */
-  const roleJob = (name: string, ...more: readonly string[]) => [`  ${name}:`, "    runs-on: ubuntu-latest", "    permissions:", "      id-token: write", ...more];
+  const idTokenJob = (name: string, ...more: readonly string[]) => [`  ${name}:`, "    runs-on: ubuntu-latest", "    permissions:", "      id-token: write", ...more];
   const pushed = (...jobs: readonly string[]) => workflow(["on: push"], jobs);
   /** The report's lines after the one on the repo-level secrets, for a repo holding these workflows and these environments. */
-  const onRoles = (workflows: Readonly<Record<string, string>>, roleEnvironments: ProductState["roleEnvironments"] = {}) =>
-    planSetup(aCleanProduct({ workflows, roleEnvironments }), kit).report.slice(1);
+  const onIdTokenJobs = (workflows: Readonly<Record<string, string>>, idTokenEnvironments: ProductState["idTokenEnvironments"] = {}) =>
+    planSetup(aCleanProduct({ workflows, idTokenEnvironments }), kit).report.slice(1);
   const NO_ENVIRONMENT = (file: string, job: string) =>
     `.github/workflows/${file}: its job \`${job}\` asks for id-token: write and names no environment, so a run on any branch can take a role this repo's trust allows.`;
   const NOT_HELD = (file: string, job: string, environment: string) =>
     `.github/workflows/${file}: its job \`${job}\` asks for id-token: write and names the environment \`${environment}\`, which isn't held to the default branch alone, so a run on another branch can take its role.`;
 
   it("names a job that asks for id-token: write and names no environment, word for word", () => {
-    expect(onRoles({ "plan.yml": pushed(...roleJob("plan")) })).toEqual([
+    expect(onIdTokenJobs({ "plan.yml": pushed(...idTokenJob("plan")) })).toEqual([
       ".github/workflows/plan.yml: its job `plan` asks for id-token: write and names no environment, so a run on any branch can take a role this repo's trust allows.",
     ]);
   });
 
   it("names a job whose environment isn't held to the default branch alone, word for word, and none whose environment is", () => {
-    const text = pushed(...roleJob("deploy", "    environment: production"));
+    const text = pushed(...idTokenJob("deploy", "    environment: production"));
     const held: EnvironmentPolicy = { branches: "selected", rules: [{ id: 1, name: "main", type: "branch" }] };
 
-    expect(onRoles({ "deploy.yml": text }, { production: { policy: { branches: "all", rules: [] } } })).toEqual([
+    expect(onIdTokenJobs({ "deploy.yml": text }, { production: { policy: { branches: "all", rules: [] } } })).toEqual([
       ".github/workflows/deploy.yml: its job `deploy` asks for id-token: write and names the environment `production`, which isn't held to the default branch alone, so a run on another branch can take its role.",
     ]);
-    expect(onRoles({ "deploy.yml": text }, { production: { policy: { branches: "selected", rules: [{ id: 1, name: "main", type: "tag" }] } } })).toEqual([
+    expect(onIdTokenJobs({ "deploy.yml": text }, { production: { policy: { branches: "selected", rules: [{ id: 1, name: "main", type: "tag" }] } } })).toEqual([
       NOT_HELD("deploy.yml", "deploy", "production"),
     ]);
-    expect(onRoles({ "deploy.yml": text }, { production: { policy: held } })).toEqual([]);
+    expect(onIdTokenJobs({ "deploy.yml": text }, { production: { policy: held } })).toEqual([]);
   });
 
   it("counts an environment the repo doesn't have as not held, whether read as missing or never read", () => {
-    const text = pushed(...roleJob("deploy", "    environment:", "      name: production", "      url: https://clinic.example.com"));
+    const text = pushed(...idTokenJob("deploy", "    environment:", "      name: production", "      url: https://clinic.example.com"));
 
-    expect(onRoles({ "deploy.yml": text }, { production: { policy: null } })).toEqual([NOT_HELD("deploy.yml", "deploy", "production")]);
-    expect(onRoles({ "deploy.yml": text })).toEqual([NOT_HELD("deploy.yml", "deploy", "production")]);
-    expect(onRoles({ "deploy.yml": pushed(...roleJob("deploy", "    environment: constructor")) })).toEqual([NOT_HELD("deploy.yml", "deploy", "constructor")]);
+    expect(onIdTokenJobs({ "deploy.yml": text }, { production: { policy: null } })).toEqual([NOT_HELD("deploy.yml", "deploy", "production")]);
+    expect(onIdTokenJobs({ "deploy.yml": text })).toEqual([NOT_HELD("deploy.yml", "deploy", "production")]);
+    expect(onIdTokenJobs({ "deploy.yml": pushed(...idTokenJob("deploy", "    environment: constructor")) })).toEqual([NOT_HELD("deploy.yml", "deploy", "constructor")]);
   });
 
   it("says an environment GitHub refused the read of couldn't be read, with the first line of GitHub's answer, word for word, and never that it isn't held", () => {
-    const text = pushed(...roleJob("deploy", "    environment: production"));
+    const text = pushed(...idTokenJob("deploy", "    environment: production"));
 
-    expect(onRoles({ "deploy.yml": text }, { production: { refused: "gh: Resource not accessible by personal access token (HTTP 403)\n" } })).toEqual([
+    expect(onIdTokenJobs({ "deploy.yml": text }, { production: { refused: "gh: Resource not accessible by personal access token (HTTP 403)\n" } })).toEqual([
       ".github/workflows/deploy.yml: its job `deploy` asks for id-token: write and names the environment `production`, which couldn't be read (gh: Resource not accessible by personal access token (HTTP 403)), so Setup can't say whether it is held to the default branch alone.",
     ]);
-    expect(onRoles({ "deploy.yml": text }, { production: { refused: "gh: Bad \u001b[31mGateway (HTTP 502)\nmore" } })).toEqual([
+    expect(onIdTokenJobs({ "deploy.yml": text }, { production: { refused: "gh: Bad \u001b[31mGateway (HTTP 502)\nmore" } })).toEqual([
       ".github/workflows/deploy.yml: its job `deploy` asks for id-token: write and names the environment `production`, which couldn't be read (gh: Bad [31mGateway (HTTP 502)), so Setup can't say whether it is held to the default branch alone.",
     ]);
   });
 
   it("judges an environment by the repo's default branch, whatever that is called", () => {
     const clean = aCleanProduct({
-      workflows: { "deploy.yml": pushed(...roleJob("deploy", "    environment: production")) },
-      roleEnvironments: { production: { policy: { branches: "selected", rules: [{ id: 1, name: "main", type: "branch" }] } } },
+      workflows: { "deploy.yml": pushed(...idTokenJob("deploy", "    environment: production")) },
+      idTokenEnvironments: { production: { policy: { branches: "selected", rules: [{ id: 1, name: "main", type: "branch" }] } } },
     });
 
     expect(planSetup({ ...clean, repo: { ...clean.repo, defaultBranch: "trunk" } }, kit).report.slice(1)).toEqual([NOT_HELD("deploy.yml", "deploy", "production")]);
@@ -2703,16 +2703,16 @@ describe("Setup's report on what an Operator session could reach", () => {
     const job = ["  plan:", "    runs-on: ubuntu-latest"];
     const own = ["  plan:", "    runs-on: ubuntu-latest", "    permissions:", "      contents: read"];
 
-    expect(onRoles({ "plan.yml": workflow(["on: push"], job, ["permissions:", "  id-token: write"]) })).toEqual([NO_ENVIRONMENT("plan.yml", "plan")]);
-    expect(onRoles({ "plan.yml": workflow(["on: push"], job, ["permissions: write-all"]) })).toEqual([NO_ENVIRONMENT("plan.yml", "plan")]);
-    expect(onRoles({ "plan.yml": workflow(["on: push"], own, ["permissions:", "  id-token: write"]) })).toEqual([]);
-    expect(onRoles({ "plan.yml": workflow(["on: push"], ["  plan:", "    permissions: {}"], ["permissions: write-all"]) })).toEqual([]);
+    expect(onIdTokenJobs({ "plan.yml": workflow(["on: push"], job, ["permissions:", "  id-token: write"]) })).toEqual([NO_ENVIRONMENT("plan.yml", "plan")]);
+    expect(onIdTokenJobs({ "plan.yml": workflow(["on: push"], job, ["permissions: write-all"]) })).toEqual([NO_ENVIRONMENT("plan.yml", "plan")]);
+    expect(onIdTokenJobs({ "plan.yml": workflow(["on: push"], own, ["permissions:", "  id-token: write"]) })).toEqual([]);
+    expect(onIdTokenJobs({ "plan.yml": workflow(["on: push"], ["  plan:", "    permissions: {}"], ["permissions: write-all"]) })).toEqual([]);
   });
 
   it("gives a workflow that can't be dispatched its lines all the same, beside a dispatchable one's own line", () => {
-    const dispatched = workflow(["on: workflow_dispatch"], roleJob("apply"));
+    const dispatched = workflow(["on: workflow_dispatch"], idTokenJob("apply"));
 
-    expect(onRoles({ "on-merge.yml": pushed(...roleJob("deploy")), "apply.yml": dispatched })).toEqual([
+    expect(onIdTokenJobs({ "on-merge.yml": pushed(...idTokenJob("deploy")), "apply.yml": dispatched })).toEqual([
       expect.stringMatching(/^`apply\.yml` can be started by dispatch/),
       NO_ENVIRONMENT("apply.yml", "apply"),
       NO_ENVIRONMENT("on-merge.yml", "deploy"),
@@ -2720,9 +2720,9 @@ describe("Setup's report on what an Operator session could reach", () => {
   });
 
   it("goes in the order of the files' names, then of the jobs in each, whatever order they're read in", () => {
-    const two = pushed(...roleJob("zeta"), ...roleJob("alpha", "    environment: staging"), "  test:", "    runs-on: ubuntu-latest");
+    const two = pushed(...idTokenJob("zeta"), ...idTokenJob("alpha", "    environment: staging"), "  test:", "    runs-on: ubuntu-latest");
 
-    expect(onRoles({ "b.yml": two, "a.yaml": pushed(...roleJob("only")) })).toEqual([
+    expect(onIdTokenJobs({ "b.yml": two, "a.yaml": pushed(...idTokenJob("only")) })).toEqual([
       NO_ENVIRONMENT("a.yaml", "only"),
       NO_ENVIRONMENT("b.yml", "zeta"),
       NOT_HELD("b.yml", "alpha", "staging"),
@@ -2730,14 +2730,14 @@ describe("Setup's report on what an Operator session could reach", () => {
   });
 
   it("gives no line to the Kit's own caller workflow, fabrik.yml, as the plan writes it or whatever it asks for", () => {
-    expect(onRoles({ "fabrik.yml": written(planSetup(aCleanProduct(), kit).actions, ".github/workflows/fabrik.yml") ?? "" })).toEqual([]);
-    expect(onRoles({ "fabrik.yml": pushed(...roleJob("deploy")) })).toEqual([]);
+    expect(onIdTokenJobs({ "fabrik.yml": written(planSetup(aCleanProduct(), kit).actions, ".github/workflows/fabrik.yml") ?? "" })).toEqual([]);
+    expect(onIdTokenJobs({ "fabrik.yml": pushed(...idTokenJob("deploy")) })).toEqual([]);
   });
 
   it("drops control characters from a file's and an environment's name, since the report is printed to the terminal", () => {
-    const text = pushed(...roleJob("deploy", "    environment: prod\u001b]52;c;ZXZpbA==\u0007uction"));
+    const text = pushed(...idTokenJob("deploy", "    environment: prod\u001b]52;c;ZXZpbA==\u0007uction"));
 
-    expect(onRoles({ "dep\u001b[2Jloy.yml": text })).toEqual([NOT_HELD("dep[2Jloy.yml", "deploy", "prod]52;c;ZXZpbA==uction")]);
+    expect(onIdTokenJobs({ "dep\u001b[2Jloy.yml": text })).toEqual([NOT_HELD("dep[2Jloy.yml", "deploy", "prod]52;c;ZXZpbA==uction")]);
   });
 
   describe("on a Session environment Kit config names", () => {
@@ -2768,7 +2768,7 @@ describe("Setup's report on what an Operator session could reach", () => {
     });
 
     it("comes after the lines on jobs that can take a role off the default branch", () => {
-      expect(onFiles({ ".fabrik/config.json": NAMING("clinic-sessions") }, { "plan.yml": pushed(...roleJob("plan")) })).toEqual([
+      expect(onFiles({ ".fabrik/config.json": NAMING("clinic-sessions") }, { "plan.yml": pushed(...idTokenJob("plan")) })).toEqual([
         NO_ENVIRONMENT("plan.yml", "plan"),
         expect.stringMatching(/^Kit config names the Session environment `clinic-sessions`/),
       ]);
@@ -2788,7 +2788,7 @@ describe("Setup's report on what an Operator session could reach", () => {
   it("puts its lines last in the report, and none in the plan's notes, its steps or the setup PR, on every run", () => {
     const files = { ".fabrik/config.json": JSON.stringify({ console: { session_environment: "clinic-sessions" } }) };
     const quiet = aCleanProduct({ secrets: ["STRIPE_KEY"], files, workflows: { "promote.yml": workflow(["on: workflow_dispatch"], ["  promote:", "    environment: production"]) } });
-    const loud = { ...quiet, workflows: { ...quiet.workflows, "deploy.yml": pushed(...roleJob("deploy", "    environment: production")), "plan.yml": pushed(...roleJob("plan")) } };
+    const loud = { ...quiet, workflows: { ...quiet.workflows, "deploy.yml": pushed(...idTokenJob("deploy", "    environment: production")), "plan.yml": pushed(...idTokenJob("plan")) } };
 
     const { report, ...planned } = planSetup(loud, kit);
 
