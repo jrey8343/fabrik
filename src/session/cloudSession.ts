@@ -60,11 +60,16 @@ export async function cloudSessionLines({
   ];
 }
 
+/**
+ * Where the session is, then that the tracker is reached over REST. When the
+ * remote can't be read, the first sentence ends at "cloud session", and the
+ * one saying the repo's name isn't known follows it straight.
+ */
 function whereItIs(repo: Repo | null): string {
   const rest =
     "`gh issue` and `gh pr` are refused here: every tracker operation goes over REST, by the forms in .claude/skills/fabrik-operator-session/SKILL.md. Read that skill before any work.";
   return repo === null
-    ? `This is a Claude Code cloud session. ${rest} This repo's name isn't known here: ask the Operator for it before you write to the tracker.`
+    ? `This is a Claude Code cloud session. This repo's name isn't known here: ask the Operator for it before you write to the tracker. ${rest}`
     : `This is a Claude Code cloud session on ${repo.owner}/${repo.name}. ${rest}`;
 }
 

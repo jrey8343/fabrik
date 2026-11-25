@@ -602,7 +602,7 @@ describe("The SessionStart hook in a cloud session", () => {
     const [whereItIs, operator] = await cloudLinesIn(await aClonedProduct({ origin: null }));
 
     expect(whereItIs).toBe(
-      "This is a Claude Code cloud session. `gh issue` and `gh pr` are refused here: every tracker operation goes over REST, by the forms in .claude/skills/fabrik-operator-session/SKILL.md. Read that skill before any work. This repo's name isn't known here: ask the Operator for it before you write to the tracker.",
+      "This is a Claude Code cloud session. This repo's name isn't known here: ask the Operator for it before you write to the tracker. `gh issue` and `gh pr` are refused here: every tracker operation goes over REST, by the forms in .claude/skills/fabrik-operator-session/SKILL.md. Read that skill before any work.",
     );
     expect(operator).toBe("The Operator's login isn't known here: ask the Operator for it before you claim or assign.");
   });
