@@ -106,10 +106,10 @@ export function loopEventFrom(
       return { kind: "pull-request-closed", pullRequest, merged, closedByBot: sender?.type === "Bot" };
     }
   }
-  // There is no _target form of this event, so GitHub starts its run from the PR's merge commit, which the `fabrik`
-  // environment gives no token. A review's own run so only hands off: it starts a run on the default branch, which
-  // reads the review from GitHub and acts on what it read (src/github/handOff.ts). The mapping serves both, a
-  // review GitHub delivered and one the hand-off read.
+  // There is no _target form of this event, so GitHub starts a review's own run from the PR's merge commit, a ref
+  // the `fabrik` environment gives no token. That run now only hands off: it starts a run on the default branch,
+  // which reads the review from GitHub (src/github/handOff.ts). The mapping serves both, a review GitHub delivered
+  // and one the hand-off read.
   if (eventName === "pull_request_review" && payload["action"] === "submitted") {
     const pullRequest = (payload["pull_request"] as { number: number }).number;
     return submittedReviewEventFrom(pullRequest, payload["review"] as SubmittedReview);

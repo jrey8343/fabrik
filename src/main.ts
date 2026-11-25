@@ -20,7 +20,6 @@ import {
   auditEventFrom,
   digestEventFrom,
   evidenceMissEventFrom,
-  loopEventFrom,
   prototypeEventFrom,
   researchEventFrom,
   retroEventFrom,
@@ -28,10 +27,11 @@ import {
 } from "./github/events.ts";
 import { digestHeadReader, snapshotWithAsks } from "./github/digestCarry.ts";
 import { readDigestGiven } from "./github/digestGiven.ts";
+import { runEventFrom, whyNothingFor } from "./github/handOff.ts";
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
 import { resolveKitConfig, timeZoneNote } from "./kit/config.ts";
-import { claimLanding, jobFailureReport, type Landing, type LandingFailure, landingFailedOf, landingFailureMention, landingFailureReport, pushLanding } from "./kit/landingFailure.ts";
+import { claimLanding, claimTargetOf, jobFailureReport, type Landing, type LandingFailure, landingFailedOf, landingFailureMention, landingFailureReport, pushLanding } from "./kit/landingFailure.ts";
 import { type Needs, pushJobInput, type PushJobInput } from "./kit/pushJob.ts";
 import { readEvidenceBundle, RETRO_EVIDENCE_FILE } from "./kit/retroEvidence.ts";
 import { replayResultsIn, resultsReady, withLandingFailed } from "./kit/replay.ts";
@@ -58,9 +58,11 @@ type EventSource = { event: LoopEvent | null; source: string; branch: AgentBranc
  * jobs before it left (src/kit/pushJob.ts); in a replay's replay-record job
  * (FABRIK_REPLAY_RUN_ENDED), how its run ended; a Dispatch check in the
  * Dispatch job (FABRIK_DISPATCH_CHECK); a Design queue check in the Design
- * queue job (FABRIK_DESIGN_QUEUE_CHECK); otherwise the Actions event itself.
+ * queue job (FABRIK_DESIGN_QUEUE_CHECK); otherwise the Actions event itself,
+ * or on a review's hand-off, the review this job reads from GitHub.
  * `github` is the Fabrik App's client, which a Digest run's push job reads
- * what Kit code hands the Digest's contract through.
+ * what Kit code hands the Digest's contract through, and a hand-off's run
+ * reads the review through.
  */
 async function loopEvent(repo: Repo, config: KitConfig, github: GitHub): Promise<EventSource> {
   const replayEnded = process.env["FABRIK_REPLAY_RUN_ENDED"];
@@ -73,11 +75,16 @@ async function loopEvent(repo: Repo, config: KitConfig, github: GitHub): Promise
   }
   const eventName = required("GITHUB_EVENT_NAME");
   const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
+  // Only the scheduled tick's job passes its Kit workflow ref, which a Dead-tick issue's close names the release from.
+  // On a review's hand-off the event is the review this job reads from GitHub with its own client, never the inputs'
+  // word or the Kit job's (src/github/handOff.ts).
+  const { event: runEvent, handOff } = await runEventFrom(github, repo, config.operator, eventName, payload, new Date(), process.env["FABRIK_KIT_REF"] ?? "");
   const actionsEvent: EventSource = {
-    // Only the scheduled tick's job passes its Kit workflow ref, which a Dead-tick issue's close names the release from.
-    event: loopEventFrom(eventName, payload, new Date(), process.env["FABRIK_KIT_REF"] ?? ""),
+    event: runEvent,
     source: `${eventName}.${String(payload["action"] ?? "")}`,
     branch: null,
+    // A hand-off whose read gave nothing, as when the review was dismissed since the Kit job read it.
+    ...(runEvent === null && handOff !== null ? { why: whyNothingFor(handOff) } : {}),
   };
   const needsText = process.env["FABRIK_NEEDS"];
   if (needsText === undefined || needsText === "") return actionsEvent;
@@ -365,14 +372,11 @@ async function thisLanding(): Promise<Landing | null> {
     const needsText = process.env["FABRIK_NEEDS"];
     const claim = process.env["FABRIK_CLAIM"] === "true";
     if ((needsText === undefined || needsText === "") && !claim) return null;
-    const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as {
-      issue?: { number?: unknown };
-      pull_request?: { number?: unknown };
-    };
-    const issue = typeof payload.issue?.number === "number" ? payload.issue.number : null;
-    // A claim a review started is on its PR, which the event names in place of an issue.
-    const pullRequest = typeof payload.pull_request?.number === "number" ? payload.pull_request.number : null;
-    if (claim) return claimLanding(issue ?? pullRequest, thisRunUrl());
+    const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
+    // A claim a review started is on its PR, which the event names in place of an issue, or on a hand-off's run its inputs do.
+    if (claim) return claimLanding(claimTargetOf(process.env["GITHUB_EVENT_NAME"] ?? "", payload), thisRunUrl());
+    const eventIssue = (payload["issue"] as { number?: unknown } | undefined)?.number;
+    const issue = typeof eventIssue === "number" ? eventIssue : null;
     // The comment's id only tells a Design reply's run from another; it never changes where a failure is said.
     return pushLanding(pushJobInput(JSON.parse(needsText!) as Needs, issue), thisRunUrl());
   } catch (error) {
