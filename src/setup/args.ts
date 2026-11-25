@@ -4,12 +4,12 @@
 import { setupCommand } from "./finish.ts";
 
 /**
- * How the Operator runs setup: through the bootstrap command, which gives the
- * program the checkout and the release. The bootstrap takes the release first,
- * or as --release=, which it never passes on.
+ * How the Operator runs setup: through the bootstrap command, fetched at the
+ * release it runs, which gives the program the checkout and the release. The
+ * bootstrap also takes the release as --release=, which it never passes on.
  */
 export const SETUP_USAGE =
-  `Usage: ${setupCommand("[release | --release=<release>]")} [--account=<1Password account>]` +
+  `Usage: ${setupCommand("<release>")} [--account=<1Password account>]` +
   " [--time-zone=<IANA zone> | --no-time-zone] [--second-subscription | --no-second-subscription] [--paused | --no-paused]" +
   " [--production-url=<address> | --no-production] [--production-environment=<Deployments environment>]" +
   " [--staging-url=<address> | --no-staging] [--staging-environment=<Deployments environment>]" +

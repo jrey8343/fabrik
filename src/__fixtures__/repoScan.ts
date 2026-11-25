@@ -1,7 +1,8 @@
 // What the tests that keep a retired word or name out of the repo scan: every
 // file git knows of, less the records, which keep the words of their day.
 import { execFileSync } from "node:child_process";
-import { resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 
 /** The Kit's repo root. */
 export const KIT = resolve(import.meta.dirname, "..", "..");
@@ -36,4 +37,22 @@ export function repoFiles(): string[] {
   return execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: KIT, encoding: "utf8" })
     .split("\0")
     .filter((path) => path !== "");
+}
+
+/** A line of a file in the repo. */
+export interface ScannedLine {
+  readonly path: string;
+  readonly line: string;
+  /** `path:n: text`, for a failure message. */
+  readonly where: string;
+}
+
+/** Every line of every file in the repo, records aside. A file that can't be read reads as empty. */
+export async function scannedLines(): Promise<ScannedLine[]> {
+  const lines: ScannedLine[] = [];
+  for (const path of repoFiles().filter((file) => !isRecord(file))) {
+    const text = await readFile(join(KIT, path), "utf8").catch(() => "");
+    text.split("\n").forEach((line, at) => lines.push({ path, line, where: `${path}:${at + 1}: ${line.trim()}` }));
+  }
+  return lines;
 }

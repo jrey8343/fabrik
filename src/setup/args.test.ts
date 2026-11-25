@@ -152,8 +152,6 @@ describe("The setup program's flags", () => {
 
   it("lists every flag in its usage line, and no other", () => {
     const flags = [
-      // The bootstrap's own, which names the release, as a first argument does.
-      "--release=",
       "--account=",
       "--time-zone=",
       "--no-time-zone",

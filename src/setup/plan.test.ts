@@ -352,7 +352,7 @@ describe("The caller workflow on a repo that has one", () => {
     expect(written(plan.actions, ".github/workflows/fabrik.yml")).toBeUndefined();
     expect(plan.notes).toContain(
       ".github/workflows/fabrik.yml pins Fabrik v2.0.0, a later major release than v1.4.2: run Setup at v2.0.0 instead, " +
-        "with curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v2.0.0. The caller workflow was left as it is.",
+        "with curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/v2.0.0/setup.sh | bash -s -- v2.0.0. The caller workflow was left as it is.",
     );
   });
 
@@ -684,7 +684,7 @@ describe("The repo-level tokens, deleted once the default branch's Kit names the
   const callerAt = (release: string) => pinCaller(kit.templates.caller, release);
   const deletions = (actions: readonly SetupAction[]) => actions.flatMap((a) => (a.kind === "delete-repo-secret" ? [a] : []));
   const accounts = (actions: readonly SetupAction[]) => actions.flatMap((a) => (a.kind === "create-service-account" ? [a] : []));
-  const COMMAND = "curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
+  const COMMAND = "curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/v1.4.2/setup.sh | bash -s -- v1.4.2";
   const STAY = `The repo-level Actions secrets FABRIK_OP_AGENT_TOKEN, FABRIK_OP_IMPLEMENT_TOKEN and FABRIK_OP_PUSH_TOKEN stay for now, since the Kit main pins names no environment and reads them. Once the setup PR is merged, run setup again and it deletes them: ${COMMAND}`;
   const OLD_ACCOUNTS =
     "Once the repo-level secrets are deleted, delete the old service accounts fabrik-acme-clinic-agent, fabrik-acme-clinic-implement and fabrik-acme-clinic-push on 1Password's site. Their tokens still work until you do, though they sit nowhere on GitHub.";
@@ -1508,7 +1508,7 @@ describe("The store's one token, the push account's, in the store's own fabrik e
   const STORE = "jrey8343/fabrik-runs";
   const STORE_CALLER = ".github/workflows/weekly-summary.yml";
   const TOKEN = "FABRIK_OP_PUSH_TOKEN";
-  const COMMAND = "curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
+  const COMMAND = "curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/v1.4.2/setup.sh | bash -s -- v1.4.2";
   const STAYS = `jrey8343/fabrik-runs: The repo-level Actions secret FABRIK_OP_PUSH_TOKEN stays for now, since the caller workflow setup found there pins no Kit that names the fabrik environment. Once setup has written the one that does, run setup again and it deletes it: ${COMMAND}`;
   const OLD_ACCOUNT =
     "jrey8343/fabrik-runs: Once the repo-level secret is deleted, delete the old service account fabrik-jrey8343-fabrik-runs-push on 1Password's site. Its token still works until you do, though it sits nowhere on GitHub.";
@@ -1737,7 +1737,7 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
     expect(step).toContain('the "Claude token 2" API Credential, with its expiry date, in the "Fabrik" vault');
     expect(step).toContain("usage credits off on every account");
     expect(step).toMatch(
-      /Running setup again walks it, then lists it in subscriptions in \.fabrik\/config\.json: curl -fsSL https:\/\/raw\.githubusercontent\.com\/jrey8343\/fabrik\/main\/setup\.sh \| bash -s -- v1\.4\.2$/,
+      /Running setup again walks it, then lists it in subscriptions in \.fabrik\/config\.json: curl -fsSL https:\/\/raw\.githubusercontent\.com\/jrey8343\/fabrik\/v1\.4\.2\/setup\.sh \| bash -s -- v1\.4\.2$/,
     );
   });
 
@@ -1821,7 +1821,7 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
     const lacks = '.fabrik/config.json lists "Claude token 2" in subscriptions, but the "Fabrik" vault has no item of that name';
 
     expect(planSetup(withConfig(twoListed, ["Claude token"]), kit).notes).toContainEqual(
-      `${lacks}: run setup again to walk the wizard's "A second Subscription" stage for it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2`,
+      `${lacks}: run setup again to walk the wizard's "A second Subscription" stage for it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/v1.4.2/setup.sh | bash -s -- v1.4.2`,
     );
     expect(planSetup(withConfig(twoListed, ["Claude token"]), kit, {}, { wizardNext: true }).notes).toContainEqual(
       `${lacks}: walk the wizard's "A second Subscription" stage for it.`,
@@ -1832,7 +1832,7 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
     const lacks = '.fabrik/config.json lists "Claude token" in subscriptions, but the "Fabrik" vault has no item of that name';
 
     expect(planSetup(withConfig(twoListed, ["Claude token 2"]), kit).notes).toContainEqual(
-      `${lacks}: run setup again to walk the wizard's "The Claude token" stage for it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2`,
+      `${lacks}: run setup again to walk the wizard's "The Claude token" stage for it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/v1.4.2/setup.sh | bash -s -- v1.4.2`,
     );
   });
 
@@ -1862,7 +1862,7 @@ describe("A second Subscription, the opt-in step for Subscription rotation", () 
 
     expect(written(actions, ".fabrik/config.json")).toBeUndefined();
     expect(notes.filter((note) => note.includes("Claude token 2"))).toEqual([
-      '.fabrik/config.json lists "Claude token 2" in subscriptions, but the "Fabrik" vault has no item of that name: run setup again to walk the wizard\'s "A second Subscription" stage for it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2',
+      '.fabrik/config.json lists "Claude token 2" in subscriptions, but the "Fabrik" vault has no item of that name: run setup again to walk the wizard\'s "A second Subscription" stage for it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/v1.4.2/setup.sh | bash -s -- v1.4.2',
     ]);
   });
 
