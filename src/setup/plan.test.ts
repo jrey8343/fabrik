@@ -466,7 +466,18 @@ describe("The fabrik environment, held to the default branch (ADR-0004)", () => 
     expect(describeAction(actions[0]!)).toBe("create the fabrik environment, held to main alone: only a run of main is given its secrets");
   });
 
-  const rule =(name: string, type: "branch" | "tag" = "branch", id = 1) => ({ id, name, type });
+  it("is said in the README's list of what Setup does, straight after the 1Password bullet", () => {
+    const BULLET =
+      '- **The `fabrik` environment** (ADR-0004): made when the repo lacks it, and held to the default branch by one branch rule naming it ("Selected branches and tags"), which Setup adds and reads back before it stores a token there. On every run Setup checks that the one rule is there and names the default branch, and puts right what it finds, saying from what to what. GitHub makes an environment a workflow names when the repo lacks it, with no rule, and one with no rule gives its secrets to every branch, so Setup never takes the environment\'s being there for its being held. On a private repo whose GitHub plan has no environments, Setup stops and says so: there is no fallback to repo-level secrets.';
+    const lines = readFileSync(resolve(KIT_DIR, "README.md"), "utf8").split("\n");
+
+    // A later Ticket adds a sentence to its end, so only its start is held here.
+    const bullet = lines.find((line) => line.startsWith("- **The `fabrik` environment**"));
+    expect(bullet?.slice(0, BULLET.length)).toBe(BULLET);
+    expect(lines[lines.indexOf(bullet ?? "") - 1]).toMatch(/^- \*\*1Password\*\* \(ADR-0004\): /);
+  });
+
+  const rule = (name: string, type: "branch" | "tag" = "branch", id = 1) => ({ id, name, type });
 
   describe("is held only when its one rule is a branch rule naming the default branch", () => {
     it("is held with selected branches and tags and that one rule", () => {
