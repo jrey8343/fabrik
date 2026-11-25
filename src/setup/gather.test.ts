@@ -321,3 +321,76 @@ describe("Reading the caller workflow the default branch holds", () => {
     expect(state.defaultBranchCaller).toBeNull();
   });
 });
+
+describe("Reading the fabrik-runs store, which Setup has no checkout of", () => {
+  const STORE = "jrey8343/fabrik-runs";
+  const VIEW = `gh repo view ${STORE} --json visibility`;
+  const DEFAULT_BRANCH = `gh repo view ${STORE} --json defaultBranchRef`;
+  const ENVIRONMENT = `gh api repos/${STORE}/environments/fabrik`;
+  const RULES = `${ENVIRONMENT}/deployment-branch-policies?per_page=100`;
+  const ENVIRONMENT_SECRETS = `gh secret list --env fabrik --repo ${STORE} --json name`;
+  const EMPTY = { code: 1, stderr: "gh: This repository is empty. (HTTP 404)\n" };
+  const NOT_FOUND = { code: 1, stderr: "gh: Not Found (HTTP 404)\n" };
+
+  /** The store as Setup gathers it beside acme/clinic, and each line it asked gh that names the store. */
+  async function gathered(script: Record<string, Answer>) {
+    const dir = await tempDir("setup-gather");
+    const commands = fakeCommands({ ...aReadyOperator(dir), ...script });
+    const state = await gatherState(commands.run, dir, REPO, [], HEAD_SHA);
+    return { store: state.store, asked: commands.calls.map((call) => call.line).filter((line) => line.includes(STORE)) };
+  }
+
+  /** A private store with one commit on this default branch, a repo-level secret, and whatever else the script says. */
+  const aStore = (defaultBranch: string, script: Record<string, Answer> = {}): Record<string, Answer> => ({
+    [VIEW]: json({ visibility: "PRIVATE" }),
+    [DEFAULT_BRANCH]: json({ defaultBranchRef: { name: defaultBranch } }),
+    [`gh api repos/${STORE}/contents/.github/workflows/weekly-summary.yml`]: NOT_FOUND,
+    [`gh api repos/${STORE}/contents/.github/dependabot.yml`]: NOT_FOUND,
+    [`gh secret list --repo ${STORE} --json name`]: json([{ name: "FABRIK_OP_PUSH_TOKEN" }]),
+    [ENVIRONMENT]: NOT_FOUND,
+    ...script,
+  });
+
+  it("reads its default branch's name, whatever the Product repo's is, and its fabrik environment, telling gh secret the repo", async () => {
+    const { store, asked } = await gathered(
+      aStore("trunk", {
+        [ENVIRONMENT]: json({ id: 7, name: "fabrik", deployment_branch_policy: { protected_branches: false, custom_branch_policies: true } }),
+        [RULES]: json({ total_count: 1, branch_policies: [{ id: 41, name: "trunk", type: "branch" }] }),
+        [ENVIRONMENT_SECRETS]: json([{ name: "FABRIK_OP_PUSH_TOKEN" }, { name: "ANOTHER" }]),
+      }),
+    );
+
+    expect(store.defaultBranch).toBe("trunk");
+    expect(store.environment).toEqual({ branches: "selected", rules: [{ id: 41, name: "trunk", type: "branch" }], secrets: ["FABRIK_OP_PUSH_TOKEN", "ANOTHER"] });
+    expect(asked).toEqual(expect.arrayContaining([DEFAULT_BRANCH, ENVIRONMENT, RULES, ENVIRONMENT_SECRETS]));
+  });
+
+  it("keeps the store's repo-level secrets apart from its environment's, and gives no environment for a store that has none", async () => {
+    const { store, asked } = await gathered(aStore("main"));
+
+    expect(store).toMatchObject({ exists: true, private: true, defaultBranch: "main", secrets: ["FABRIK_OP_PUSH_TOKEN"], environment: null });
+    expect(asked).not.toContain(ENVIRONMENT_SECRETS);
+  });
+
+  it.each<[string, unknown]>([
+    ["an empty name, as gh prints it", { defaultBranchRef: { name: "" } }],
+    ["none", { defaultBranchRef: null }],
+  ])("gives no default branch for a store with no commit yet, whose default branch GitHub answers as %s", async (_, answer) => {
+    const { store } = await gathered(
+      aStore("", {
+        [DEFAULT_BRANCH]: json(answer),
+        [`gh api repos/${STORE}/contents/.github/workflows/weekly-summary.yml`]: EMPTY,
+        [`gh api repos/${STORE}/contents/.github/dependabot.yml`]: EMPTY,
+      }),
+    );
+
+    expect(store).toMatchObject({ exists: true, defaultBranch: null, environment: null });
+  });
+
+  it("reads nothing more of a store that doesn't exist: no default branch, no environment", async () => {
+    const { store, asked } = await gathered({ [VIEW]: { code: 1, stderr: "GraphQL: Could not resolve to a Repository" } });
+
+    expect(store).toEqual({ exists: false, private: false, defaultBranch: null, files: {}, secrets: [], environment: null });
+    expect(asked).toEqual([VIEW]);
+  });
+});

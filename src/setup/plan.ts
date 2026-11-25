@@ -115,10 +115,14 @@ export interface ProductionEnvironment {
 export interface RunStoreState {
   readonly exists: boolean;
   readonly private: boolean;
+  /** Its default branch's name, or null when it has none: it doesn't exist, or has no commit yet. */
+  readonly defaultBranch: string | null;
   /** The text of each file setup writes in the store, or null when it lacks it. */
   readonly files: Readonly<Record<string, string | null>>;
-  /** The store's Actions secret names. */
+  /** The store's repo-level Actions secret names. */
   readonly secrets: readonly string[];
+  /** The store's own `fabrik` environment, whose one secret is the push account's token (ADR-0004), or null when it has none. */
+  readonly environment: EnvironmentState | null;
 }
 
 /** What the Operator tells setup that no repo holds. */

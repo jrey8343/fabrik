@@ -1431,7 +1431,7 @@ describe("The fabrik-runs store, the opt-in step for Run records and the Weekly 
   });
 
   it("never makes a public store private: it tells the Operator, and changes nothing there", () => {
-    const store = { exists: true, private: false, files: {}, secrets: [] };
+    const store = { exists: true, private: false, defaultBranch: "main", files: {}, secrets: [], environment: null };
 
     const plan = planSetup(aCleanProduct({ store }), kit, operator);
 

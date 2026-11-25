@@ -37,7 +37,7 @@ export function aProtectedBranch(checks: readonly string[], overrides: Partial<B
 
 /** The fabrik-runs store before the Operator has opted in: it doesn't exist. */
 export function noStore(): RunStoreState {
-  return { exists: false, private: false, files: {}, secrets: [] };
+  return { exists: false, private: false, defaultBranch: null, files: {}, secrets: [], environment: null };
 }
 
 /** The state a repo is left in once every action in the plan has been applied to it. */

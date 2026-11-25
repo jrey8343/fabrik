@@ -84,8 +84,10 @@ async function askStaging(flags: FlagAnswers, prompt: Prompt | null, { config, s
 const storeIn = (timeZone: string): ProductState["store"] => ({
   exists: true,
   private: true,
+  defaultBranch: "main",
   files: { ".github/workflows/weekly-summary.yml": `on:\n  schedule:\n    - cron: "0 7 * * 1"\n      timezone: "${timeZone}"\n` },
   secrets: [],
+  environment: null,
 });
 
 describe("Setup's questions", () => {
