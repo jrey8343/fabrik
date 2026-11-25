@@ -90,6 +90,8 @@ Running Setup again on a working install changes nothing, once 1Password holds w
 curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v2.0.0
 ```
 
+A repo already on the Kit moves its tokens to the `fabrik` environment over two runs of Setup at the major that brought it. The first makes the environment and three new service accounts in it, and opens the setup PR. Until that PR is merged, the Kit the repo pins names no environment and keeps running on the repo-level secrets. The first run that finds the new caller workflow on the default branch deletes the three repo-level secrets, and names the three old service accounts, `fabrik-<owner>-<repo>-agent`, `-implement` and `-push`, for you to delete on 1Password's site. Until you do, their tokens still work, though they sit nowhere on GitHub, and the repo has six accounts against 1Password's limit of 100.
+
 Setup never moves a caller workflow back to an earlier major, and within a major Dependabot owns the pin.
 
 Setup was once the `fabrik-setup` skill, copied by hand into `~/.claude/skills/`. A copy left there is stale: Setup offers to delete it, and the `SessionStart` hook warns while it's there.

@@ -873,6 +873,19 @@ describe("The repo-level tokens, deleted once the default branch's Kit names the
     });
   });
 
+  it("is said in the README, in the paragraph on a repo's move, after the one on running Setup again", () => {
+    const PARAGRAPH =
+      "A repo already on the Kit moves its tokens to the `fabrik` environment over two runs of Setup at the major that brought it. The first makes the environment and three new service accounts in it, and opens the setup PR. Until that PR is merged, the Kit the repo pins names no environment and keeps running on the repo-level secrets. The first run that finds the new caller workflow on the default branch deletes the three repo-level secrets, and names the three old service accounts, `fabrik-<owner>-<repo>-agent`, `-implement` and `-push`, for you to delete on 1Password's site. Until you do, their tokens still work, though they sit nowhere on GitHub, and the repo has six accounts against 1Password's limit of 100.";
+    const lines = readFileSync(resolve(KIT_DIR, "README.md"), "utf8").split("\n");
+
+    // A later Ticket adds a sentence to its end, so only its start is held here.
+    const paragraph = lines.find((line) => line.startsWith("A repo already on the Kit moves its tokens"));
+    expect(paragraph?.slice(0, PARAGRAPH.length)).toBe(PARAGRAPH);
+    // Straight after that paragraph and the command its last sentence gives.
+    const before = lines.slice(0, lines.indexOf(paragraph ?? "")).filter((line) => line !== "");
+    expect(before.slice(-4)).toEqual([expect.stringMatching(/^Running Setup again on a working install changes nothing.*name that release:$/), "```sh", expect.stringMatching(/^curl /), "```"]);
+  });
+
   it("treats each 0.x minor as its own major, as semver does", () => {
     const state = aCleanProduct({ secrets: TOKENS, environment: held(TOKENS), defaultBranchCaller: callerAt("v0.1.9") });
 
