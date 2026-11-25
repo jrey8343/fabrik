@@ -6,9 +6,12 @@
 // This installs the skills that release locks, the same commit a Kit step
 // installs in Actions, plus Fabrik's own skills and every Extra skill the
 // Product repo picks (ADR-0008), since the Operator is at the wheel, and prints
-// the hook's JSON. While the Operator's personal skills hold an old copy of the
-// fabrik-setup skill, it warns them in one line, and installs everything all
-// the same.
+// the hook's JSON. fabrik itself has no caller workflow and no release to read,
+// so its own hook entry (.claude/settings.json) runs
+//   node src/session/start.ts --kit <fabrik checkout>
+// which installs from that checkout, the Kit, into its own .claude/skills/.
+// While the Operator's personal skills hold an old copy of the fabrik-setup
+// skill, it warns them in one line, and installs everything all the same.
 import { cp, readdir, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { checkCallerWorkflow } from "../kit/caller.ts";
@@ -41,11 +44,16 @@ export interface SessionStartOutput {
 }
 
 export interface SessionStartInput {
-  /** Fabrik, checked out at `release`. */
+  /** Fabrik, checked out at `release`, or `fabrik`'s own checkout when `release` is null. */
   readonly kitDir: string;
+  /** The checkout the skills go into: `kitDir` itself when `release` is null. */
   readonly productDir: string;
-  /** The release the hook entry read from the caller workflow and fetched Fabrik at. */
-  readonly release: string;
+  /**
+   * The release the hook entry read from the caller workflow and fetched Fabrik
+   * at; null in `fabrik` itself, whose checkout is the Kit, so there is no
+   * caller workflow to read and no pin to check.
+   */
+  readonly release: string | null;
   /** How each Skills source is fetched at its commit; git's own shallow fetch from github.com unless a test hands another. */
   readonly fetchSource?: FetchSource;
   /** The Operator's personal skills folder, where an old copy of the fabrik-setup skill may be. Unset, the hook doesn't look. */
@@ -63,15 +71,17 @@ export async function sessionStart({ personalSkills, ...input }: SessionStartInp
 
 async function installSkills({ kitDir, productDir, release, fetchSource }: Omit<SessionStartInput, "personalSkills">): Promise<SessionStartOutput> {
   try {
-    const caller = await readFile(join(productDir, CALLER_WORKFLOW_PATH), "utf8").catch(() => null);
-    if (caller === null) return notInstalled(`${CALLER_WORKFLOW_PATH} was not found`);
-    const pins = checkCallerWorkflow(caller);
-    if (!pins.ok) return notInstalled(`${CALLER_WORKFLOW_PATH}: ${pins.error}`);
-    if (pins.release !== release) {
-      return notInstalled(`the hook fetched Fabrik ${release}, but ${CALLER_WORKFLOW_PATH} pins ${pins.release}`);
+    if (release !== null) {
+      const caller = await readFile(join(productDir, CALLER_WORKFLOW_PATH), "utf8").catch(() => null);
+      if (caller === null) return notInstalled(`${CALLER_WORKFLOW_PATH} was not found`);
+      const pins = checkCallerWorkflow(caller);
+      if (!pins.ok) return notInstalled(`${CALLER_WORKFLOW_PATH}: ${pins.error}`);
+      if (pins.release !== release) {
+        return notInstalled(`the hook fetched Fabrik ${release}, but ${CALLER_WORKFLOW_PATH} pins ${pins.release}`);
+      }
     }
 
-    // The Operator is at the wheel, so the session gets every role's picks.
+    // The Operator is at the wheel, so the session gets every role's picks; fabrik has no Kit config, so it picks none.
     const { sha, extraSkills, errors } = await fetchSkills(kitDir, productDir, fetchSource, { install: "every" });
     const own = await installFabrikSkills(kitDir, productDir);
     // A gitignored copy an earlier release installed would still offer the dropped skill.
@@ -82,7 +92,9 @@ async function installSkills({ kitDir, productDir, release, fetchSource }: Omit<
       hookSpecificOutput: {
         hookEventName: "SessionStart",
         additionalContext: [
-          `Fabrik ${release} is installed in this repo. The skills it pins (mattpocock/skills at ${sha}) are in .claude/skills/, fetched by the SessionStart hook; they're gitignored, so never commit or edit them.`,
+          release === null
+            ? `This checkout is Fabrik itself. The skills its skills.lock.json pins (mattpocock/skills at ${sha}) and its own skills/ are in .claude/skills/, as this branch held them when the session started, installed by the SessionStart hook; they're gitignored, so never commit or edit them there: a skill of Fabrik's own is edited under skills/.`
+            : `Fabrik ${release} is installed in this repo. The skills it pins (mattpocock/skills at ${sha}) are in .claude/skills/, fetched by the SessionStart hook; they're gitignored, so never commit or edit them.`,
           extraSkills.length > 0
             ? `This repo's Extra skills are also in .claude/skills/: ${extraSkills.join(", ")}. This repo's .fabrik/<phase>.md instructions say when to use them.`
             : "",
@@ -138,15 +150,21 @@ function notInstalled(why: string): SessionStartOutput {
   };
 }
 
+/** Where the skills go and which release they come from, from the hook entry's arguments, or null for a usage error. */
+function parseArgs(args: readonly string[]): Pick<SessionStartInput, "kitDir" | "productDir" | "release"> | null {
+  const [first, second] = args;
+  if (first === undefined || second === undefined) return null;
+  // fabrik's own hook entry: the checkout is the Kit, so there's no release and no download.
+  if (first === "--kit") return { kitDir: second, productDir: second, release: null };
+  return { kitDir: resolve(import.meta.dirname, "..", ".."), productDir: first, release: second };
+}
+
 if (import.meta.main) {
-  const [productDir, release] = process.argv.slice(2);
-  if (productDir === undefined || release === undefined) {
-    console.error("Usage: node src/session/start.ts <product checkout> <release>");
+  const parsed = parseArgs(process.argv.slice(2));
+  if (parsed === null) {
+    console.error("Usage: node src/session/start.ts <product checkout> <release>\n       node src/session/start.ts --kit <fabrik checkout>");
     process.exit(2);
   }
-  const kitDir = resolve(import.meta.dirname, "..", "..");
   const personalSkills = personalSkillsDir(process.env);
-  sessionStart({ kitDir, productDir, release, ...(personalSkills === null ? {} : { personalSkills }) }).then((output) =>
-    console.log(JSON.stringify(output)),
-  );
+  sessionStart({ ...parsed, ...(personalSkills === null ? {} : { personalSkills }) }).then((output) => console.log(JSON.stringify(output)));
 }
