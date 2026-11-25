@@ -171,7 +171,7 @@ A Design session's numbered questions to the Operator, each with a recommended a
 _Avoid_: question, prompt
 
 **Spec**:
-A design written up in a Design session, the parent of the Tickets that build it. The Kit recognises a Spec by its `ready-for-agent` or `ready-for-human` state label; any other parent (a Map, or an issue a Product repo keeps open to track its work) is not one, and Spec closing leaves it open.
+A design written up in a Design session, or from a Map's Decisions by the Map's own last tasks, the parent of the Tickets that build it. The Kit recognises a Spec by its `ready-for-agent` or `ready-for-human` state label; any other parent (a Map, or an issue a Product repo keeps open to track its work) is not one, and Spec closing leaves it open.
 _Avoid_: PRD, plan
 
 **Ticket**:
@@ -199,12 +199,16 @@ An issue rewritten by a Design session as Operator work that needs no Ticket, re
 _Avoid_: manual brief, human brief
 
 **Pairing session**:
-The Operator working through an issue only they can do with an agent beside them, step by step, ending with what was done recorded on the issue.
+The Operator and an agent that counts as the Operator working through an issue that waits on the Operator, step by step, with what was done recorded on the issue as it happens. An issue may take several.
 _Avoid_: walkthrough, hand-off
 
 **Operator session**:
-A live session between the Operator and an agent that acts as the Operator, started from the Console on an issue that waits on them, with no machine of the Operator's running. A Pairing session started this way is one, and so is the working of a Map's HITL Decision.
+A live session between the Operator and an agent that acts as the Operator, on an issue that waits on them, with no machine of the Operator's running. The Console starts one from the issue's row. A Pairing session run this way is one, and so is the working of a Map's HITL Decision.
 _Avoid_: remote session, cloud session (where one may run, not what it is), chat
+
+**Session environment**:
+Where an Operator session is opened, kept on a Subscription for Operator sessions alone: the bare one, which holds no credential and serves every repo that attaches none, or a repo's own, which holds what that repo attaches.
+_Avoid_: cloud environment (what one is made as, not what it is for)
 
 **Audit**:
 The issue an Auditor files: up to three refactoring candidates for the Operator to file as issues or set aside, closed by the Operator when done.
@@ -339,7 +343,7 @@ An isolated environment where an Implementer, or a Design session's prototype tu
 _Avoid_: container, VM, workspace
 
 **Trust-root file**:
-A file in a Product repo that steers how agents behave or how their work is judged, so agents may never change it. An agent in a Pairing session counts as the Operator, so it may.
+A file in a Product repo that steers how agents behave or how their work is judged, so agents may never change it. An agent in a Pairing session or an Operator session counts as the Operator, so it may.
 _Avoid_: config file, protected file
 
 **Coding standards**:

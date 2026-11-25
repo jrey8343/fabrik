@@ -15,7 +15,7 @@ We chose this because Scorers, Replay, the Retro and the weekly summary all need
 
 - The Fabrik App must be installed on `fabrik-runs` with Contents write. `fabrik-runs` must be at least as private as the most private Product repo, because a transcript can hold whatever the agent echoed.
 - Parallel push jobs write one file per run and retry on conflict, so they never edit the same file.
-- A Pairing session writes no record. It runs locally, has no push job, and counts as a Human touch instead.
+- A Pairing session writes no record, in the Operator's terminal or as an Operator session. It has no push job, nothing outside it can read what it cost, and it counts as a Human touch instead.
 - A run killed by its timeout still gets a record, with no result fields and, if the upload didn't survive, no transcript.
 
 ## Addendum: the Weekly summary is filed from `fabrik-runs`
