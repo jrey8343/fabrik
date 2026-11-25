@@ -1,7 +1,10 @@
 // GitHub and 1Password as the setup program's one run sees them, kept as
 // state: what one run creates, a later run finds. Its script answers every gh
-// and op command the run makes for acme/clinic, and git runs for real.
+// and op command the run makes for acme/clinic and for the fabrik-runs store,
+// and git runs for real.
+import { createHash } from "node:crypto";
 import { KIT_ENVIRONMENT } from "../kit/environment.ts";
+import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import type { Ran } from "../setup/exec.ts";
 import type { Allowances, BranchProtection } from "../setup/plan.ts";
 import { type Answer, type Call, type CannedDeployment, deploymentsOf } from "./setupCommands.ts";
@@ -35,10 +38,27 @@ export interface WorldEnvironment {
   dropsNewRules?: boolean;
 }
 
+/** The fabrik-runs store, as GitHub holds it. Its environments are among the world's, under its name. */
+export interface WorldStore {
+  /** Whether the repo exists. `gh repo create` makes it, private and with no commit. */
+  exists: boolean;
+  private: boolean;
+  /** Its default branch's name, or null while it has no commit. */
+  defaultBranch: string | null;
+  /** The name GitHub gives the branch a repo's first commit makes, which is the owner's setting. */
+  firstBranch: string;
+  /** The text of each file on its default branch, by path. */
+  readonly files: Map<string, string>;
+  /** Its repo-level Actions secrets' names. */
+  readonly secrets: Set<string>;
+}
+
 export interface World {
   readonly labels: Set<string>;
   /** The repo-level Actions secrets' names. */
   readonly secrets: Set<string>;
+  /** The fabrik-runs store, which doesn't exist until a run or a test makes it. */
+  readonly store: WorldStore;
   /** Every repo's environments, each under `environmentKey`. */
   readonly environments: Map<string, WorldEnvironment>;
   /** What GitHub answers a PUT of an environment with when it refuses it, as on a plan that has none, or null when it takes it. */
@@ -64,6 +84,7 @@ export function aWorld(): World {
   return {
     labels: new Set(),
     secrets: new Set(),
+    store: { exists: false, private: true, defaultBranch: null, firstBranch: "main", files: new Map(), secrets: new Set() },
     environments: new Map(),
     environmentRefusal: null,
     environmentCalls: [],
@@ -175,6 +196,38 @@ function environmentAnswer(world: World, { args, input, line }: Call): Partial<R
   throw new Error(`The world has no answer for: ${line}`);
 }
 
+const NO_STORE = { code: 1, stderr: `GraphQL: Could not resolve to a Repository with the name '${RUN_STORE_REPO}'. (repository)` };
+
+/** `gh api`'s path for a file on the store's default branch. */
+const STORE_FILE_PATH = new RegExp(`^repos/${RUN_STORE_REPO}/contents/(.+)$`);
+
+/** The sha GitHub's Contents API gives a file, which an update of it must name: here, one that changes whenever its text does. */
+const blobSha = (text: string) => createHash("sha1").update(text).digest("hex");
+
+/**
+ * GitHub's answer to a `gh api` call on a file of the store's, through the
+ * Contents API, or null when the call isn't one. A PUT commits the file
+ * straight to the store's default branch, and the first one makes that branch.
+ */
+function storeFileAnswer({ store }: World, { args, input, line }: Call): Partial<Ran> | null {
+  const method = args[1] === "--method" ? (args[2] ?? "") : "GET";
+  const path = STORE_FILE_PATH.exec((method === "GET" ? args[1] : args[3]) ?? "")?.[1];
+  if (path === undefined) return null;
+  if (!store.exists) return NOT_FOUND;
+  const current = store.files.get(path);
+  if (method === "GET") {
+    if (store.defaultBranch === null) return { code: 1, stderr: "gh: This repository is empty. (HTTP 404)" };
+    return current === undefined ? NOT_FOUND : json({ content: Buffer.from(current, "utf8").toString("base64"), sha: blobSha(current) });
+  }
+  if (method !== "PUT") throw new Error(`The world has no answer for: ${line}`);
+  const body = JSON.parse(input ?? "{}") as { content?: string; sha?: string };
+  // An update that doesn't name the file's sha is refused.
+  if (current !== undefined && body.sha !== blobSha(current)) return { code: 1, stderr: `gh: ${path} does not match ${body.sha ?? "no sha"} (HTTP 409)` };
+  store.files.set(path, Buffer.from(body.content ?? "", "base64").toString("utf8"));
+  store.defaultBranch ??= store.firstBranch;
+  return {};
+}
+
 /** A protection as a PUT wrote it, in the shape GitHub's GET answers with: each switch an `{ enabled }`, each allowance an object. */
 function asGitHubReadsIt(put: BranchProtection): Record<string, unknown> {
   const people = (allowances: Allowances) => ({
@@ -224,6 +277,12 @@ export interface Origin {
 }
 
 export function worldScript(world: World, origin?: Origin): Record<string, Answer> {
+  /** The repo-level secrets a `gh secret` call with no --env names: the checkout's repo's, or with --repo the store's. The world holds no other repo's. */
+  const repoLevelSecrets = (args: readonly string[], line: string): Set<string> => {
+    if (!args.includes("--repo")) return world.secrets;
+    if (valueOf(args, "--repo") !== RUN_STORE_REPO || !world.store.exists) throw new Error(`The world has no answer for: ${line}`);
+    return world.store.secrets;
+  };
   return {
     "gh label list --limit 1000 --json name": () => names(world.labels),
     "gh label create": ({ args }) => {
@@ -242,9 +301,10 @@ export function worldScript(world: World, origin?: Origin): Record<string, Answe
     // The ready Operator's script answers this one line too, so the world answers it by name.
     [`gh api repos/${PRODUCT_REPO}/environments/${KIT_ENVIRONMENT}`]: (call) => environmentAnswer(world, call) ?? {},
     // With --env the secret is that environment's, of the checkout's repo or with --repo another's, and never a repo-level one.
+    // With none it is a repo-level one, of the checkout's repo or with --repo the store's.
     "gh secret set": ({ args, line }) => {
       if (!args.includes("--env")) {
-        world.secrets.add(args[2]!);
+        repoLevelSecrets(args, line).add(args[2]!);
         return {};
       }
       world.environmentCalls.push(line);
@@ -253,11 +313,22 @@ export function worldScript(world: World, origin?: Origin): Record<string, Answe
       environment.secrets.add(args[2]!);
       return {};
     },
-    // A repo-level secret of the checkout's repo. The world holds no other repo's, and no answer for one.
+    // A repo-level secret of the checkout's repo, or with --repo the store's, and never an environment's.
     "gh secret delete": ({ args, line }) => {
-      if (args.length !== 3) throw new Error(`The world has no answer for: ${line}`);
-      return world.secrets.delete(args[2]!) ? {} : { code: 1, stderr: `failed to delete secret ${args[2]}: HTTP 404: Not Found` };
+      if (args.length !== (args.includes("--repo") ? 5 : 3)) throw new Error(`The world has no answer for: ${line}`);
+      return repoLevelSecrets(args, line).delete(args[2]!) ? {} : { code: 1, stderr: `failed to delete secret ${args[2]}: HTTP 404: Not Found` };
     },
+    // The fabrik-runs store: whether it is there, its default branch and its repo-level secrets. Its files and its environment are `gh api`'s.
+    [`gh repo view ${RUN_STORE_REPO} --json visibility`]: () => (world.store.exists ? json({ visibility: world.store.private ? "PRIVATE" : "PUBLIC" }) : NO_STORE),
+    // gh prints an empty name for a repo with no commit.
+    [`gh repo view ${RUN_STORE_REPO} --json defaultBranchRef`]: () =>
+      world.store.exists ? json({ defaultBranchRef: { name: world.store.defaultBranch ?? "" } }) : NO_STORE,
+    [`gh repo create ${RUN_STORE_REPO} --private`]: () => {
+      if (world.store.exists) return { code: 1, stderr: "GraphQL: Name already exists on this account (createRepository)" };
+      Object.assign(world.store, { exists: true, private: true });
+      return {};
+    },
+    [`gh secret list --repo ${RUN_STORE_REPO} --json name`]: () => (world.store.exists ? names(world.store.secrets) : NO_STORE),
     "op vault list --format json": () => names(world.vaults),
     "op vault create": ({ args }) => {
       world.vaults.add(args.slice(2).join(" "));
@@ -282,11 +353,13 @@ export function worldScript(world: World, origin?: Origin): Record<string, Answe
       return {};
     },
     // The compare's two commits follow its endpoint with no space, so no longer key can name it, and so do the Deployments' query and id.
-    // An environment's calls name any repo and any environment, so they are answered here too.
+    // An environment's calls name any repo and any environment, so they are answered here too, as are the store's files.
     "gh api": (call) => {
       const { args } = call;
       const environment = environmentAnswer(world, call);
       if (environment !== null) return environment;
+      const storeFile = storeFileAnswer(world, call);
+      if (storeFile !== null) return storeFile;
       const deployed = deploymentsOf("acme/clinic", world.deployments)[call.line];
       if (deployed !== undefined) return typeof deployed === "function" ? deployed(call) : deployed;
       const compared = /^repos\/acme\/clinic\/compare\/(\w+)\.\.\.(\w+)$/.exec(args[1] ?? "");

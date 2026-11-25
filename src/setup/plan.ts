@@ -262,8 +262,12 @@ export type SetupAction =
       readonly kind: "hold-environment";
       /** The environment's name. */
       readonly environment: string;
-      /** The default branch, the one branch its one rule names. */
-      readonly branch: string;
+      /**
+       * The default branch, the one branch its one rule names. Null for a repo
+       * that has none when Setup plans, as a store this run makes: its first
+       * commit makes the branch, and applying the step reads its name.
+       */
+      readonly branch: string | null;
       /** Which refs it lets through as found, or null when the repo has no such environment. */
       readonly found: EnvironmentPolicy | null;
       /** The repo, as `owner/name`, whose environment it is when it isn't the Product repo. */
@@ -279,9 +283,9 @@ export type SetupAction =
       readonly vaults: readonly string[];
       /** The secret its token is stored as. */
       readonly secret: string;
-      /** The environment whose secret it is. A step that names none stores a repo-level Actions secret. */
-      readonly environment?: string;
-      /** The repo, as `owner/name`, that holds the secret when it isn't the Product repo. */
+      /** The environment whose secret it is: no token is ever stored as a repo-level Actions secret. */
+      readonly environment: string;
+      /** The repo, as `owner/name`, that holds the environment when it isn't the Product repo. Its rule is checked against that repo's own default branch. */
       readonly repo?: string;
     }
   | {
@@ -355,8 +359,12 @@ export interface PlanContext {
 }
 
 export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnswers = {}, context: PlanContext = {}): SetupPlan {
+  // The store's notes keep their place among the plan's, after the Merge gate's, wherever its steps go.
+  const storeNotes: string[] = [];
+  const store = runStore(state.store, kit, answers, storeNotes);
   // The fabrik environment goes first: when GitHub refuses it, Setup stops before it changes anything else.
-  const actions: SetupAction[] = [...holdEnvironment(KIT_ENVIRONMENT, state.environment, state.repo.defaultBranch)];
+  // The store's own goes right after it, when the store has a default branch to hold it to.
+  const actions: SetupAction[] = [...holdEnvironment(KIT_ENVIRONMENT, state.environment, state.repo.defaultBranch), ...store.first];
   const notes: string[] = [];
   const shims: [string, FileUpdate, string][] = [
     [CALLER_PATH, callerUpdate(file(state, CALLER_PATH), kit.templates.caller, kit.release), "the caller workflow, pinning one Fabrik release"],
@@ -383,7 +391,8 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
   actions.push(...secrets(state, kit, notes));
   actions.push(...protection(state, kit, notes));
   actions.push(...mergeGate(state));
-  actions.push(...runStore(state.store, kit, answers, notes));
+  actions.push(...store.actions);
+  notes.push(...storeNotes);
   notes.push(...subscriptions(state, kit, answers, context));
   return { actions, notes, report: setupReport(state) };
 }
@@ -412,10 +421,12 @@ export function onlyRuleNames(rules: readonly EnvironmentRule[], branch: string)
 /**
  * The step that makes an environment and holds it to the default branch, with
  * which refs it lets through as found, or no step for one already held. The
- * Product repo's own unless `repo` names another, as `owner/name`.
+ * Product repo's own unless `repo` names another, as `owner/name`. A repo with
+ * no default branch yet, as a store this run makes, holds nothing, so its step
+ * names no branch and reads the name when it is applied.
  */
-export function holdEnvironment(environment: string, found: EnvironmentPolicy | null, defaultBranch: string, repo?: string): SetupAction[] {
-  if (environmentHeld(found, defaultBranch)) return [];
+export function holdEnvironment(environment: string, found: EnvironmentPolicy | null, defaultBranch: string | null, repo?: string): SetupAction[] {
+  if (defaultBranch !== null && environmentHeld(found, defaultBranch)) return [];
   const policy = found === null ? null : { branches: found.branches, rules: found.rules };
   return [{ kind: "hold-environment", environment, branch: defaultBranch, found: policy, ...(repo === undefined ? {} : { repo }) }];
 }
@@ -819,21 +830,30 @@ export function takesSecondSubscription(listed: readonly string[]): boolean {
   return listed.length === 1 && !listed.includes(SECOND_SUBSCRIPTION);
 }
 
+/** The store's one token, the push account's, which its caller workflow passes to the Weekly summary and the Tick check. */
+const STORE_SECRET = "FABRIK_OP_PUSH_TOKEN";
+/** The name Setup gave the store's service account while its token sat at repo level: the new one's with no `-env`. */
+const STORE_OLD_ACCOUNT = `fabrik-${RUN_STORE.owner}-${RUN_STORE.name}-push`;
+
+/** The store's steps: those that go first in the plan, ahead of every step but the Product repo's own environment's, and the rest, in order. */
+interface StoreSteps {
+  readonly first: readonly SetupAction[];
+  readonly actions: readonly SetupAction[];
+}
+
 /**
  * The fabrik-runs store: Run records and the Weekly summary turn on once it
  * exists with the Fabrik App installed on it (the wizard's stage).
  */
-/** The store's one Actions secret, which its caller workflow passes to the Weekly summary. */
-const STORE_SECRET = "FABRIK_OP_PUSH_TOKEN";
-
-function runStore(store: RunStoreState, kit: SetupKit, answers: SetupAnswers, notes: string[]): SetupAction[] {
+function runStore(store: RunStoreState, kit: SetupKit, answers: SetupAnswers, notes: string[]): StoreSteps {
+  const nothing: StoreSteps = { first: [], actions: [] };
   const { timeZone } = answers;
-  if (timeZone === undefined) return [];
+  if (timeZone === undefined) return nothing;
   if (!isTimeZone(timeZone)) {
     notes.push(
       `${timeZone} isn't an IANA time zone, such as Europe/London, so ${RUN_STORE_REPO} wasn't set up: run setup again with your time zone.`,
     );
-    return [];
+    return nothing;
   }
   // A transcript can hold whatever an agent echoed, so the store must be private
   // (ADR-0009). Making a repo private is the Operator's call, never setup's.
@@ -841,7 +861,7 @@ function runStore(store: RunStoreState, kit: SetupKit, answers: SetupAnswers, no
     notes.push(
       `${RUN_STORE_REPO} is public, so setup changed nothing there and no Run record will be written to it: make it private (Settings → General → Danger Zone → Change visibility), then run setup again.`,
     );
-    return [];
+    return nothing;
   }
   const actions: SetupAction[] = [];
   if (!store.exists) actions.push({ kind: "create-run-store", repo: RUN_STORE_REPO, private: true });
@@ -863,17 +883,29 @@ function runStore(store: RunStoreState, kit: SetupKit, answers: SetupAnswers, no
     if ("note" in update) notes.push(`${RUN_STORE_REPO}: ${update.note}`);
     else actions.push({ kind: "write-store-file", repo: RUN_STORE_REPO, path, content: update.content, why });
   }
+  // The store's environment goes ahead of every other step, as the Product repo's does. A store with no commit has no
+  // default branch to hold it to, so there it follows the files, whose first commit makes the branch, and comes before the token.
+  const held = holdEnvironment(KIT_ENVIRONMENT, store.environment, store.defaultBranch, RUN_STORE_REPO);
+  const first = store.defaultBranch === null ? [] : held;
+  if (store.defaultBranch === null) actions.push(...held);
   // The push account pattern: the Weekly summary mints its App tokens from the Fabrik App vault.
-  if (!store.secrets.includes(STORE_SECRET)) {
+  if (!store.environment?.secrets.includes(STORE_SECRET)) {
     actions.push({
       kind: "create-service-account",
-      name: `fabrik-${RUN_STORE.owner}-${RUN_STORE.name}-push`,
+      name: `${STORE_OLD_ACCOUNT}-env`,
       vaults: [FABRIK_APP_VAULT],
       secret: STORE_SECRET,
+      environment: KIT_ENVIRONMENT,
       repo: RUN_STORE_REPO,
     });
   }
-  return actions;
+  if (store.secrets.includes(STORE_SECRET)) {
+    notes.push(
+      `${RUN_STORE_REPO}: The repo-level Actions secret ${STORE_SECRET} stays for now, since the caller workflow setup found there pins no Kit that names the ${KIT_ENVIRONMENT} environment. ` +
+        `Once setup has written the one that does, run setup again and it deletes it: ${setupCommand(kit.release)}`,
+    );
+  }
+  return { first, actions };
 }
 
 /** Every file planSetup reads from the Product checkout. */
