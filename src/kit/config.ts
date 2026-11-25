@@ -140,6 +140,14 @@ export interface KitConfig {
      * App (ADR-0019); null, when the key is left out, covers nothing.
      */
     readonly appId: number | null;
+    /**
+     * The repo's Held workflows, each by its workflow file's name, as
+     * `production.workflow` names one: each reads a Start check before it
+     * takes a role. Valid only beside `app_id`, so wherever `appId` is null
+     * this is empty. Nothing in the Kit makes a repo list one or checks that a
+     * listed file exists; only a reader of the Kit (the Console) acts on it.
+     */
+    readonly heldWorkflows: readonly string[];
   };
 }
 
@@ -596,7 +604,7 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   // UTC until the Operator gives their time zone, as Setup writes it.
   timeZone: null,
   // The Console covers a repo only once the Operator gives its App's id; the starter never does.
-  console: { appId: null },
+  console: { appId: null, heldWorkflows: [] },
 };
 
 /** Where the Kit config lives in a Product repo (ADR-0005). */
@@ -829,8 +837,31 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
     // A time_zone the runtime doesn't know falls back to UTC, and never fails the Kit config (ADR-0023).
     timeZone: knownTimeZone(file.unchecked("time_zone")),
     // Read after time_zone, so each problem is still named in the Kit config's own order.
-    console: { appId: file.object("console").wholeNumber("app_id", 1) ?? defaults.console.appId },
+    console: readConsole(file.object("console"), defaults),
   };
+}
+
+/** The `console` block; left out, or with no `app_id`, it covers nothing and holds no workflow. */
+function readConsole(block: Reader, defaults: KitConfig): KitConfig["console"] {
+  const appId = block.wholeNumber("app_id", 1);
+  const heldWorkflows = block.stringList("held_workflows", checkWorkflowFile);
+  if (heldWorkflows !== undefined) refuseListedTwice(block, "held_workflows", heldWorkflows);
+  // An app_id that is there but refused is named on its own, and this isn't added to it.
+  if (block.has("held_workflows") && !block.has("app_id")) {
+    block.refuse(
+      `${block.fieldName("held_workflows")} is valid only beside ${block.fieldName("app_id")}: a Held workflow reads its Start check by that App's id`,
+    );
+  }
+  return { appId: appId ?? defaults.console.appId, heldWorkflows: heldWorkflows ?? defaults.console.heldWorkflows };
+}
+
+/** Names each entry of `names` that an earlier one already lists, compared as written: GitHub's workflow file names are case-sensitive. */
+function refuseListedTwice(block: Reader, key: string, names: readonly string[]): void {
+  const field = block.fieldName(key);
+  names.forEach((name, i) => {
+    const earlier = names.indexOf(name);
+    if (earlier !== i) block.refuse(`${field}[${i}] is ${JSON.stringify(name)}, which ${field}[${earlier}] already lists`);
+  });
 }
 
 /**
