@@ -459,8 +459,19 @@ export function namedRules(rules: readonly EnvironmentRule[]): string {
   return rules.length === 0 ? "none" : rules.map((rule) => (rule.type === "tag" ? `tag ${rule.name}` : rule.name)).join(", ");
 }
 
+/** The Kit's three job roles, in the order Setup makes their service accounts. */
+const KIT_ROLES = ["agent", "implement", "push"] as const;
+type KitRole = (typeof KIT_ROLES)[number];
+
+/** The Actions secret that holds each role's service-account token (ADR-0004). The names are written here and nowhere else in Setup's plan. */
+const KIT_TOKENS: Readonly<Record<KitRole, string>> = {
+  agent: "FABRIK_OP_AGENT_TOKEN",
+  implement: "FABRIK_OP_IMPLEMENT_TOKEN",
+  push: "FABRIK_OP_PUSH_TOKEN",
+};
+
 /** The Kit's own three Actions secrets, which Setup's report never counts among the repo's own. */
-const KIT_SECRETS: readonly string[] = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
+const KIT_SECRETS: readonly string[] = KIT_ROLES.map((role) => KIT_TOKENS[role]);
 
 /**
  * Setup's report, each part's lines in the order it says them. Its first part
@@ -849,7 +860,7 @@ export function takesSecondSubscription(listed: readonly string[]): boolean {
 }
 
 /** The store's one token, the push account's, which its caller workflow passes to the Weekly summary and the Tick check. */
-const STORE_SECRET = "FABRIK_OP_PUSH_TOKEN";
+const STORE_SECRET = KIT_TOKENS.push;
 /** The name Setup gave the store's service account while its token sat at repo level: the new one's with no `-env`. */
 const STORE_OLD_ACCOUNT = `fabrik-${RUN_STORE.owner}-${RUN_STORE.name}-push`;
 
@@ -1077,11 +1088,8 @@ export function sandboxVault(repo: ProductState["repo"]): string {
  */
 function secrets(state: ProductState, kit: SetupKit, notes: string[]): SetupAction[] {
   const sandbox = sandboxVault(state.repo);
-  const roles = [
-    { role: "agent", vaults: [FABRIK_VAULT], secret: "FABRIK_OP_AGENT_TOKEN" },
-    { role: "implement", vaults: [FABRIK_VAULT, sandbox], secret: "FABRIK_OP_IMPLEMENT_TOKEN" },
-    { role: "push", vaults: [FABRIK_APP_VAULT], secret: "FABRIK_OP_PUSH_TOKEN" },
-  ];
+  const reads: Readonly<Record<KitRole, string[]>> = { agent: [FABRIK_VAULT], implement: [FABRIK_VAULT, sandbox], push: [FABRIK_APP_VAULT] };
+  const roles = KIT_ROLES.map((role) => ({ role, vaults: reads[role], secret: KIT_TOKENS[role] }));
   const actions: SetupAction[] = [];
   for (const vault of [FABRIK_VAULT, FABRIK_APP_VAULT, sandbox]) {
     if (!state.vaults.includes(vault)) actions.push({ kind: "create-vault", name: vault });

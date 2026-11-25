@@ -28,6 +28,8 @@ import {
 import { pinCaller, scheduleIn } from "./shims.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
+/** The Kit's three Actions secrets, by name, in the order Setup makes their accounts. */
+const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
 let kit: SetupKit;
 
 beforeAll(async () => {
@@ -569,7 +571,7 @@ describe("The fabrik environment, held to the default branch (ADR-0004)", () => 
     expect(after.environment).toEqual({
       branches: "selected",
       rules: [expect.objectContaining({ name: "main", type: "branch" })],
-      secrets: ["STRIPE_KEY", "FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"],
+      secrets: ["STRIPE_KEY", ...TOKENS],
     });
     expect(planSetup(after, kit).actions).toEqual([]);
   });
@@ -624,7 +626,6 @@ describe("Service accounts, their tokens the secrets of the fabrik environment (
     expect(lastVault).toBeLessThan(firstAccount);
   });
 
-  const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
   /** A fabrik environment held to main, with these secrets. */
   const held = (secrets: readonly string[]): EnvironmentState => ({ branches: "selected", rules: [{ id: 1, name: "main", type: "branch" }], secrets });
 
@@ -677,7 +678,6 @@ describe("Service accounts, their tokens the secrets of the fabrik environment (
 });
 
 describe("The repo-level tokens, deleted once the default branch's Kit names the fabrik environment (ADR-0004)", () => {
-  const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
   /** A fabrik environment held to main, with these secrets. */
   const held = (secrets: readonly string[]): EnvironmentState => ({ branches: "selected", rules: [{ id: 1, name: "main", type: "branch" }], secrets });
   /** The caller workflow as Setup writes it at a release. */
@@ -2352,7 +2352,7 @@ describe("Setup's report on a Product repo's own credentials", () => {
     const NONE = ["This repo holds no repo-level Actions secret of its own."];
 
     expect(planSetup(aCleanProduct({ secrets: [] }), kit).report).toEqual(NONE);
-    expect(planSetup(aCleanProduct({ secrets: ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"] }), kit).report).toEqual(NONE);
+    expect(planSetup(aCleanProduct({ secrets: TOKENS }), kit).report).toEqual(NONE);
   });
 
   it("names the repo's default branch in the rule's line", () => {

@@ -25,6 +25,9 @@ let origin: string;
 let checkout: string;
 let env: Env;
 
+/** The Kit's three Actions secrets, by name, in the order Setup makes their accounts. */
+const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
+
 const git = (...args: string[]) => execFileSync("git", args, { cwd: checkout, encoding: "utf8", env: env as NodeJS.ProcessEnv });
 const originGit = (...args: string[]) => execFileSync("git", args, { cwd: origin, encoding: "utf8", env: env as NodeJS.ProcessEnv });
 
@@ -1403,7 +1406,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(environmentOf(world)?.policy).toEqual({ protected_branches: false, custom_branch_policies: true });
       expect(rulesOf(world)).toEqual([{ name: "main", type: "branch" }]);
       // Its own secret stays, beside the three tokens the run's later steps store in it.
-      expect([...environmentOf(world)!.secrets]).toEqual(["STRIPE_KEY", "FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"]);
+      expect([...environmentOf(world)!.secrets]).toEqual(["STRIPE_KEY", ...TOKENS]);
     });
 
     it("adds the rule naming the default branch before it deletes any other, then reads the environment back, its setting and its rules", async () => {
@@ -1546,7 +1549,6 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
 
   describe("the three tokens, stored in the fabrik environment under new service accounts (ADR-0004)", () => {
     const ENVIRONMENT = "repos/acme/clinic/environments/fabrik";
-    const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
     /** Each service account the run made, as op was asked for it. */
     const made = (log: string[]) => log.filter((line) => line.startsWith("op service-account create "));
 
@@ -1700,7 +1702,6 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
   });
 
   describe("the repo-level tokens, deleted once the default branch's Kit names the fabrik environment (ADR-0004)", () => {
-    const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
     const DELETES = TOKENS.map((name) => `- delete the repo-level Actions secret ${name}: the Kit main pins reads the fabrik environment's`);
     /** Each service account the run made, and each repo-level secret it deleted, as op and gh were asked. */
     const made = (log: string[]) => log.filter((line) => line.startsWith("op service-account create "));
@@ -1971,7 +1972,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
         `gh secret list --env fabrik --repo ${STORE} --json name`,
       ]);
       expect([...world.secrets]).toEqual([]);
-      expect([...environmentOf(world)!.secrets]).toEqual(["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"]);
+      expect([...environmentOf(world)!.secrets]).toEqual(TOKENS);
     });
 
     it("for a store the run makes, writes its files, then holds its environment to the default branch their first commit made, then stores its token there, and never a repo-level secret", async () => {
@@ -2025,7 +2026,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       const world = aWorld();
       await aStoreOnTheKitAt(world, "v0.9.1");
       // The Product repo's own environment is held and holds its tokens, so the store's is the plan's first step.
-      anEnvironment(world, { rules: ["main"], secrets: ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"] });
+      anEnvironment(world, { rules: ["main"], secrets: TOKENS });
       world.environmentRefusal = "gh: Not Found (HTTP 404)\n";
 
       const { code, said, complaints, log } = await setupOnce(world, { args: WITH_THE_STORE });
@@ -2542,7 +2543,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     it("is said under the plan and again in the closing lines, after For the Operator, never in the setup PR, and on a merged install with nothing to apply however Setup is run", async () => {
       // A repo already on the Kit, whose three tokens sit at repo level beside a secret of its own: the Kit's get no line.
       const world = aWorld();
-      for (const name of ["STRIPE_KEY", "FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"]) world.secrets.add(name);
+      for (const name of ["STRIPE_KEY", ...TOKENS]) world.secrets.add(name);
 
       const first = await setupOnce(world);
 
@@ -2560,7 +2561,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       mergeTheSetupPr(world);
 
       // The run made, changed and deleted no repo-level secret.
-      expect([...world.secrets].sort()).toEqual(["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN", "STRIPE_KEY"]);
+      expect([...world.secrets].sort()).toEqual([...TOKENS, "STRIPE_KEY"]);
       // The next run finds the new caller workflow on the default branch and deletes the Kit's three (#931), never the repo's own, which the report still names.
       const deleting = await setupOnce(world);
       expect(deleting.said.slice(deleting.said.lastIndexOf(HEADING))).toEqual([...OWN_SECRET, "", expect.stringMatching(/^Every file setup writes is already on main/)]);
