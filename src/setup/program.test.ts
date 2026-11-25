@@ -121,6 +121,16 @@ describe("The setup program", () => {
     expect(said).toContain("Setup would:");
   });
 
+  it("stops before any plan when GitHub refuses the read of the fabrik environment with anything but a 404, naming its answer", async () => {
+    const refused = { "gh api repos/acme/clinic/environments/fabrik": { code: 1, stderr: "gh: Server Error (HTTP 502)\n" } };
+
+    const { code, said, complaints } = await setup([".", "v1.4.2"], { script: refused });
+
+    expect(code).toBe(1);
+    expect(complaints).toEqual(["Reading the fabrik environment on acme/clinic failed: gh: Server Error (HTTP 502)"]);
+    expect(said).toEqual([]);
+  });
+
   it("plans the Fabrik vaults an account lacks as ordinary steps, not a warning", async () => {
     const { said } = await setup([".", "v1.4.2"]);
 

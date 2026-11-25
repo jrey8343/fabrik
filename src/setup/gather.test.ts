@@ -1,9 +1,10 @@
-// What setup reads of a repo's Deployments, with the Operator's own gh, to
+// What setup reads with the Operator's own gh of a repo's environment, which
+// refs it lets through and its secrets' names, and of a repo's Deployments, to
 // offer production's environment and address: each environment's name, and
 // the address on its newest successful Deployment where GitHub has one.
 import { describe, expect, it } from "vitest";
 import { type Answer, fakeCommands } from "../__fixtures__/setupCommands.ts";
-import { gatherDeployments } from "./gather.ts";
+import { gatherDeployments, gatherEnvironment, readEnvironmentPolicy } from "./gather.ts";
 
 const REPO = { owner: "acme", name: "clinic", defaultBranch: "main", inOrganization: false };
 const page = (n: number) => `gh api repos/acme/clinic/deployments?per_page=100&page=${n}`;
@@ -18,6 +19,109 @@ async function read(script: Record<string, Answer>) {
   const commands = fakeCommands(script);
   return { seen: await gatherDeployments(commands.run, "/clinic", REPO), calls: commands.calls.map((call) => call.line) };
 }
+
+describe("Reading a repo's environment: which refs it lets through, and its secrets' names", () => {
+  const ENVIRONMENT = "gh api repos/acme/clinic/environments/fabrik";
+  const RULES = "gh api repos/acme/clinic/environments/fabrik/deployment-branch-policies?per_page=100";
+  const SECRETS = "gh secret list --env fabrik --json name";
+
+  async function readEnvironment(script: Record<string, Answer>) {
+    const commands = fakeCommands(script);
+    return { environment: await gatherEnvironment(commands.run, "/clinic", "acme/clinic", "fabrik"), calls: commands.calls.map((call) => call.line) };
+  }
+
+  it("gives no environment for one GitHub answers 404 for, and reads nothing more of it", async () => {
+    const { environment, calls } = await readEnvironment({ [ENVIRONMENT]: { code: 1, stdout: '{"message":"Not Found","status":"404"}', stderr: "gh: Not Found (HTTP 404)\n" } });
+
+    expect(environment).toBeNull();
+    expect(calls).toEqual([ENVIRONMENT]);
+  });
+
+  /** The environment as GitHub's GET answers it, with the members Setup never reads. */
+  const anEnvironment = (policy: unknown) => json({ id: 7, name: "fabrik", protection_rules: [], deployment_branch_policy: policy });
+
+  it("reads one GitHub made because a workflow named it as every branch, with no rule to read", async () => {
+    const { environment, calls } = await readEnvironment({ [ENVIRONMENT]: anEnvironment(null), [SECRETS]: json([]) });
+
+    expect(environment).toEqual({ branches: "all", rules: [], secrets: [] });
+    expect(calls).toEqual([ENVIRONMENT, SECRETS]);
+  });
+
+  it("reads protected branches only, with no rule to read", async () => {
+    const { environment, calls } = await readEnvironment({
+      [ENVIRONMENT]: anEnvironment({ protected_branches: true, custom_branch_policies: false }),
+      [SECRETS]: json([]),
+    });
+
+    expect(environment).toEqual({ branches: "protected", rules: [], secrets: [] });
+    expect(calls).not.toContain(RULES);
+  });
+
+  it("reads selected branches and tags with each rule's id, name and type, and its secrets' names", async () => {
+    const { environment } = await readEnvironment({
+      [ENVIRONMENT]: anEnvironment({ protected_branches: false, custom_branch_policies: true }),
+      [RULES]: json({
+        total_count: 2,
+        branch_policies: [
+          { id: 41, node_id: "MDE2", name: "main", type: "branch" },
+          { id: 42, node_id: "MDE3", name: "v*", type: "tag" },
+        ],
+      }),
+      [SECRETS]: json([{ name: "FABRIK_OP_PUSH_TOKEN" }, { name: "STRIPE_KEY" }]),
+    });
+
+    expect(environment).toEqual({
+      branches: "selected",
+      rules: [
+        { id: 41, name: "main", type: "branch" },
+        { id: 42, name: "v*", type: "tag" },
+      ],
+      secrets: ["FABRIK_OP_PUSH_TOKEN", "STRIPE_KEY"],
+    });
+  });
+
+  it("reads selected branches and tags with no rule in it as no rules", async () => {
+    const { environment } = await readEnvironment({
+      [ENVIRONMENT]: anEnvironment({ protected_branches: false, custom_branch_policies: true }),
+      [RULES]: json({ total_count: 0, branch_policies: [] }),
+      [SECRETS]: json([]),
+    });
+
+    expect(environment).toEqual({ branches: "selected", rules: [], secrets: [] });
+  });
+
+  it("stops at any refusal but a 404, naming GitHub's answer", async () => {
+    const refused = readEnvironment({ [ENVIRONMENT]: { code: 1, stderr: "gh: Resource not accessible by personal access token (HTTP 403)\n" } });
+
+    await expect(refused).rejects.toThrow(
+      "Reading the fabrik environment on acme/clinic failed: gh: Resource not accessible by personal access token (HTTP 403)",
+    );
+  });
+
+  it("reads another repo's environment of another name, telling gh secret the repo", async () => {
+    const commands = fakeCommands({
+      "gh api repos/jrey8343/fabrik-runs/environments/production": anEnvironment({ protected_branches: false, custom_branch_policies: true }),
+      "gh api repos/jrey8343/fabrik-runs/environments/production/deployment-branch-policies?per_page=100": json({
+        total_count: 1,
+        branch_policies: [{ id: 9, name: "main", type: "branch" }],
+      }),
+      "gh secret list --env production --repo jrey8343/fabrik-runs --json name": json([{ name: "DEPLOY_KEY" }]),
+    });
+
+    const environment = await gatherEnvironment(commands.run, "/clinic", "jrey8343/fabrik-runs", "production", { elsewhere: true });
+
+    expect(environment).toEqual({ branches: "selected", rules: [{ id: 9, name: "main", type: "branch" }], secrets: ["DEPLOY_KEY"] });
+  });
+
+  it("reads which refs an environment lets through alone, its secrets' names left unread", async () => {
+    const commands = fakeCommands({ [ENVIRONMENT]: anEnvironment({ protected_branches: false, custom_branch_policies: true }), [RULES]: json({ branch_policies: [] }) });
+
+    const policy = await readEnvironmentPolicy(commands.run, "/clinic", "acme/clinic", "fabrik");
+
+    expect(policy).toEqual({ branches: "selected", rules: [] });
+    expect(commands.calls.map((call) => call.line)).toEqual([ENVIRONMENT, RULES]);
+  });
+});
 
 describe("Reading a repo's Deployments for production's question", () => {
   it("gives each environment, newest first, with the address on its newest successful Deployment", async () => {

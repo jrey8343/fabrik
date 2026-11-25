@@ -11,7 +11,7 @@ import { aCleanProduct, afterApplying, aProtectedBranch } from "../__fixtures__/
 import { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
 import { describeAction } from "./apply.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
-import { type ProductState, type SetupAction, planSetup, setupPaths } from "./plan.ts";
+import { type EnvironmentPolicy, type EnvironmentState, environmentHeld, holdEnvironment, type ProductState, type SetupAction, planSetup, setupPaths } from "./plan.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
 let kit: SetupKit;
@@ -454,6 +454,94 @@ describe("Labels", () => {
     const named = [...line.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
 
     expect(named.sort()).toEqual(createdLabels(aCleanProduct()).sort());
+  });
+});
+
+describe("The fabrik environment, held to the default branch (ADR-0004)", () => {
+  it("on a repo with no fabrik environment, plans making it first, ahead of every other step, held to the default branch alone", () => {
+    const { actions } = planSetup(aCleanProduct({ environment: null }), kit);
+
+    expect(actions[0]).toEqual({ kind: "hold-environment", environment: "fabrik", branch: "main", found: null });
+    expect(actions.filter((action) => action.kind === "hold-environment")).toHaveLength(1);
+    expect(describeAction(actions[0]!)).toBe("create the fabrik environment, held to main alone: only a run of main is given its secrets");
+  });
+
+  const rule =(name: string, type: "branch" | "tag" = "branch", id = 1) => ({ id, name, type });
+
+  describe("is held only when its one rule is a branch rule naming the default branch", () => {
+    it("is held with selected branches and tags and that one rule", () => {
+      expect(environmentHeld({ branches: "selected", rules: [rule("main")] }, "main")).toBe(true);
+    });
+
+    it.each<[string, EnvironmentPolicy | null]>([
+      ["a repo with no such environment", null],
+      ["every branch, as GitHub makes one a workflow names", { branches: "all", rules: [] }],
+      ["protected branches only", { branches: "protected", rules: [] }],
+      ["selected branches and tags with no rule, which lets every ref through", { branches: "selected", rules: [] }],
+      ["a rule naming another branch", { branches: "selected", rules: [rule("release")] }],
+      ["a tag rule named as the default branch is, which lets a tag's run in", { branches: "selected", rules: [rule("main", "tag")] }],
+      ["the right rule beside another", { branches: "selected", rules: [rule("main"), rule("release/*", "branch", 2)] }],
+      ["the right rule beside a tag rule of its name", { branches: "selected", rules: [rule("main"), rule("main", "tag", 2)] }],
+    ])("isn't held with %s", (_, policy) => {
+      expect(environmentHeld(policy, "main")).toBe(false);
+    });
+
+    it("isn't held by a rule naming what the default branch was called before it was renamed", () => {
+      expect(environmentHeld({ branches: "selected", rules: [rule("master")] }, "main")).toBe(false);
+    });
+  });
+
+  function holds(environment: EnvironmentState | null, defaultBranch = "main") {
+    const clean = aCleanProduct();
+    const { actions } = planSetup({ ...clean, repo: { ...clean.repo, defaultBranch }, environment }, kit);
+    return actions.filter((action) => action.kind === "hold-environment");
+  }
+
+  it("plans nothing for one already held, whatever secrets it holds", () => {
+    expect(holds({ branches: "selected", rules: [rule("main")], secrets: ["FABRIK_OP_PUSH_TOKEN", "STRIPE_KEY"] })).toEqual([]);
+  });
+
+  it.each<[string, EnvironmentPolicy, string]>([
+    ["every branch", { branches: "all", rules: [] }, "every branch"],
+    ["protected branches only", { branches: "protected", rules: [] }, "protected branches only"],
+    ["selected branches and tags with no rule", { branches: "selected", rules: [] }, "none"],
+    ["a rule naming another branch", { branches: "selected", rules: [rule("release")] }, "release"],
+    ["a tag rule named main", { branches: "selected", rules: [rule("main", "tag")] }, "tag main"],
+    ["the right rule beside others", { branches: "selected", rules: [rule("main"), rule("release/*", "branch", 2), rule("v*", "tag", 3)] }, "main, release/*, tag v*"],
+  ])("plans holding one found with %s, as the plan's first step, naming the change from what to what", (_, policy, before) => {
+    const clean = aCleanProduct();
+    const { actions } = planSetup({ ...clean, environment: { ...policy, secrets: ["STRIPE_KEY"] } }, kit);
+
+    expect(actions[0]).toEqual({ kind: "hold-environment", environment: "fabrik", branch: "main", found: policy });
+    expect(holds({ ...policy, secrets: [] })).toHaveLength(1);
+    expect(describeAction(actions[0]!)).toBe(`hold the fabrik environment to main alone: rules ${before} → main`);
+  });
+
+  it("plans holding one whose rule names what the default branch was called before it was renamed, to the new name", () => {
+    const found: EnvironmentPolicy = { branches: "selected", rules: [rule("master")] };
+
+    const planned = holds({ ...found, secrets: [] }, "trunk");
+
+    expect(planned).toEqual([{ kind: "hold-environment", environment: "fabrik", branch: "trunk", found }]);
+    expect(describeAction(planned[0]!)).toBe("hold the fabrik environment to trunk alone: rules master → trunk");
+  });
+
+  it("plans the same step for another repo's environment, naming the repo, and none once that one is held", () => {
+    const found: EnvironmentPolicy = { branches: "all", rules: [] };
+
+    expect(holdEnvironment("fabrik", found, "trunk", "jrey8343/fabrik-runs")).toEqual([
+      { kind: "hold-environment", environment: "fabrik", branch: "trunk", found, repo: "jrey8343/fabrik-runs" },
+    ]);
+    expect(holdEnvironment("fabrik", { branches: "selected", rules: [rule("trunk")] }, "trunk", "jrey8343/fabrik-runs")).toEqual([]);
+  });
+
+  it("is held once its step is applied, so the next run plans nothing for it", () => {
+    const state = aCleanProduct({ environment: { branches: "all", rules: [], secrets: ["STRIPE_KEY"] } });
+
+    const after = afterApplying(state, planSetup(state, kit));
+
+    expect(after.environment).toEqual({ branches: "selected", rules: [expect.objectContaining({ name: "main", type: "branch" })], secrets: ["STRIPE_KEY"] });
+    expect(planSetup(after, kit).actions).toEqual([]);
   });
 });
 
