@@ -11,7 +11,19 @@ import { aCleanProduct, afterApplying, aProtectedBranch } from "../__fixtures__/
 import { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
 import { describeAction } from "./apply.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
-import { type EnvironmentPolicy, type EnvironmentState, environmentHeld, holdEnvironment, type ProductState, type SetupAction, planSetup, setupPaths } from "./plan.ts";
+import {
+  deleteRepoSecrets,
+  type EnvironmentPolicy,
+  type EnvironmentState,
+  environmentHeld,
+  holdEnvironment,
+  kitNamesEnvironment,
+  oldAccountsNotes,
+  type ProductState,
+  type SetupAction,
+  planSetup,
+  setupPaths,
+} from "./plan.ts";
 import { pinCaller } from "./shims.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
@@ -826,6 +838,39 @@ describe("The repo-level tokens, deleted once the default branch's Kit names the
     expect(installed.environment?.secrets).toEqual(TOKENS);
     expect(actions).toEqual([]);
     expect(notes.filter((note) => /repo-level|old service account/.test(note))).toEqual([]);
+  });
+
+  describe("for another repo's tokens, as the store's one", () => {
+    const STORE = "jrey8343/fabrik-runs";
+    const storeToken = { secret: "FABRIK_OP_PUSH_TOKEN", account: "fabrik-jrey8343-fabrik-runs-push" };
+
+    it("plans the same step naming the repo and its own default branch, and names its old account in a note of its own, the repo first", () => {
+      const steps = deleteRepoSecrets([storeToken], "fabrik", "trunk", STORE);
+
+      expect(steps).toEqual([{ kind: "delete-repo-secret", ...storeToken, environment: "fabrik", branch: "trunk", repo: STORE }]);
+      expect(oldAccountsNotes(steps)).toEqual([
+        "jrey8343/fabrik-runs: Once the repo-level secret is deleted, delete the old service account fabrik-jrey8343-fabrik-runs-push on 1Password's site. Its token still works until you do, though it sits nowhere on GitHub.",
+      ]);
+    });
+
+    it("keeps each repo's old accounts in that repo's note, the Product repo's first", () => {
+      const moved = aCleanProduct({ secrets: TOKENS, environment: held(TOKENS), defaultBranchCaller: callerAt("v1.4.2") });
+      const steps = [...deleteRepoSecrets([storeToken], "fabrik", "trunk", STORE), ...planSetup(moved, kit).actions];
+
+      expect(oldAccountsNotes(steps)).toEqual([
+        OLD_ACCOUNTS,
+        "jrey8343/fabrik-runs: Once the repo-level secret is deleted, delete the old service account fabrik-jrey8343-fabrik-runs-push on 1Password's site. Its token still works until you do, though it sits nowhere on GitHub.",
+      ]);
+    });
+
+    it("tells whether the Kit a caller workflow pins names the environment from any caller's text, the store's too", () => {
+      const storeCaller = (release: string) => pinCaller(kit.templates.storeCaller, release);
+
+      expect(kitNamesEnvironment(storeCaller("v1.4.2"), "v1.4.2")).toBe(true);
+      expect(kitNamesEnvironment(storeCaller("v2.1.0"), "v1.4.2")).toBe(true);
+      expect(kitNamesEnvironment(storeCaller("v0.9.1"), "v1.4.2")).toBe(false);
+      expect(kitNamesEnvironment(null, "v1.4.2")).toBe(false);
+    });
   });
 
   it("treats each 0.x minor as its own major, as semver does", () => {

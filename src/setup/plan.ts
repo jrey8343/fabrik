@@ -1026,18 +1026,26 @@ export function deleteRepoSecrets(tokens: readonly RepoLevelToken[], environment
 }
 
 /**
- * The note that names the old service accounts, for the `delete-repo-secret`
- * steps among these. `op` has no command that deletes an account, so that is
- * the Operator's, on 1Password's site.
+ * The notes that name the old service accounts, for the `delete-repo-secret`
+ * steps among these: one note for each repo that has such a step, the Product
+ * repo's first, and another repo's with that repo named first, as its other
+ * notes are. `op` has no command that deletes an account, so that is the
+ * Operator's, on 1Password's site. Setup can say it only on the run that
+ * deletes the secrets: once they are gone, it can't tell that the accounts
+ * aren't.
  */
 export function oldAccountsNotes(actions: readonly SetupAction[]): string[] {
-  const accounts = actions.flatMap((action) => (action.kind === "delete-repo-secret" ? [action.account] : []));
-  if (accounts.length === 0) return [];
-  const one = accounts.length === 1;
-  return [
-    `Once the repo-level ${one ? "secret is" : "secrets are"} deleted, delete the old service ${one ? "account" : "accounts"} ${listed(accounts)} on 1Password's site. ` +
-      `${one ? "Its token still works" : "Their tokens still work"} until you do, though ${one ? "it sits" : "they sit"} nowhere on GitHub.`,
-  ];
+  const deletions = actions.flatMap((action) => (action.kind === "delete-repo-secret" ? [action] : []));
+  const named = new Set(deletions.flatMap(({ repo }) => repo ?? []));
+  const repos = [...(deletions.some(({ repo }) => repo === undefined) ? [undefined] : []), ...named];
+  return repos.map((repo) => {
+    const accounts = deletions.filter((deletion) => deletion.repo === repo).map(({ account }) => account);
+    const one = accounts.length === 1;
+    return (
+      `${repo === undefined ? "" : `${repo}: `}Once the repo-level ${one ? "secret is" : "secrets are"} deleted, delete the old service ${one ? "account" : "accounts"} ${listed(accounts)} on 1Password's site. ` +
+      `${one ? "Its token still works" : "Their tokens still work"} until you do, though ${one ? "it sits" : "they sit"} nowhere on GitHub.`
+    );
+  });
 }
 
 /** Names as a sentence lists them: `a`, `a and b`, `a, b and c`. */

@@ -39,6 +39,31 @@ describe("A service account whose step names no environment, as the store's", ()
   });
 });
 
+describe("Deleting a repo-level secret of a repo the step names", () => {
+  const step: SetupAction = {
+    kind: "delete-repo-secret",
+    secret: "FABRIK_OP_PUSH_TOKEN",
+    account: "fabrik-jrey8343-fabrik-runs-push",
+    environment: "fabrik",
+    branch: "trunk",
+    repo: STORE,
+  };
+
+  it("names that repo in the plan, and the branch whose caller workflow pins the Kit", () => {
+    expect(describeAction(step)).toBe(
+      "delete the repo-level Actions secret FABRIK_OP_PUSH_TOKEN in jrey8343/fabrik-runs: the Kit trunk pins reads the fabrik environment's",
+    );
+  });
+
+  it("deletes it on that repo, with one call that names the repo and no environment", async () => {
+    const commands = fakeCommands({ "gh secret delete": {} });
+
+    await apply(commands.run, step, "/clinic", PRODUCT);
+
+    expect(commands.calls.map(({ line }) => line)).toEqual(["gh secret delete FABRIK_OP_PUSH_TOKEN --repo jrey8343/fabrik-runs"]);
+  });
+});
+
 describe("Holding the environment of a repo the step names", () => {
   const step = (found: Extract<SetupAction, { kind: "hold-environment" }>["found"]): SetupAction => ({
     kind: "hold-environment",
