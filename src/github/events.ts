@@ -106,34 +106,81 @@ export function loopEventFrom(
       return { kind: "pull-request-closed", pullRequest, merged, closedByBot: sender?.type === "Bot" };
     }
   }
-  // There is no _target form of this event, so the run uses the PR's merge
-  // commit's caller workflow and Kit config. An agent PR can't change either:
-  // both are trust roots its push job refuses (ADR-0005).
+  // There is no _target form of this event, so GitHub starts its run from the PR's merge commit, which the `fabrik`
+  // environment gives no token. A review's own run so only hands off: it starts a run on the default branch, which
+  // reads the review from GitHub and acts on what it read (src/github/handOff.ts). The mapping serves both, a
+  // review GitHub delivered and one the hand-off read.
   if (eventName === "pull_request_review" && payload["action"] === "submitted") {
-    const review = payload["review"] as {
-      id: number;
-      node_id: string;
-      state: string;
-      body: string | null;
-      user: { login: string; type: string };
-    };
     const pullRequest = (payload["pull_request"] as { number: number }).number;
-    const state = review.state.toLowerCase();
-    // A Comment or Approve review, which a lone inline comment or a thread reply also submits.
-    if (state === "commented" || state === "approved") {
-      const hasBody = (review.body ?? "").trim() !== "";
-      return pullRequestCommented(pullRequest, review.user, { kind: "review", review: review.id, node: review.node_id, hasBody });
-    }
-    if (state !== "changes_requested") return null;
-    return {
-      kind: "pull-request-changes-requested",
-      pullRequest,
-      review: review.id,
-      reviewer: review.user.login,
-      reviewerIsBot: review.user.type === "Bot",
-    };
+    return submittedReviewEventFrom(pullRequest, payload["review"] as SubmittedReview);
   }
   return null;
+}
+
+/** A submitted review as GitHub gives it, in a `pull_request_review` event's payload or from its REST API, whose states differ only in case. */
+export interface SubmittedReview {
+  readonly id: number;
+  readonly node_id: string;
+  readonly state: string;
+  readonly body: string | null;
+  readonly user: { readonly login: string; readonly type: string };
+}
+
+/**
+ * The Loop event a submitted review on `pullRequest` stands for, the one
+ * mapping for a review GitHub delivered and one a hand-off's run read: a
+ * Request changes is the ask for another run, and a Comment or Approve review
+ * is a comment on the PR, naming the review as its place. Null for a review in
+ * any other state, and for a bot's Comment or Approve review.
+ */
+export function submittedReviewEventFrom(pullRequest: number, review: SubmittedReview): LoopEvent | null {
+  const state = review.state.toLowerCase();
+  // A Comment or Approve review, which a lone inline comment or a thread reply also submits.
+  if (state === "commented" || state === "approved") {
+    const hasBody = (review.body ?? "").trim() !== "";
+    return pullRequestCommented(pullRequest, review.user, { kind: "review", review: review.id, node: review.node_id, hasBody });
+  }
+  if (state !== "changes_requested") return null;
+  return {
+    kind: "pull-request-changes-requested",
+    pullRequest,
+    review: review.id,
+    reviewer: review.user.login,
+    reviewerIsBot: review.user.type === "Bot",
+  };
+}
+
+/** A review's hand-off: the pull request and the review a run started by `workflow_dispatch` was asked to act on, neither yet read from GitHub. */
+export interface HandOff {
+  readonly pullRequest: number;
+  readonly review: number;
+}
+
+/** A positive whole number written in decimal digits and nothing else, as GitHub writes a pull request's number and a review's id. */
+const POSITIVE_WHOLE_NUMBER = /^[1-9][0-9]*$/;
+
+/** The number an input names, or null when it isn't text that reads as one. */
+function numberNamed(input: unknown): number | null {
+  if (typeof input !== "string" || !POSITIVE_WHOLE_NUMBER.test(input)) return null;
+  const number = Number(input);
+  return Number.isSafeInteger(number) ? number : null;
+}
+
+/**
+ * The hand-off a run was started by, or null for any other run: a
+ * `workflow_dispatch` whose inputs name a pull request and a review. Whoever
+ * can start a workflow can start one with any inputs, so a hand-off is only
+ * what the run was asked: the run reads the review from GitHub before it acts
+ * (src/github/handOff.ts). A dispatch missing either input, a manual one with
+ * none included, is no hand-off, and the Loop doesn't act on it.
+ */
+export function handOffFrom(eventName: string, payload: Record<string, unknown>): HandOff | null {
+  if (eventName !== "workflow_dispatch") return null;
+  const inputs = payload["inputs"];
+  if (typeof inputs !== "object" || inputs === null) return null;
+  const { pull_request: pullRequestInput, review: reviewInput } = inputs as { pull_request?: unknown; review?: unknown };
+  const [pullRequest, review] = [numberNamed(pullRequestInput), numberNamed(reviewInput)];
+  return pullRequest === null || review === null ? null : { pullRequest, review };
 }
 
 /**
