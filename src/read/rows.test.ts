@@ -43,7 +43,7 @@ function ruleOf(facts: Facts, runs: readonly RunInFlightFact[] | "unread", check
 
 /** A checks read of `owner/product`'s `main`, held for everyone to these Required checks, with these heads. */
 function aChecksRead(heads: RequiredChecksRead["heads"], required: readonly string[] = ["test", "lint"]): RequiredChecksRead {
-  return { repo: "owner/product", branch: "main", readAt: NOW, required, holdsAdmins: "yes", heads };
+  return { repo: "owner/product", branch: "main", readAt: NOW, required, holdsAdmins: "yes", heads, consoleCheck: { is: "not-required" } };
 }
 
 /** Ticket 7, `ready-for-agent`, given `agent:implement` an hour before now. */

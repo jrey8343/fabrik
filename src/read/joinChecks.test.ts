@@ -13,7 +13,7 @@ const head = (digit: string) => digit.repeat(40);
 
 /** A checks read of `owner/product`'s `main`, requiring `test` and `lint`, with these heads. */
 function aChecksRead(heads: RequiredChecksRead["heads"], readAt = NOW): RequiredChecksRead {
-  return { repo: "owner/product", branch: "main", readAt, required: ["test", "lint"], holdsAdmins: "yes", heads };
+  return { repo: "owner/product", branch: "main", readAt, required: ["test", "lint"], holdsAdmins: "yes", heads, consoleCheck: { is: "not-required" } };
 }
 
 /** A Required check on a head, reported at `at` (never reported when null). */
