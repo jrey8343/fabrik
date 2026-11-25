@@ -45,7 +45,8 @@ const HELD_IN: Readonly<Record<string, readonly [file: string, text: string]>> =
   app_id: ["src/setup/plan.ts", "app_id: consoleApp"],
   "console.appId": ["src/kit/config.ts", "defaults.console.appId"],
   "KitConfig.console.appId": ["src/kit/config.ts", "readonly appId: number | null;"],
-  "console: { appId: null }": ["src/kit/config.ts", "console: { appId: null }"],
+  // The Held workflows' list (#939) sits beside it in the same major.
+  "console: { appId: null }": ["src/kit/config.ts", "console: { appId: null, heldWorkflows: [] }"],
   consoleCheck: ["src/read/requiredChecks.ts", "readonly consoleCheck: ConsoleCheckRead;"],
   "RequiredChecksRead.consoleCheck": ["src/read/requiredChecks.ts", "readonly consoleCheck: ConsoleCheckRead;"],
   required: ["src/read/requiredChecks.ts", `{ readonly is: "required"; readonly apps: readonly (number | null)[] }`],
