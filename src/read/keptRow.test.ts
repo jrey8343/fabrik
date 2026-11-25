@@ -41,8 +41,8 @@ const A_PAIRING_ROW_KEPT_AT_V3_4_1 = {
 /** The same beside a row of this release: its Follow-up, kept before a Follow-up had a kind, an idea (#885). */
 const BESIDE = { ...KEPT_BESIDE, followUps: [{ title: "Tidy up", body: "Later.", filedAs: null, kind: "idea" }] } as const;
 
-/** A row of this release: its Standing at the current schema, `shots` on it, and its Follow-up's kind. */
-const A_CURRENT_ROW: Row = { standing: THAT_BLOCKED_AT_SCHEMA_2, plainPullRequest: null, ...BESIDE, shots: null };
+/** A row of this release: its Standing at the current schema, `shots` and `operatorSession` on it, and its Follow-up's kind. */
+const A_CURRENT_ROW: Row = { standing: THAT_BLOCKED_AT_SCHEMA_2, plainPullRequest: null, ...BESIDE, shots: null, operatorSession: null };
 
 /** Where to try a merged pull request on staging as v4.3.0 kept it on its row: before a row's `staging` had `trial` (#965). */
 const STAGING_KEPT_AT_V4_3_0 = { site: "https://staging.shop.example", pages: [{ route: "/book", url: "https://staging.shop.example/book" }], shots: [], toTry: ["/book"] };
@@ -54,8 +54,21 @@ const A_ROW_AT_STAGING: Row = { ...A_CURRENT_ROW, standing: ON_STAGING_AT_SCHEMA
 const A_ROW_AT_STAGING_KEPT_AT_V4_3_0 = { ...A_CURRENT_ROW, standing: ON_STAGING_AT_SCHEMA_2, staging: STAGING_KEPT_AT_V4_3_0 };
 
 describe("a kept row read back", () => {
-  it("kept at v3.4.1, has its Standing at the current schema, no Evidence shots and its Follow-up an idea, with every other field as kept", () => {
-    expect(readRow(JSON.parse(JSON.stringify(A_ROW_KEPT_AT_V3_4_1)))).toEqual({ standing: THAT_BLOCKED_AT_SCHEMA_2, plainPullRequest: null, ...BESIDE, shots: null });
+  it("kept at v3.4.1, has its Standing at the current schema, no Evidence shots, no Operator session and its Follow-up an idea, with every other field as kept", () => {
+    expect(readRow(JSON.parse(JSON.stringify(A_ROW_KEPT_AT_V3_4_1)))).toEqual({ standing: THAT_BLOCKED_AT_SCHEMA_2, plainPullRequest: null, ...BESIDE, shots: null, operatorSession: null });
+  });
+
+  it("kept before a row had `operatorSession` (#951), reads with it null, every other field as kept", () => {
+    const { operatorSession: _none, ...keptBefore } = { ...A_CURRENT_ROW, shots: { head: null, run: null, artifact: null, failure: null, preview: "unknown", nothingVisible: null, nothingNamed: true, named: [] } } as const;
+
+    expect(readRow(JSON.parse(JSON.stringify(keptBefore)))).toEqual({ ...keptBefore, operatorSession: null });
+  });
+
+  it("of this release comes back as it is, its Operator session with it", () => {
+    const withSession: Row = { ...A_CURRENT_ROW, operatorSession: "https://claude.ai/code/session_01GcsNdk1yVNhd1T31USEtv1" };
+
+    expect(readRow(withSession)).toBe(withSession);
+    expect(readRow(JSON.parse(JSON.stringify(withSession)))).toEqual(withSession);
   });
 
   it("kept before a Follow-up had its kind (#885), reads each Follow-up as an idea, its title, its body and what it was filed as as kept", () => {
@@ -81,6 +94,7 @@ describe("a kept row read back", () => {
       plainPullRequest: { since: "2026-11-08T11:30:00Z", own: THAT_BLOCKED_AT_SCHEMA_2 },
       ...BESIDE,
       shots: null,
+      operatorSession: null,
     });
   });
 
@@ -88,7 +102,7 @@ describe("a kept row read back", () => {
     const plainPullRequest = { since: "2026-11-08T11:30:00Z", own: null };
     const kept = { ...A_ROW_KEPT_AT_V3_4_1, standing: { ...theKept("check-failing"), schema: 1 }, plainPullRequest };
 
-    expect(readRow(kept)).toEqual({ ...kept, ...BESIDE, standing: theKept("check-failing"), shots: null });
+    expect(readRow(kept)).toEqual({ ...kept, ...BESIDE, standing: theKept("check-failing"), shots: null, operatorSession: null });
   });
 
   it("with no `plainPullRequest` at all still reads: nothing of a row is checked but its Standings' schemas", () => {

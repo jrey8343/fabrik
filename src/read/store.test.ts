@@ -59,6 +59,7 @@ describe("the store's rows", () => {
         production: null,
         prototype: null,
         digest: null,
+        operatorSession: null,
       },
     ]);
   });
