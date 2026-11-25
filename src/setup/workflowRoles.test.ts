@@ -25,6 +25,9 @@ describe("Whether a workflow can be started by workflow_dispatch", () => {
     ["a quoted \"on\": key", ['"on":', "  workflow_dispatch: {}"]],
     ["a quoted event in a flow list", ["on: [push, 'workflow_dispatch']"]],
     ["a comment after the event", ["on: workflow_dispatch # by hand"]],
+    ["a block list with its dashes at the key's own column", ["on:", "- push", "- workflow_dispatch"]],
+    ["a flow map", ["on: { workflow_dispatch: {} }"]],
+    ["a flow map whose other event has a map of its own", ["on: {push: {branches: [main, 'release, next']}, workflow_dispatch: null}"]],
   ])("reads on: as %s", (_, on) => {
     expect(workflowRolesOf(triggeredBy(...on)).dispatchable).toBe(true);
   });
@@ -35,6 +38,8 @@ describe("Whether a workflow can be started by workflow_dispatch", () => {
     ["a block list without it", ["on:", "  - push", "  - workflow_call"]],
     ["a block without it, though an input below another event is named so", ["on:", "  workflow_call:", "    inputs:", "      workflow_dispatch:", "        type: string"]],
     ["a commented-out event", ["on:", "  push:", "  # workflow_dispatch:"]],
+    ["a block list at the key's own column without it", ["on:", "- push", "- workflow_call"]],
+    ["a flow map naming it only below another event", ["on: { workflow_call: { inputs: { workflow_dispatch: { type: string } } } }"]],
     ["no on: at all", []],
   ])("reads on: as %s as not dispatchable", (_, on) => {
     expect(workflowRolesOf(triggeredBy(...on)).dispatchable).toBe(false);
@@ -119,6 +124,15 @@ describe("The environment each job names", () => {
   it("reads environment: as a block with name:, whatever else is under it", () => {
     expect(environments(["  deploy:", "    environment:", "      url: https://clinic.example.com", "      name: production", "    runs-on: ubuntu-latest"])).toEqual([
       ["deploy", "production"],
+    ]);
+  });
+
+  it("reads environment: as a one-line flow map's name:, whatever else is in it", () => {
+    expect(
+      environments(["  deploy:", "    environment: { name: production, url: 'https://clinic.example.com' }", "  dns:", "    environment: {url: https://dns.example.com}"]),
+    ).toEqual([
+      ["deploy", "production"],
+      ["dns", null],
     ]);
   });
 
