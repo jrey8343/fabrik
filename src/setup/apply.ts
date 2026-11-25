@@ -66,11 +66,23 @@ export async function apply(run: Run, action: SetupAction, productDir: string, r
       await ok(run, "op", ["vault", "create", action.name], { cwd });
       return;
     case "create-service-account": {
+      const { environment } = action;
+      const where = action.repo === undefined ? [] : ["--repo", action.repo];
+      if (environment !== undefined) {
+        // The environment's rules are read first, whether or not this run changed it: one that isn't held gives its secrets to other refs (#846).
+        const repoName = action.repo ?? `${repo.owner}/${repo.name}`;
+        const rules = await readEnvironmentRules(run, cwd, repoName, environment);
+        if (!onlyRuleNames(rules, repo.defaultBranch)) {
+          throw new Error(
+            `The ${environment} environment on ${repoName} isn't held to ${repo.defaultBranch} alone, so Setup stored no token in it. Run setup again.`,
+          );
+        }
+        where.unshift("--env", environment);
+      }
       // Read-only, no expiry (ADR-0004). The token is shown once: it goes
-      // straight into the Actions secret and is never printed.
+      // straight into the secret, on gh's stdin, and is never printed.
       const grants = action.vaults.flatMap((vault) => ["--vault", `${vault}:read_items`]);
       const token = (await ok(run, "op", ["service-account", "create", action.name, ...grants, "--raw"], { cwd })).trim();
-      const where = action.repo === undefined ? [] : ["--repo", action.repo];
       await ok(run, "gh", ["secret", "set", action.secret, ...where], { cwd, input: token });
       return;
     }
@@ -135,8 +147,12 @@ export function describeAction(action: SetupAction): string {
       return `create the label ${action.name}`;
     case "create-vault":
       return `create the 1Password vault "${action.name}"`;
-    case "create-service-account":
-      return `create the read-only service account "${action.name}" (reads ${action.vaults.map((v) => `"${v}"`).join(", ")}) and store it as the Actions secret ${action.secret}${action.repo === undefined ? "" : ` on ${action.repo}`}`;
+    case "create-service-account": {
+      const account = `create the read-only service account "${action.name}" (reads ${action.vaults.map((v) => `"${v}"`).join(", ")})`;
+      const repo = action.repo === undefined ? "" : ` on ${action.repo}`;
+      if (action.environment === undefined) return `${account} and store it as the Actions secret ${action.secret}${repo}`;
+      return `${account} and store it as ${action.secret} in the ${action.environment} environment${repo}`;
+    }
     case "protect-branch":
       return `protect ${action.branch}: ${[...protectionChanges(action.found ?? UNPROTECTED, action.protection), "every other setting stays as it is"].join("; ")}`;
     case "restrict-default-branch":

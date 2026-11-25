@@ -10,6 +10,35 @@ import type { SetupAction } from "./plan.ts";
 const PRODUCT = { owner: "acme", name: "clinic", defaultBranch: "main", inOrganization: false };
 const STORE = "jrey8343/fabrik-runs";
 
+describe("A service account whose step names no environment, as the store's", () => {
+  const step: SetupAction = {
+    kind: "create-service-account",
+    name: "fabrik-jrey8343-fabrik-runs-push",
+    vaults: ["Fabrik App"],
+    secret: "FABRIK_OP_PUSH_TOKEN",
+    repo: STORE,
+  };
+
+  it("is named in the plan as a repo-level Actions secret on that repo", () => {
+    expect(describeAction(step)).toBe(
+      'create the read-only service account "fabrik-jrey8343-fabrik-runs-push" (reads "Fabrik App") and store it as the Actions secret FABRIK_OP_PUSH_TOKEN on jrey8343/fabrik-runs',
+    );
+  });
+
+  it("stores its token as that repo's repo-level secret, reading no environment", async () => {
+    const world = aWorld();
+    const commands = fakeCommands(worldScript(world));
+
+    await apply(commands.run, step, "/clinic", PRODUCT);
+
+    expect(commands.calls.map(({ line, input }) => [line, input])).toEqual([
+      ["op service-account create fabrik-jrey8343-fabrik-runs-push --vault Fabrik App:read_items --raw", undefined],
+      ["gh secret set FABRIK_OP_PUSH_TOKEN --repo jrey8343/fabrik-runs", "ops_token"],
+    ]);
+    expect(world.environmentCalls).toEqual([]);
+  });
+});
+
 describe("Holding the environment of a repo the step names", () => {
   const step = (found: Extract<SetupAction, { kind: "hold-environment" }>["found"]): SetupAction => ({
     kind: "hold-environment",
