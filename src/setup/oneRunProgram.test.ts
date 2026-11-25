@@ -2632,5 +2632,41 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(onProduction.length).toBeGreaterThan(0);
       expect(onProduction.filter((line) => !/^gh api repos\/acme\/clinic\/environments\/production(\/deployment-branch-policies\?per_page=100)?$/.test(line))).toEqual([]);
     });
+
+    it("carries on when GitHub refuses the read of production's environment, after the wizard and before the plan, and says it couldn't be read", async () => {
+      const world = aWorld();
+      anEnvironment(world, { rules: ["main"] }, "production").refusesRead = "gh: Resource not accessible by personal access token (HTTP 403)\n";
+      const flags = ["--no-time-zone", "--no-second-subscription", "--no-paused", "--no-staging", "--production-url=https://clinic.example.com", "--production-environment=production"];
+      const UNREAD =
+        "- Production's environment, production, couldn't be read (gh: Resource not accessible by personal access token (HTTP 403)), so Setup can't say whether it is held to main alone.";
+
+      // The first read of it is the one after the wizard, from the setup branch's Kit config.
+      const first = await setupOnce(world, { args: flags });
+
+      expect(first.complaints).toEqual([]);
+      expect(first.code).toBe(0);
+      expect(first.said.slice(first.said.lastIndexOf(HEADING), first.said.lastIndexOf(HEADING) + 4)).toEqual([HEADING, NONE_OF_ITS_OWN, UNREAD, ""]);
+      expect(world.prs).toHaveLength(1);
+      mergeTheSetupPr(world);
+
+      // On the next run the checkout's Kit config names it, so it is read before the plan.
+      const second = await setupOnce(world, { args: flags, answers: [] });
+
+      expect(second.complaints).toEqual([]);
+      expect(second.code).toBe(0);
+      expect(second.said.slice(second.said.indexOf(HEADING))).toEqual([HEADING, NONE_OF_ITS_OWN, UNREAD]);
+      expect(second.said).toContain(COMPLETE);
+    });
+
+    it("still stops when GitHub refuses the read of the fabrik environment with anything but a 404, naming its answer", async () => {
+      const world = aWorld();
+      anEnvironment(world, { rules: ["main"] }).refusesRead = "gh: Bad Gateway (HTTP 502)\n";
+
+      const { code, complaints, log } = await setupOnce(world);
+
+      expect(code).toBe(1);
+      expect(complaints.join("\n")).toContain("Reading the fabrik environment on acme/clinic failed: gh: Bad Gateway (HTTP 502)");
+      expect(log.filter((line) => /--method|^op service-account create |^gh secret set /.test(line))).toEqual([]);
+    });
   });
 });

@@ -481,6 +481,11 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The fabrik environment release notes
         "Production's environment, production, isn't held to main alone (every branch), so a run on another ref that names it is given its secrets.",
       ]);
       expect(planSetup(aCleanProduct({ secrets: [...TOKENS] }), kit).report).toEqual(["This repo holds no repo-level Actions secret of its own."]);
+      expect(report).toContain("When GitHub refuses that read, Setup carries on, and the line says that one couldn't be read, with GitHub's answer");
+      const unread = { name: "production", policy: null, refused: "gh: Bad Gateway (HTTP 502)" };
+      expect(planSetup(aCleanProduct({ secrets: [...TOKENS], production: unread }), kit).report.at(-1)).toBe(
+        "Production's environment, production, couldn't be read (gh: Bad Gateway (HTTP 502)), so Setup can't say whether it is held to main alone.",
+      );
       // The report changes no step and no note.
       const { report: _, ...planned } = own;
       const { report: __, ...unreported } = planSetup(aCleanProduct({ secrets: [...TOKENS] }), kit);

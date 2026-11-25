@@ -2401,6 +2401,26 @@ describe("Setup's report on a Product repo's own credentials", () => {
       expect(onProduction(null, "Production – clinic")).toEqual(["Production's environment, Production – clinic, isn't on this repo."]);
     });
 
+    it("says it couldn't be read, with GitHub's answer, when GitHub refused the read, in place of whether it is held, and plans what it would have", () => {
+      const refused = { name: "production", policy: null, refused: "gh: Resource not accessible by personal access token (HTTP 403)" };
+
+      const { report, ...planned } = planSetup(aCleanProduct({ production: refused }), kit);
+
+      expect(report.slice(1)).toEqual([
+        "Production's environment, production, couldn't be read (gh: Resource not accessible by personal access token (HTTP 403)), so Setup can't say whether it is held to main alone.",
+      ]);
+      const { report: _unnamed, ...plannedWithNone } = planSetup(aCleanProduct({ production: null }), kit);
+      expect(planned).toEqual(plannedWithNone);
+    });
+
+    it("keeps GitHub's answer to its first line, and drops its control characters as it drops the name's", () => {
+      const clean = aCleanProduct({ production: { name: "live", policy: null, refused: "\n  gh: Bad \u001b[31mGateway\u0007 (HTTP 502)  \nRequest ID: 1\n" } });
+
+      const { report } = planSetup({ ...clean, repo: { ...clean.repo, defaultBranch: "trunk" } }, kit);
+
+      expect(report.slice(1)).toEqual(["Production's environment, live, couldn't be read (gh: Bad [31mGateway (HTTP 502)), so Setup can't say whether it is held to trunk alone."]);
+    });
+
     it("judges it by the repo's default branch, whatever that is called", () => {
       const clean = aCleanProduct({ production: { name: "live", policy: { branches: "selected", rules: [rule("main")] } } });
 

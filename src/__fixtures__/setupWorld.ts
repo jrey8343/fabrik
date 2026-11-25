@@ -36,6 +36,8 @@ export interface WorldEnvironment {
   readonly secrets: Set<string>;
   /** GitHub answers a new rule's POST as taken and keeps no rule, so the rules never read back as the one. */
   dropsNewRules?: boolean;
+  /** What GitHub answers a read of it with when it refuses the read, as for a token that may not read environments. */
+  refusesRead?: string;
 }
 
 /** The fabrik-runs store, as GitHub holds it. Its environments are among the world's, under its name. */
@@ -176,6 +178,7 @@ function environmentAnswer(world: World, { args, input, line }: Call): Partial<R
       return json({ name, deployment_branch_policy: policy });
     }
     if (method !== "GET") throw new Error(`The world has no answer for: ${line}`);
+    if (environment?.refusesRead !== undefined) return { code: 1, stderr: environment.refusesRead };
     return environment === undefined ? NOT_FOUND : json({ id: 1, name, protection_rules: [], deployment_branch_policy: environment.policy });
   }
   if (environment === undefined) return NOT_FOUND;

@@ -107,8 +107,10 @@ export interface EnvironmentState extends EnvironmentPolicy {
 export interface ProductionEnvironment {
   /** Its name, as the Kit config gives it. */
   readonly name: string;
-  /** Which refs it lets through, or null when the repo has no environment of that name. */
+  /** Which refs it lets through, or null when the repo has no environment of that name, or when GitHub refused the read. */
   readonly policy: EnvironmentPolicy | null;
+  /** GitHub's answer when it refused the read. The report says so in place of whether it is held, and Setup carries on. */
+  readonly refused?: string;
 }
 
 /** What setup reads about the fabrik-runs store (ADR-0009). */
@@ -489,14 +491,21 @@ function ownSecrets(state: ProductState): string[] {
  * The report's line on production's environment, when the Kit config names
  * one: whether it is held to the default branch alone, by the test the
  * `fabrik` environment is held to (environmentHeld), with its rules as the
- * plan writes them when it isn't, or that the repo has none of that name.
- * Whoever can write the Kit config wrote the name, so it keeps no control
- * characters, such as a terminal escape, for the Operator's terminal to print.
+ * plan writes them when it isn't, or that the repo has none of that name, or,
+ * when GitHub refused the read, that it couldn't be read, with the first line
+ * of GitHub's answer. Whoever can write the Kit config wrote the name, so it
+ * keeps no control characters, such as a terminal escape, for the Operator's
+ * terminal to print, and nor does GitHub's answer.
  */
 function productionHeld({ production, repo: { defaultBranch } }: ProductState): string[] {
   if (production === null) return [];
-  const { name, policy } = production;
-  const named = `Production's environment, ${name.replace(/[\u0000-\u001f\u007f-\u009f]/g, "")},`;
+  const { name, policy, refused } = production;
+  const printable = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+  const named = `Production's environment, ${printable(name)},`;
+  if (refused !== undefined) {
+    const answer = printable(refused.trim().split("\n")[0]!.trim());
+    return [`${named} couldn't be read (${answer}), so Setup can't say whether it is held to ${defaultBranch} alone.`];
+  }
   if (policy === null) return [`${named} isn't on this repo.`];
   if (environmentHeld(policy, defaultBranch)) return [`${named} is held to ${defaultBranch} alone.`];
   return [`${named} isn't held to ${defaultBranch} alone (${namedPolicy(policy)}), so a run on another ref that names it is given its secrets.`];
