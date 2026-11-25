@@ -35,6 +35,7 @@ run-name: >-
   github.event_name == 'pull_request_target' && format('PR #{0} {1}', github.event.pull_request.number, github.event.action) ||
   github.event_name == 'pull_request_review' && github.event.review.state == 'changes_requested' && format('Request changes PR #{0}', github.event.pull_request.number) ||
   github.event_name == 'pull_request_review' && format('Comment on PR #{0}', github.event.pull_request.number) ||
+  github.event_name == 'workflow_dispatch' && format('Review on PR #{0}, handed off', github.event.inputs.pull_request) ||
   format('{0} {1}', github.event_name, github.event.action)
   }}
 
@@ -49,11 +50,25 @@ on:
   # finish, and labeled lets agent:review resume one after a failure.
   pull_request_target:
     types: [opened, synchronize, reopened, labeled, ready_for_review, closed]
-  # The Operator's Request changes at the Merge gate. GitHub has no _target
-  # form of it, so it runs the PR's copy of this file and Kit config, which an
-  # agent PR can't change: the Kit refuses agent branches that touch them.
+  # The Operator's Request changes at the Merge gate. GitHub has no `_target`
+  # form of it and runs it as the pull request's merge ref, which the `fabrik`
+  # environment refuses. So this run reads no token: it starts a run on the
+  # default branch, which uses `main`'s copy of this file and Kit config.
   pull_request_review:
     types: [submitted]
+  # The run a review's hand-off starts, on the default branch (ADR-0004). It
+  # reads the review from GitHub and acts only on one of the Operator's that
+  # is there, so inputs a branch's workflow makes up start nothing.
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: The pull request the review is on
+        required: true
+        type: string
+      review:
+        description: The review's id
+        required: true
+        type: string
   # A push to the default branch, whatever it touches: an agent PR waiting at
   # the Merge gate may now conflict with main, which the Kit then resolves
   # (ADR-0011). A change to the Kit config among them also runs a Dispatch
@@ -78,8 +93,10 @@ jobs:
     uses: jrey8343/fabrik/.github/workflows/loop.yml@v0.1.0-pre.1
     # The most any Kit job may hold; each job narrows it. Every write to the
     # repo goes through the Fabrik App token in a push job. The one write here,
-    # actions: write, only the Review's Re-run red checks job holds, to re-run
-    # the failed jobs of a red required check once on the same head (ADR-0018).
+    # actions: write, two jobs hold: the Review's Re-run red checks job, to
+    # re-run the failed jobs of a red required check once on the same head
+    # (ADR-0018), and a review's hand-off, to start this workflow on the
+    # default branch (ADR-0004).
     permissions:
       id-token: write
       contents: read
