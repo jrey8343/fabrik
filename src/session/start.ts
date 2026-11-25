@@ -1,6 +1,7 @@
 // The SessionStart hook's work in a cloud or local session (ADR-0003). The
 // Product repo's hook entry (templates/claude-settings.json) reads the release
-// from the caller workflow, downloads Fabrik at that tag, and runs
+// from the caller workflow, fetches Fabrik at that tag from github.com by
+// git's own shallow fetch, and runs
 //   node <fabrik>/src/session/start.ts <product checkout> <release>
 // This installs the skills that release locks, the same commit a Kit step
 // installs in Actions, plus Fabrik's own skills and every Extra skill the
@@ -11,7 +12,7 @@
 import { cp, readdir, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { checkCallerWorkflow } from "../kit/caller.ts";
-import { type Download, fetchSkills } from "../skills/fetch.ts";
+import { type FetchSource, fetchSkills } from "../skills/fetch.ts";
 import { foundOldSetupSkill, oldSetupSkillIn, personalSkillsDir, staleOldSetupSkill } from "../skills/oldSetupSkill.ts";
 
 /** The caller workflow, the only place the Kit's version appears. */
@@ -45,7 +46,8 @@ export interface SessionStartInput {
   readonly productDir: string;
   /** The release the hook entry read from the caller workflow and fetched Fabrik at. */
   readonly release: string;
-  readonly download?: Download;
+  /** How each Skills source is fetched at its commit; git's own shallow fetch from github.com unless a test hands another. */
+  readonly fetchSource?: FetchSource;
   /** The Operator's personal skills folder, where an old copy of the fabrik-setup skill may be. Unset, the hook doesn't look. */
   readonly personalSkills?: string;
 }
@@ -59,7 +61,7 @@ export async function sessionStart({ personalSkills, ...input }: SessionStartInp
   return { ...output, systemMessage: output.systemMessage === undefined ? warning : `${output.systemMessage}. ${warning}` };
 }
 
-async function installSkills({ kitDir, productDir, release, download }: Omit<SessionStartInput, "personalSkills">): Promise<SessionStartOutput> {
+async function installSkills({ kitDir, productDir, release, fetchSource }: Omit<SessionStartInput, "personalSkills">): Promise<SessionStartOutput> {
   try {
     const caller = await readFile(join(productDir, CALLER_WORKFLOW_PATH), "utf8").catch(() => null);
     if (caller === null) return notInstalled(`${CALLER_WORKFLOW_PATH} was not found`);
@@ -70,7 +72,7 @@ async function installSkills({ kitDir, productDir, release, download }: Omit<Ses
     }
 
     // The Operator is at the wheel, so the session gets every role's picks.
-    const { sha, extraSkills, errors } = await fetchSkills(kitDir, productDir, download, { install: "every" });
+    const { sha, extraSkills, errors } = await fetchSkills(kitDir, productDir, fetchSource, { install: "every" });
     const own = await installFabrikSkills(kitDir, productDir);
     // A gitignored copy an earlier release installed would still offer the dropped skill.
     for (const name of DROPPED_FABRIK_SKILLS.filter((dropped) => !own.includes(dropped) && !extraSkills.includes(dropped))) {

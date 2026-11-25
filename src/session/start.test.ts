@@ -4,14 +4,14 @@ import { describe, expect, it } from "vitest";
 import {
   aKitCheckout,
   aProductCheckout,
-  archiveUrl,
-  aSkillsArchive,
+  aSkillsSource,
   LOCKED_SHA,
   serving,
   servingEach,
+  sourceAt,
   tempDir,
 } from "../__fixtures__/skillsArchive.ts";
-import type { Download } from "../skills/fetch.ts";
+import type { FetchSource } from "../skills/fetch.ts";
 import { sessionStart } from "./start.ts";
 
 const callerAt = (release: string) => `jobs:
@@ -37,11 +37,11 @@ describe("The SessionStart hook in a cloud or local session", () => {
   it("installs the skills the pinned release locks, the same SHA Actions installs, and asks Claude Code to reload them", async () => {
     const kit = await kitWithLiveSkill();
     const product = await aProduct(callerAt("v1.2.3"));
-    const { urls, download } = serving(await aSkillsArchive({ "skills/engineering/grilling": "# grilling" }));
+    const { fetched, fetchSource } = serving(await aSkillsSource({ "skills/engineering/grilling": "# grilling" }));
 
-    const output = await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", download });
+    const output = await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", fetchSource });
 
-    expect(urls).toEqual([`https://codeload.github.com/mattpocock/skills/tar.gz/${LOCKED_SHA}`]);
+    expect(fetched).toEqual([{ repository: "mattpocock/skills", sha: LOCKED_SHA }]);
     expect(await readFile(join(product, ".claude/skills/grilling/SKILL.md"), "utf8")).toBe("# grilling");
     expect(output.hookSpecificOutput.hookEventName).toBe("SessionStart");
     expect(output.hookSpecificOutput.reloadSkills).toBe(true);
@@ -58,7 +58,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
       kitDir: kit,
       productDir: product,
       release: "v1.2.3",
-      download: serving(await aSkillsArchive()).download,
+      fetchSource: serving(await aSkillsSource()).fetchSource,
     });
 
     expect(await readFile(join(product, ".claude/skills/fabrik-live-design/SKILL.md"), "utf8")).toContain("# Live");
@@ -76,7 +76,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
       kitDir: kit,
       productDir: product,
       release: "v1.2.3",
-      download: serving(await aSkillsArchive()).download,
+      fetchSource: serving(await aSkillsSource()).fetchSource,
     });
 
     expect(await readFile(join(product, ".claude/skills/fabrik-pair/SKILL.md"), "utf8")).toContain("# Pair");
@@ -87,7 +87,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
     const kit = resolve(import.meta.dirname, "..", "..");
     const product = await aProduct(callerAt("v1.2.3"));
 
-    const output = await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", download: serving(await aSkillsArchive()).download });
+    const output = await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", fetchSource: serving(await aSkillsSource()).fetchSource });
 
     expect(await readFile(join(product, ".claude/skills/fabrik-visual-evidence/SKILL.md"), "utf8")).toBe(
       await readFile(join(kit, "skills/fabrik-visual-evidence/SKILL.md"), "utf8"),
@@ -101,7 +101,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
     const kit = resolve(import.meta.dirname, "..", "..");
     const product = await aProduct(callerAt("v1.2.3"));
 
-    const output = await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", download: serving(await aSkillsArchive()).download });
+    const output = await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", fetchSource: serving(await aSkillsSource()).fetchSource });
 
     expect(await readFile(join(product, ".claude/skills/fabrik-trial/SKILL.md"), "utf8")).toBe(await readFile(join(kit, "skills/fabrik-trial/SKILL.md"), "utf8"));
     expect(output.hookSpecificOutput.additionalContext.split("\n")).toContain(
@@ -114,7 +114,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
       kitDir: await aKitCheckout(LOCKED_SHA, { "skills/fabrik-pair/SKILL.md": "---\nname: fabrik-pair\n---\n# Pair" }),
       productDir: await aProduct(callerAt("v1.2.3")),
       release: "v1.2.3",
-      download: serving(await aSkillsArchive()).download,
+      fetchSource: serving(await aSkillsSource()).fetchSource,
     });
 
     expect(output.hookSpecificOutput.additionalContext).not.toContain("/fabrik-trial");
@@ -126,7 +126,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
       kitDir: await kitWithLiveSkill(),
       productDir: await aProduct(callerAt("v1.2.3")),
       release: "v1.2.3",
-      download: serving(await aSkillsArchive()).download,
+      fetchSource: serving(await aSkillsSource()).fetchSource,
     });
 
     expect(output.hookSpecificOutput.additionalContext).not.toContain("/fabrik-pair");
@@ -135,13 +135,13 @@ describe("The SessionStart hook in a cloud or local session", () => {
   it("still reloads skills when the right ones were already installed", async () => {
     const kit = await kitWithLiveSkill();
     const product = await aProduct(callerAt("v1.2.3"));
-    await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", download: serving(await aSkillsArchive()).download });
+    await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", fetchSource: serving(await aSkillsSource()).fetchSource });
 
     const output = await sessionStart({
       kitDir: kit,
       productDir: product,
       release: "v1.2.3",
-      download: serving(await aSkillsArchive()).download,
+      fetchSource: serving(await aSkillsSource()).fetchSource,
     });
 
     expect(output.hookSpecificOutput.reloadSkills).toBe(true);
@@ -150,11 +150,11 @@ describe("The SessionStart hook in a cloud or local session", () => {
   it("installs nothing and warns when the caller workflow pins a different release from the Kit it fetched", async () => {
     const kit = await kitWithLiveSkill();
     const product = await aProduct(callerAt("v1.2.4"));
-    const { urls, download } = serving(await aSkillsArchive());
+    const { fetched, fetchSource } = serving(await aSkillsSource());
 
-    const output = await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", download });
+    const output = await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", fetchSource });
 
-    expect(urls).toEqual([]);
+    expect(fetched).toEqual([]);
     expect(output.hookSpecificOutput.reloadSkills).toBe(false);
     expect(output.systemMessage).toBe(
       "Fabrik didn't install its skills: the hook fetched Fabrik v1.2.3, but .github/workflows/fabrik.yml pins v1.2.4",
@@ -171,7 +171,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
       kitDir: kit,
       productDir: product,
       release: "v1.2.3",
-      download: serving(await aSkillsArchive()).download,
+      fetchSource: serving(await aSkillsSource()).fetchSource,
     });
 
     expect(output.systemMessage).toBe(
@@ -184,7 +184,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
       kitDir: await kitWithLiveSkill(),
       productDir: await aProduct(null),
       release: "v1.2.3",
-      download: serving(await aSkillsArchive()).download,
+      fetchSource: serving(await aSkillsSource()).fetchSource,
     });
 
     expect(output.systemMessage).toBe(
@@ -192,19 +192,17 @@ describe("The SessionStart hook in a cloud or local session", () => {
     );
   });
 
-  it("warns rather than throwing when the download fails", async () => {
+  it("warns rather than throwing when the Base skills can't be fetched from github.com, naming the fetch", async () => {
     const output = await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: await aProduct(callerAt("v1.2.3")),
       release: "v1.2.3",
-      download: async (url) => {
-        throw new Error(`Downloading ${url} failed: 503`);
-      },
+      fetchSource: servingEach({}).fetchSource,
     });
 
     expect(output.hookSpecificOutput.reloadSkills).toBe(false);
     expect(output.systemMessage).toBe(
-      `Fabrik didn't install its skills: Downloading https://codeload.github.com/mattpocock/skills/tar.gz/${LOCKED_SHA} failed: 503`,
+      `Fabrik didn't install its skills: mattpocock/skills at 4ae2317 could not be fetched from github.com: fatal: remote error: upload-pack: not our ref ${LOCKED_SHA}`,
     );
   });
 });
@@ -213,9 +211,9 @@ const OPERATOR_SKILLS = "jrey8343/skills";
 const OPERATOR_SHA = "1111111111111111111111111111111111111111";
 const OTHER_SKILLS = "someone/skills";
 const OTHER_SHA = "2222222222222222222222222222222222222222";
-const BASE_URL = archiveUrl("mattpocock/skills", LOCKED_SHA);
-const OPERATOR_URL = archiveUrl(OPERATOR_SKILLS, OPERATOR_SHA);
-const OTHER_URL = archiveUrl(OTHER_SKILLS, OTHER_SHA);
+const BASE = sourceAt("mattpocock/skills", LOCKED_SHA);
+const OPERATOR = sourceAt(OPERATOR_SKILLS, OPERATOR_SHA);
+const OTHER = sourceAt(OTHER_SKILLS, OTHER_SHA);
 const PINS = [
   { repository: OPERATOR_SKILLS, sha: OPERATOR_SHA },
   { repository: OTHER_SKILLS, sha: OTHER_SHA },
@@ -223,12 +221,12 @@ const PINS = [
 
 async function upstream() {
   return {
-    [BASE_URL]: await aSkillsArchive({ "skills/engineering/grilling": "# grilling" }),
-    [OPERATOR_URL]: await aSkillsArchive({
+    [BASE]: await aSkillsSource({ "skills/engineering/grilling": "# grilling" }),
+    [OPERATOR]: await aSkillsSource({
       "skills/modelling/event-storming": "# event-storming",
       "skills/modelling/deciders": "# deciders",
     }),
-    [OTHER_URL]: await aSkillsArchive({ "skills/review/threat-model": "# threat-model" }),
+    [OTHER]: await aSkillsSource({ "skills/review/threat-model": "# threat-model" }),
   };
 }
 
@@ -260,7 +258,7 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       kitDir: await kitWithLiveSkill(),
       productDir: product,
       release: "v1.2.3",
-      download: servingEach(await upstream()).download,
+      fetchSource: servingEach(await upstream()).fetchSource,
     });
 
     expect(await installedFolders(product)).toEqual([
@@ -286,7 +284,7 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       kitDir: await kitWithLiveSkill(),
       productDir: product,
       release: "v1.2.3",
-      download: servingEach(await upstream()).download,
+      fetchSource: servingEach(await upstream()).fetchSource,
     });
 
     expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
@@ -302,31 +300,31 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       kitDir: await kitWithLiveSkill(),
       productDir: product,
       release: "v1.2.3",
-      download: servingEach(await upstream()).download,
+      fetchSource: servingEach(await upstream()).fetchSource,
     });
 
     expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
     expect(output.systemMessage).toMatch(/^Fabrik installed its Base and Kit skills, but not this repo's Extra skills: .*roles\.design\.skills\[0\]/);
   });
 
-  it("warns when an Extra skills source can't be downloaded, and still installs the Base and Kit skills", async () => {
+  it("warns when an Extra skills source can't be fetched from github.com, and still installs the Base and Kit skills", async () => {
     const product = await aProductWithPicks(PINS, {
       design: ["jrey8343/skills/event-storming"],
       review: ["someone/skills/threat-model"],
     });
-    const { [OTHER_URL]: _unreachable, ...reachable } = await upstream();
+    const { [OTHER]: _unreachable, ...reachable } = await upstream();
 
     const output = await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: product,
       release: "v1.2.3",
-      download: servingEach(reachable).download,
+      fetchSource: servingEach(reachable).fetchSource,
     });
 
     expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
     expect(output.hookSpecificOutput.reloadSkills).toBe(true);
     expect(output.systemMessage).toBe(
-      `Fabrik installed its Base and Kit skills, but not this repo's Extra skills: someone/skills at 2222222 could not be downloaded: Downloading ${OTHER_URL} failed: 404`,
+      `Fabrik installed its Base and Kit skills, but not this repo's Extra skills: someone/skills at 2222222 could not be fetched from github.com: fatal: remote error: upload-pack: not our ref ${OTHER_SHA}`,
     );
   });
 
@@ -338,27 +336,27 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       kitDir: await kitWithLiveSkill(),
       productDir: product,
       release: "v1.2.3",
-      download: servingEach(await upstream()).download,
+      fetchSource: servingEach(await upstream()).fetchSource,
     });
 
     expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
     expect(output.systemMessage).toBeUndefined();
   });
 
-  it("downloads nothing at a second session start when the pins and picks haven't changed", async () => {
+  it("fetches nothing at a second session start when the pins and picks haven't changed", async () => {
     const kit = await kitWithLiveSkill();
     const product = await aProductWithPicks(PINS, {
       design: ["jrey8343/skills/event-storming"],
       review: ["someone/skills/threat-model"],
     });
-    const start = async (download: Download) =>
-      sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", download });
-    await start(servingEach(await upstream()).download);
+    const start = async (fetchSource: FetchSource) =>
+      sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", fetchSource });
+    await start(servingEach(await upstream()).fetchSource);
     const again = servingEach(await upstream());
 
-    const output = await start(again.download);
+    const output = await start(again.fetchSource);
 
-    expect(again.urls).toEqual([]);
+    expect(again.fetched).toEqual([]);
     expect(output.systemMessage).toBeUndefined();
     expect(output.hookSpecificOutput.additionalContext).toContain("event-storming, threat-model");
   });
@@ -373,7 +371,7 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       kitDir: kit,
       productDir: product,
       release: "v1.2.3",
-      download: servingEach(await upstream()).download,
+      fetchSource: servingEach(await upstream()).fetchSource,
     });
     await mkdir(join(product, ".claude/skills/my-own-skill"));
     await writeFile(
@@ -386,7 +384,7 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       kitDir: kit,
       productDir: product,
       release: "v1.2.3",
-      download: servingEach(await upstream()).download,
+      fetchSource: servingEach(await upstream()).fetchSource,
     });
 
     expect(output.systemMessage).toBeUndefined();
@@ -400,7 +398,7 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       kitDir: await kitWithLiveSkill(),
       productDir: product,
       release: "v1.2.3",
-      download: servingEach(await upstream()).download,
+      fetchSource: servingEach(await upstream()).fetchSource,
     });
 
     expect(output.systemMessage).toBeUndefined();
@@ -432,7 +430,7 @@ describe("The SessionStart hook, now Setup is no longer a skill", () => {
       kitDir: await kitWithLiveSkill(),
       productDir: product,
       release: "v1.2.3",
-      download: serving(await aSkillsArchive({ "skills/engineering/grilling": "# grilling" })).download,
+      fetchSource: serving(await aSkillsSource({ "skills/engineering/grilling": "# grilling" })).fetchSource,
       personalSkills,
     });
 
@@ -450,7 +448,7 @@ describe("The SessionStart hook, now Setup is no longer a skill", () => {
       kitDir: await kitWithLiveSkill(),
       productDir: product,
       release: "v1.2.3",
-      download: servingEach(await upstream()).download,
+      fetchSource: servingEach(await upstream()).fetchSource,
       personalSkills,
     });
 
@@ -475,7 +473,7 @@ describe("The SessionStart hook, now Setup is no longer a skill", () => {
       kitDir: await kitWithLiveSkill(),
       productDir: await aProduct(callerAt("v1.2.3")),
       release: "v1.2.3",
-      download: serving(await aSkillsArchive()).download,
+      fetchSource: serving(await aSkillsSource()).fetchSource,
       personalSkills,
     });
 
@@ -491,7 +489,7 @@ describe("The SessionStart hook, now Setup is no longer a skill", () => {
       kitDir: await kitWithLiveSkill(),
       productDir: product,
       release: "v1.2.3",
-      download: serving(await aSkillsArchive({ "skills/engineering/grilling": "# grilling" })).download,
+      fetchSource: serving(await aSkillsSource({ "skills/engineering/grilling": "# grilling" })).fetchSource,
     });
 
     expect(await installedFolders(product)).toEqual(["fabrik-live-design", "grilling"]);
@@ -504,10 +502,10 @@ describe("The SessionStart hook, now Setup is no longer a skill", () => {
       kitDir: await kitWithLiveSkill(),
       productDir: product,
       release: "v1.2.3",
-      download: servingEach({
-        [BASE_URL]: await aSkillsArchive({ "skills/engineering/grilling": "# grilling" }),
-        [OPERATOR_URL]: await aSkillsArchive({ "skills/setup/fabrik-setup": "# the repo's own" }),
-      }).download,
+      fetchSource: servingEach({
+        [BASE]: await aSkillsSource({ "skills/engineering/grilling": "# grilling" }),
+        [OPERATOR]: await aSkillsSource({ "skills/setup/fabrik-setup": "# the repo's own" }),
+      }).fetchSource,
     });
 
     expect(await readFile(join(product, ".claude/skills/fabrik-setup/SKILL.md"), "utf8")).toBe("# the repo's own");
