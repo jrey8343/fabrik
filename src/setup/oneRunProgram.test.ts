@@ -1712,6 +1712,111 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect([...world.secrets]).toEqual(["STRIPE_KEY"]);
       expect((await setupOnce(world)).said).toContain("Nothing to do: this repo's Fabrik install is complete.");
     });
+
+    const STAY =
+      "- The repo-level Actions secrets FABRIK_OP_AGENT_TOKEN, FABRIK_OP_IMPLEMENT_TOKEN and FABRIK_OP_PUSH_TOKEN stay for now, since the Kit main pins names no environment and reads them. " +
+      "Once the setup PR is merged, run setup again and it deletes them: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
+    const OLD_ACCOUNTS =
+      "- Once the repo-level secrets are deleted, delete the old service accounts fabrik-acme-clinic-agent, fabrik-acme-clinic-implement and fabrik-acme-clinic-push on 1Password's site. " +
+      "Their tokens still work until you do, though they sit nowhere on GitHub.";
+    /** What a run said before it applied anything, and its last lines, which follow the wizard's cleared screen. */
+    const underThePlan = (said: string[]) => said.slice(0, said.indexOf(`On ${BRANCH}.`));
+    const lastLines = (said: string[]) => said.slice(said.lastIndexOf("What setup did:"));
+
+    it("says the repo-level secrets stay on the first run, and names the three old accounts on the run that deletes them, under the plan and again in its last lines, and on no run after", async () => {
+      const world = aWorld();
+      await onTheKitAt(world, "v0.9.1");
+
+      const first = await setupOnce(world);
+
+      expect(underThePlan(first.said)).toContain(STAY);
+      expect(lastLines(first.said)).toContain(STAY);
+      expect(world.prs[0]!.body.split("\n")).toContain(STAY);
+      expect(first.said).not.toContain(OLD_ACCOUNTS);
+
+      mergeTheSetupPr(world);
+      const second = await setupOnce(world);
+
+      expect(underThePlan(second.said)).toContain(OLD_ACCOUNTS);
+      expect(lastLines(second.said).filter((line) => line.includes("old service account"))).toEqual([OLD_ACCOUNTS]);
+      expect(second.said).not.toContain(STAY);
+
+      const third = await setupOnce(world);
+
+      expect(third.said.filter((line) => /repo-level|old service account/.test(line))).toEqual([]);
+    });
+
+    it("with only one Kit secret at repo level, deletes only it, names only its role's old account, and leaves every other repo-level secret", async () => {
+      const world = aWorld();
+      await setupOnce(world);
+      mergeTheSetupPr(world);
+      const others = ["STRIPE_KEY", "FABRIK_OP_PUSH_TOKEN_OLD", "OP_PUSH_TOKEN"];
+      for (const name of ["FABRIK_OP_PUSH_TOKEN", ...others]) world.secrets.add(name);
+
+      const { code, said, log } = await setupOnce(world);
+
+      expect(code).toBe(0);
+      expect(planned(said)).toEqual(["- delete the repo-level Actions secret FABRIK_OP_PUSH_TOKEN: the Kit main pins reads the fabrik environment's"]);
+      expect(lastLines(said).filter((line) => line.includes("old service account"))).toEqual([
+        "- Once the repo-level secret is deleted, delete the old service account fabrik-acme-clinic-push on 1Password's site. Its token still works until you do, though it sits nowhere on GitHub.",
+      ]);
+      expect(deleted(log)).toEqual(["gh secret delete FABRIK_OP_PUSH_TOKEN"]);
+      expect([...world.secrets]).toEqual(others);
+      expect([...environmentOf(world)!.secrets]).toEqual(TOKENS);
+    });
+
+    it("on a repo with no Kit secret at repo level, deletes nothing and says nothing of it, on a first run and on a working install", async () => {
+      const world = aWorld();
+      world.secrets.add("STRIPE_KEY");
+
+      const first = await setupOnce(world);
+      mergeTheSetupPr(world);
+      const second = await setupOnce(world);
+
+      expect(second.said).toContain("Nothing to do: this repo's Fabrik install is complete.");
+      expect([...first.said, ...second.said, world.prs[0]!.body].join("\n")).not.toMatch(/repo-level Actions secret|old service account/);
+      expect([...deleted(first.log), ...deleted(second.log)]).toEqual([]);
+      expect([...world.secrets]).toEqual(["STRIPE_KEY"]);
+    });
+
+    it("leaves the repo-level secrets in place when the step that makes a new account stops, though the default branch's Kit names the environment", async () => {
+      const world = aWorld();
+      await setupOnce(world);
+      mergeTheSetupPr(world);
+      // The environment lost one token, and the three still sit at repo level.
+      const environment = environmentOf(world)!;
+      environment.secrets.delete("FABRIK_OP_IMPLEMENT_TOKEN");
+      for (const name of TOKENS) world.secrets.add(name);
+      // Someone adds a rule on github.com once the Operator has said yes, after Setup read the environment.
+      const during = (line: string) => {
+        if (line === `git switch -C ${BRANCH}`) environment.rules.push({ id: 201, name: "release/*", type: "branch" });
+      };
+
+      const { code, said, complaints, log } = await setupOnce(world, { during });
+
+      expect(planned(said)).toEqual([
+        '- create the read-only service account "fabrik-acme-clinic-implement-env" (reads "Fabrik", "Fabrik Sandbox · clinic") and store it as FABRIK_OP_IMPLEMENT_TOKEN in the fabrik environment',
+        ...DELETES,
+      ]);
+      expect(code).toBe(1);
+      expect(complaints).toEqual(["The fabrik environment on acme/clinic isn't held to main alone, so Setup stored no token in it. Run setup again."]);
+      expect(deleted(log)).toEqual([]);
+      expect([...world.secrets]).toEqual(TOKENS);
+    });
+
+    it("with --plan, names the deletions and the old accounts, and deletes nothing", async () => {
+      const world = aWorld();
+      await setupOnce(world);
+      mergeTheSetupPr(world);
+      for (const name of TOKENS) world.secrets.add(name);
+
+      const { code, said, log } = await setupOnce(world, { args: [...FLAGS, "--plan"] });
+
+      expect(code).toBe(0);
+      expect(said).toEqual(expect.arrayContaining([...DELETES, OLD_ACCOUNTS]));
+      expect(deleted(log)).toEqual([]);
+      expect([...world.secrets]).toEqual(TOKENS);
+    });
   });
 
   describe("holding admins to the default branch's rules", () => {
