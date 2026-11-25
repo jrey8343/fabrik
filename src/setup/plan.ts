@@ -7,6 +7,7 @@ import { KIT_ENVIRONMENT } from "../kit/environment.ts";
 import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, type KitConfigResult, type ProductionConfig, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH, type StagingConfig } from "../kit/config.ts";
 import { ALL_LABELS, type Label as LoopLabel, LOOP_LABELS, READY_FOR_AGENT } from "../loop/labels.ts";
 import { isTimeZone } from "../loop/readable.ts";
+import { OPERATOR_SESSION_PATH } from "../kit/operatorSession.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "../kit/runStore.ts";
 import { setupCommand } from "./finish.ts";
 import { withMember } from "./json.ts";
@@ -72,6 +73,13 @@ export interface ProductState {
    * report. Empty for a checkout with no such folder.
    */
   readonly workflows: Readonly<Record<string, string>>;
+  /**
+   * Each environment a job of `roleJobs` names, read once each for Setup's
+   * report: which refs it lets through, or null when the repo has none of that
+   * name or GitHub refused the read. An environment missing here is read as
+   * null: either way it isn't held to the default branch alone.
+   */
+  readonly roleEnvironments: Readonly<Record<string, EnvironmentPolicy | null>>;
 }
 
 /**
@@ -491,10 +499,62 @@ const KIT_SECRETS: readonly string[] = KIT_ROLES.map((role) => KIT_TOKENS[role])
  * the Kit's rule for a credential that can reach production. The second is
  * production's environment, when the Kit config names one. The third is each
  * workflow a session can start that holds a role, and whether Kit config
- * holds it (Spec #917). Spec #918 adds its parts' lines after these.
+ * holds it (Spec #917). The last two are on what an Operator session could
+ * reach (Spec #918): each job that can take a role off the default branch,
+ * and a named Session environment with no `.fabrik/operator-session.md`.
  */
 function setupReport(state: ProductState, config: KitConfigResult): string[] {
-  return [...ownSecrets(state), ...productionHeld(state), ...heldWorkflowLines(state, config)];
+  return [...ownSecrets(state), ...productionHeld(state), ...heldWorkflowLines(state, config), ...offDefaultBranchRoles(state), ...unsaidSessionEnvironment(state, config)];
+}
+
+/**
+ * The report's line on a Session environment Kit config names, when the
+ * checkout has no `.fabrik/operator-session.md` to say what it attaches. The
+ * Kit config is the one the Required checks read, and an invalid one gives no
+ * line: its errors are a note of their own.
+ */
+function unsaidSessionEnvironment(state: ProductState, config: KitConfigResult): string[] {
+  const name = config.ok ? config.config.console.sessionEnvironment : null;
+  if (name === null || file(state, OPERATOR_SESSION_PATH) !== null) return [];
+  return [`Kit config names the Session environment \`${printable(name)}\`, and the repo has no ${OPERATOR_SESSION_PATH}, so its Operator sessions take it to attach nothing.`];
+}
+
+/** A job that asks for `id-token: write`, by its workflow's file name, its own name and the environment it names, or null for none. */
+export interface RoleJob {
+  readonly file: string;
+  readonly job: string;
+  readonly environment: string | null;
+}
+
+/**
+ * Each job of the checkout's workflows that asks for `id-token: write`,
+ * dispatchable or not, in the order of the files' names, then of the jobs in
+ * each. The Kit's own caller workflow is left out by name: its jobs ask for
+ * `id-token: write` in every repo. Gather reads the environments these name,
+ * and the report says which of them can take a role off the default branch.
+ */
+export function roleJobs(workflows: Readonly<Record<string, string>>): RoleJob[] {
+  return Object.keys(workflows)
+    .filter((file) => file !== CALLER_FILE)
+    .toSorted()
+    .flatMap((file) => workflowRolesOf(workflows[file]!).jobs.flatMap(({ name, idToken, environment }) => (idToken ? [{ file, job: name, environment }] : [])));
+}
+
+/**
+ * The report's lines on each job that can take a role off the default branch:
+ * one of `roleJobs` that names no environment, so a run on any branch can, or
+ * that names one not held to the default branch alone, by the test the
+ * `fabrik` environment is held to (environmentHeld). One the repo doesn't
+ * have isn't held. Setup can't read a role's trust, so it judges none.
+ */
+function offDefaultBranchRoles({ workflows, roleEnvironments, repo: { defaultBranch } }: ProductState): string[] {
+  return roleJobs(workflows).flatMap(({ file, job, environment }) => {
+    const named = `.github/workflows/${printable(file)}: its job \`${printable(job)}\` asks for id-token: write`;
+    if (environment === null) return [`${named} and names no environment, so a run on any branch can take a role this repo's trust allows.`];
+    const policy = Object.hasOwn(roleEnvironments, environment) ? (roleEnvironments[environment] ?? null) : null;
+    if (environmentHeld(policy, defaultBranch)) return [];
+    return [`${named} and names the environment \`${printable(environment)}\`, which isn't held to the default branch alone, so a run on another branch can take its role.`];
+  });
 }
 
 /** Text the Product repo wrote, with no control characters, such as a terminal escape, for the Operator's terminal to print. */
@@ -1002,6 +1062,7 @@ export function setupPaths(kit: SetupKit): readonly string[] {
     DEPENDABOT_PATH,
     KIT_CONFIG_PATH,
     SKILLS_SOURCES_LOCK_PATH,
+    OPERATOR_SESSION_PATH,
     ...Object.keys(kit.templates.docsAgents).map((name) => `docs/agents/${name}`),
     "AGENTS.md",
     "CLAUDE.md",

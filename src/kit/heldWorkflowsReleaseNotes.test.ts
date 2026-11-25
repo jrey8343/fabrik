@@ -79,9 +79,11 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Held workflows release notes, wh
       kit = await loadSetupKit(KIT, "v9.0.0");
     });
     const noAction = section(notes, "What changes with no action");
-    /** The report's lines after the one on the repo-level secrets, for a repo holding the two workflows and this Kit config. */
+    /** The report's lines after the one on the repo-level secrets, for a repo holding the two workflows and this Kit config, but those on a job that can take a role off the default branch, which are #918's. */
     const lines = (config: string) =>
-      planSetup(aCleanProduct({ workflows: { "deploy.yml": DEPLOY, "promote.yml": PROMOTE }, files: { ".fabrik/config.json": config } }), kit).report.slice(1);
+      planSetup(aCleanProduct({ workflows: { "deploy.yml": DEPLOY, "promote.yml": PROMOTE }, files: { ".fabrik/config.json": config } }), kit)
+        .report.slice(1)
+        .filter((line) => !line.startsWith(".github/workflows/"));
 
     it("is quoted as planSetup gives it, for a workflow Kit config lists and one it doesn't", () => {
       expect(textBlocks(noAction)).toEqual([lines(LISTING).join("\n")]);
