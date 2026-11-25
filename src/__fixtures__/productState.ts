@@ -5,6 +5,7 @@ export function aCleanProduct(overrides: Partial<ProductState> = {}): ProductSta
   return {
     repo: { owner: "acme", name: "clinic", defaultBranch: "main", inOrganization: false },
     files: {},
+    defaultBranchCaller: null,
     labels: [],
     secrets: [],
     environment: null,

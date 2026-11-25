@@ -13,6 +13,7 @@ import { resolveKitConfig } from "../kit/config.ts";
 import { type Env, type Run, spawnRun } from "./exec.ts";
 import { runSetup } from "./program.ts";
 import type { Prompt } from "./prompt.ts";
+import { pinCaller } from "./shims.ts";
 import { WIZARD_SECOND_SUBSCRIPTION_ENV } from "./wizard.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
@@ -1623,7 +1624,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect([...world.secrets]).toEqual([]);
     });
 
-    it("on a repo whose three tokens sit at repo level only, makes three new accounts in the environment and leaves the repo-level secrets, and the next run makes none", async () => {
+    it("on a repo whose three tokens sit at repo level only, makes three new accounts in the environment and leaves the repo-level secrets", async () => {
       const world = aWorld();
       const repoLevel = [...TOKENS, "STRIPE_KEY"];
       for (const name of repoLevel) world.secrets.add(name);
@@ -1632,14 +1633,6 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
 
       expect(first.complaints).toEqual([]);
       expect(made(first.log).map((line) => line.split(" ")[3])).toEqual(["fabrik-acme-clinic-agent-env", "fabrik-acme-clinic-implement-env", "fabrik-acme-clinic-push-env"]);
-      expect([...environmentOf(world)!.secrets]).toEqual(TOKENS);
-      expect([...world.secrets]).toEqual(repoLevel);
-
-      mergeTheSetupPr(world);
-      const second = await setupOnce(world);
-
-      expect(second.said).toContain("Nothing to do: this repo's Fabrik install is complete.");
-      expect(made(second.log)).toEqual([]);
       expect([...environmentOf(world)!.secrets]).toEqual(TOKENS);
       expect([...world.secrets]).toEqual(repoLevel);
     });
@@ -1672,6 +1665,52 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(log.filter((line) => line.startsWith("gh secret set "))).toEqual(["gh secret set FABRIK_OP_IMPLEMENT_TOKEN --env fabrik"]);
       expect([...environmentOf(world)!.secrets]).toEqual(["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_PUSH_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN"]);
       expect([...world.secrets]).toEqual(TOKENS);
+    });
+  });
+
+  describe("the repo-level tokens, deleted once the default branch's Kit names the fabrik environment (ADR-0004)", () => {
+    const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
+    const DELETES = TOKENS.map((name) => `- delete the repo-level Actions secret ${name}: the Kit main pins reads the fabrik environment's`);
+    /** Each service account the run made, and each repo-level secret it deleted, as op and gh were asked. */
+    const made = (log: string[]) => log.filter((line) => line.startsWith("op service-account create "));
+    const deleted = (log: string[]) => log.filter((line) => line.startsWith("gh secret delete "));
+    /** The steps of the plan Setup showed, before it applied any. */
+    const planned = (said: string[]) => said.slice(said.indexOf("Setup would:") + 1, said.indexOf("", said.indexOf("Setup would:")));
+
+    /** A repo already on the Kit: its default branch's caller workflow pins this release, and its three tokens sit at repo level, beside a secret of its own. */
+    async function onTheKitAt(world: World, release: string): Promise<void> {
+      const caller = ".github/workflows/fabrik.yml";
+      await mkdir(join(checkout, ".github/workflows"), { recursive: true });
+      await writeFile(join(checkout, caller), pinCaller(await readFile(join(KIT_DIR, "templates/fabrik.yml"), "utf8"), release));
+      git("add", caller);
+      git("commit", "-q", "-m", `Fabrik ${release}`);
+      git("push", "-q", "origin", "main");
+      for (const name of [...TOKENS, "STRIPE_KEY"]) world.secrets.add(name);
+    }
+
+    it("over two runs with the setup PR merged between them, moves the three tokens: the first makes the environment and three new accounts and deletes nothing, the second deletes the three repo-level secrets and makes no account", async () => {
+      const world = aWorld();
+      await onTheKitAt(world, "v0.9.1");
+
+      const first = await setupOnce(world);
+
+      expect(first.complaints).toEqual([]);
+      expect(planned(first.said)[0]).toBe("- create the fabrik environment, held to main alone: only a run of main is given its secrets");
+      expect(made(first.log).map((line) => line.split(" ")[3])).toEqual(["fabrik-acme-clinic-agent-env", "fabrik-acme-clinic-implement-env", "fabrik-acme-clinic-push-env"]);
+      expect(first.said.filter((line) => line.includes("delete the repo-level"))).toEqual([]);
+      expect(deleted(first.log)).toEqual([]);
+      expect([...world.secrets]).toEqual([...TOKENS, "STRIPE_KEY"]);
+
+      mergeTheSetupPr(world);
+      const second = await setupOnce(world);
+
+      expect(second.complaints).toEqual([]);
+      expect(planned(second.said)).toEqual(DELETES);
+      expect(made(second.log)).toEqual([]);
+      expect(deleted(second.log)).toEqual(TOKENS.map((name) => `gh secret delete ${name}`));
+      expect([...environmentOf(world)!.secrets]).toEqual(TOKENS);
+      expect([...world.secrets]).toEqual(["STRIPE_KEY"]);
+      expect((await setupOnce(world)).said).toContain("Nothing to do: this repo's Fabrik install is complete.");
     });
   });
 

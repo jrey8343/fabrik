@@ -1,6 +1,7 @@
 // What setup reads before planning, with the Operator's own gh and op: the
 // Product repo's files, labels, secrets, fabrik environment, branch protection
 // and Merge gate, the 1Password account's vaults, and the fabrik-runs store.
+// With git it reads the caller workflow the default branch holds.
 // It only reads.
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -21,14 +22,26 @@ import {
   type ProductState,
   type RunStoreState,
 } from "./plan.ts";
-import { DEPENDABOT_PATH, STORE_CALLER_PATH } from "./shims.ts";
+import { CALLER_PATH, DEPENDABOT_PATH, STORE_CALLER_PATH } from "./shims.ts";
 
-/** Everything planSetup needs, for the repo the checks found. */
-export async function gatherState(run: Run, productDir: string, repo: ProductState["repo"], paths: readonly string[]): Promise<ProductState> {
+/**
+ * Everything planSetup needs, for the repo the checks found.
+ * `defaultBranchTip` is the default branch's tip on origin, as they found it.
+ */
+export async function gatherState(
+  run: Run,
+  productDir: string,
+  repo: ProductState["repo"],
+  paths: readonly string[],
+  defaultBranchTip: string,
+): Promise<ProductState> {
   const cwd = productDir;
   const files = Object.fromEntries(
     await Promise.all(paths.map(async (path) => [path, await readFile(join(productDir, path), "utf8").catch(() => null)] as const)),
   );
+  // The checkout's own copy can be the setup branch's, so the default branch's is read from its tip.
+  const shown = await run("git", ["show", `${defaultBranchTip}:${CALLER_PATH}`], { cwd });
+  const defaultBranchCaller = shown.code === 0 ? shown.stdout : null;
   const names = (json: string) => (JSON.parse(json) as { name: string }[]).map((item) => item.name);
   const labels = names(await ok(run, "gh", ["label", "list", "--limit", "1000", "--json", "name"], { cwd }));
   const secrets = names(await ok(run, "gh", ["secret", "list", "--json", "name"], { cwd }));
@@ -41,7 +54,7 @@ export async function gatherState(run: Run, productDir: string, repo: ProductSta
     gatherStore(run, cwd),
   ]);
   const readyForAgent = await gatherReadyForAgent(run, cwd, labels);
-  return { repo, files, labels, secrets, environment, vaults, fabrikItems, protection, mergeGate, store, readyForAgent };
+  return { repo, files, defaultBranchCaller, labels, secrets, environment, vaults, fabrikItems, protection, mergeGate, store, readyForAgent };
 }
 
 /**

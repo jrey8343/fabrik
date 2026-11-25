@@ -86,6 +86,9 @@ export async function apply(run: Run, action: SetupAction, productDir: string, r
       await ok(run, "gh", ["secret", "set", action.secret, ...where], { cwd, input: token });
       return;
     }
+    case "delete-repo-secret":
+      await ok(run, "gh", ["secret", "delete", action.secret], { cwd });
+      return;
     case "create-run-store":
       await ok(
         run,
@@ -153,6 +156,8 @@ export function describeAction(action: SetupAction): string {
       if (action.environment === undefined) return `${account} and store it as the Actions secret ${action.secret}${repo}`;
       return `${account} and store it as ${action.secret} in the ${action.environment} environment${repo}`;
     }
+    case "delete-repo-secret":
+      return `delete the repo-level Actions secret ${action.secret}: the Kit ${action.branch} pins reads the ${action.environment} environment's`;
     case "protect-branch":
       return `protect ${action.branch}: ${[...protectionChanges(action.found ?? UNPROTECTED, action.protection), "every other setting stays as it is"].join("; ")}`;
     case "restrict-default-branch":

@@ -12,6 +12,7 @@ import { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
 import { describeAction } from "./apply.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
 import { type EnvironmentPolicy, type EnvironmentState, environmentHeld, holdEnvironment, type ProductState, type SetupAction, planSetup, setupPaths } from "./plan.ts";
+import { pinCaller } from "./shims.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
 let kit: SetupKit;
@@ -659,6 +660,37 @@ describe("Service accounts, their tokens the secrets of the fabrik environment (
       'create the read-only service account "fabrik-acme-clinic-implement-env" (reads "Fabrik", "Fabrik Sandbox · clinic") and store it as FABRIK_OP_IMPLEMENT_TOKEN in the fabrik environment',
       'create the read-only service account "fabrik-acme-clinic-push-env" (reads "Fabrik App") and store it as FABRIK_OP_PUSH_TOKEN in the fabrik environment',
     ]);
+  });
+});
+
+describe("The repo-level tokens, deleted once the default branch's Kit names the fabrik environment (ADR-0004)", () => {
+  const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
+  /** A fabrik environment held to main, with these secrets. */
+  const held = (secrets: readonly string[]): EnvironmentState => ({ branches: "selected", rules: [{ id: 1, name: "main", type: "branch" }], secrets });
+  /** The caller workflow as Setup writes it at a release. */
+  const callerAt = (release: string) => pinCaller(kit.templates.caller, release);
+  const deletions = (actions: readonly SetupAction[]) => actions.flatMap((a) => (a.kind === "delete-repo-secret" ? [a] : []));
+  const accounts = (actions: readonly SetupAction[]) => actions.flatMap((a) => (a.kind === "create-service-account" ? [a] : []));
+
+  it("once the setup PR is merged, plans deleting each of the three at repo level, names the three old accounts, and plans no new account", () => {
+    const moved = aCleanProduct({ secrets: [...TOKENS, "STRIPE_KEY"], environment: held(TOKENS), defaultBranchCaller: callerAt("v1.4.2") });
+
+    const { actions, notes } = planSetup(moved, kit);
+
+    expect(deletions(actions)).toEqual([
+      { kind: "delete-repo-secret", secret: "FABRIK_OP_AGENT_TOKEN", account: "fabrik-acme-clinic-agent", environment: "fabrik", branch: "main" },
+      { kind: "delete-repo-secret", secret: "FABRIK_OP_IMPLEMENT_TOKEN", account: "fabrik-acme-clinic-implement", environment: "fabrik", branch: "main" },
+      { kind: "delete-repo-secret", secret: "FABRIK_OP_PUSH_TOKEN", account: "fabrik-acme-clinic-push", environment: "fabrik", branch: "main" },
+    ]);
+    expect(deletions(actions).map(describeAction)).toEqual([
+      "delete the repo-level Actions secret FABRIK_OP_AGENT_TOKEN: the Kit main pins reads the fabrik environment's",
+      "delete the repo-level Actions secret FABRIK_OP_IMPLEMENT_TOKEN: the Kit main pins reads the fabrik environment's",
+      "delete the repo-level Actions secret FABRIK_OP_PUSH_TOKEN: the Kit main pins reads the fabrik environment's",
+    ]);
+    expect(notes).toContain(
+      "Once the repo-level secrets are deleted, delete the old service accounts fabrik-acme-clinic-agent, fabrik-acme-clinic-implement and fabrik-acme-clinic-push on 1Password's site. Their tokens still work until you do, though they sit nowhere on GitHub.",
+    );
+    expect(accounts(actions)).toEqual([]);
   });
 });
 

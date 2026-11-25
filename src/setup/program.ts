@@ -114,7 +114,7 @@ export async function runSetup(argv: readonly string[], io: SetupIo): Promise<nu
     const unreachable = await checkOp(run, productDir, env, chosen.account.name);
     if (unreachable !== null) return stop(io, unreachable);
 
-    const state = await gatherState(run, productDir, checked.repo, paths);
+    const state = await gatherState(run, productDir, checked.repo, paths, checked.origin.defaultBranch);
     // The default branch the checks found has no Kit config, so one here is the starter setup wrote on its branch.
     const config = await run("git", ["cat-file", "-e", `${checked.origin.defaultBranch}:${KIT_CONFIG_PATH}`], { cwd: productDir });
     const wroteStarter = config.code !== 0;
@@ -266,7 +266,7 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
     },
     afterWizard: async () => {
       // Read again and planned again: a second Subscription's token the wizard stored gets its subscriptions line from this plan.
-      const now = await gatherState(run, cwd, repo, paths);
+      const now = await gatherState(run, cwd, repo, paths, origin.defaultBranch);
       const appItems = await appVaultItems(run, cwd, now);
       const earlierPr = (await openSetupPr(run, cwd, branch))?.body ?? null;
       gapsAfter = wizardGaps(now, answers, appItems);
