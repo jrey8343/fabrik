@@ -131,3 +131,33 @@ describe("The glossary on the Console check (#924)", () => {
     }
   });
 });
+
+const README_COVERED_REPO =
+  "On a Product repo whose Kit config names the Console's App (`console.app_id`, see [Kit config](#kit-config)), the Merge gate holds every merge to the Console (ADR-0019). Setup requires one more check there, the Console check: a check run named `Merge from the Console`, expected from the Console's own GitHub App. The Console makes it when you tap Merge, on the head the screen named, and merges naming that head. Until then every open PR shows it on github.com as expected and not yet reported, and GitHub refuses a merge from github.com, `gh`, an Operator session or anywhere else, the PR's Required checks green or not. It is not a Required check: the Kit's read of the branch's list leaves it out by name, so the Review never waits on it, the Kit never re-runs it, and no Standing names it as in the way. Where the Kit config doesn't name the App, Setup requires no Console check, and a repo whose branch doesn't require it merges as above.";
+
+const README_WAY_PAST =
+  "The way past the Merge gate is by hand, on github.com. In the default branch's protection settings, switch off \"Do not allow bypassing the above settings\", or take the check off the required list; merge; then run Setup, which puts enforcement back. That's how to merge past a Required check on purpose, and the only way out when a Required check can never report again, as after a CI job is renamed, where the PR that corrects `sandbox.checks` in the Kit config can't itself go green while the old name is still required. On a repo the Console covers it is also the only way to merge while the Console is down: there is no second way past. Setup adds Required checks and never takes one off, so a check that has gone for good is taken off the branch's required list by hand: switching enforcement off alone would leave it still required once Setup has put enforcement back, and no PR would merge.";
+
+describe("The README's Merge gate on the Console check (#924)", () => {
+  const readme = read("README.md");
+  const section = linesOf(readme.split("\n## Merge gate\n")[1]?.split("\n## ")[0] ?? "");
+
+  it("adds the paragraph on a covered repo after the list of the Operator's moves, straight before the way past", () => {
+    const lastMove = section.findLastIndex((line) => line.startsWith("- **"));
+
+    expect(section[lastMove]).toMatch(/^- \*\*Send it back\*\*/);
+    expect(section[lastMove + 1]).toBe(README_COVERED_REPO);
+    expect(section[lastMove + 2]).toBe(README_WAY_PAST);
+  });
+
+  it("says the by-hand way past is also the only way to merge a covered repo while the Console is down", () => {
+    expect(section.filter((line) => line.startsWith("The way past the Merge gate is by hand"))).toEqual([README_WAY_PAST]);
+  });
+
+  it("names the check and the key as the code does, and links a Kit config section that documents the key", () => {
+    expect(README_COVERED_REPO).toContain(`a check run named \`${CONSOLE_CHECK}\``);
+    expect(README_COVERED_REPO).toContain("(`console.app_id`, see [Kit config](#kit-config))");
+    expect(readme).toContain("\n## Kit config\n");
+    expect(readme.slice(readme.indexOf("\n## Kit config\n"))).toContain("- `console.app_id` (default unset)");
+  });
+});
