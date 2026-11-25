@@ -921,16 +921,12 @@ function runStore(store: RunStoreState, kit: SetupKit, answers: SetupAnswers, no
   // on a run that found the store's caller pinning a Kit that names the environment, never on the run that writes that caller.
   const atRepoLevel = store.secrets.includes(STORE_SECRET) ? [{ secret: STORE_SECRET, account: STORE_OLD_ACCOUNT }] : [];
   const callerAsFirstRead = context.storeCallerAtStart !== undefined ? context.storeCallerAtStart : (store.files[STORE_CALLER_PATH] ?? null);
-  if (store.defaultBranch !== null && kitNamesEnvironment(callerAsFirstRead, kit.release)) {
-    const deletions = deleteRepoSecrets(atRepoLevel, KIT_ENVIRONMENT, store.defaultBranch, RUN_STORE_REPO);
-    actions.push(...deletions);
-    notes.push(...oldAccountsNotes(deletions));
-  } else if (atRepoLevel.length > 0) {
-    notes.push(
-      `${RUN_STORE_REPO}: The repo-level Actions secret ${STORE_SECRET} stays for now, since the caller workflow setup found there pins no Kit that names the ${KIT_ENVIRONMENT} environment. ` +
-        `Once setup has written the one that does, run setup again and it deletes it: ${setupCommand(kit.release)}`,
-    );
-  }
+  const stays = () =>
+    `${RUN_STORE_REPO}: The repo-level Actions secret ${STORE_SECRET} stays for now, since the caller workflow setup found there pins no Kit that names the ${KIT_ENVIRONMENT} environment. ` +
+    `Once setup has written the one that does, run setup again and it deletes it: ${setupCommand(kit.release)}`;
+  const repoLevel = repoLevelTokens(atRepoLevel, { caller: callerAsFirstRead, branch: store.defaultBranch, release: kit.release, repo: RUN_STORE_REPO, stays });
+  actions.push(...repoLevel.actions);
+  notes.push(...repoLevel.notes);
   return { first, actions };
 }
 
@@ -1099,20 +1095,39 @@ function secrets(state: ProductState, kit: SetupKit, notes: string[]): SetupActi
   const atRepoLevel = roles
     .filter(({ secret }) => state.secrets.includes(secret))
     .map(({ role, secret }) => ({ secret, account: `fabrik-${state.repo.owner}-${state.repo.name}-${role}` }));
-  if (kitNamesEnvironment(state.defaultBranchCaller, kit.release)) {
-    const deletions = deleteRepoSecrets(atRepoLevel, KIT_ENVIRONMENT, state.repo.defaultBranch);
-    actions.push(...deletions);
-    notes.push(...oldAccountsNotes(deletions));
-  } else if (atRepoLevel.length > 0) {
-    // The Kit the default branch pins names no environment, so its jobs are given the repo-level values, on every ref (#846).
+  // The Kit the default branch pins names no environment, so its jobs are given the repo-level values, on every ref (#846).
+  const stays = () => {
     const one = atRepoLevel.length === 1;
     const them = one ? "it" : "them";
-    notes.push(
+    return (
       `The repo-level Actions ${one ? "secret" : "secrets"} ${listed(atRepoLevel.map(({ secret }) => secret))} ${one ? "stays" : "stay"} for now, since the Kit ${state.repo.defaultBranch} pins names no environment and reads ${them}. ` +
-        `Once the setup PR is merged, run setup again and it deletes ${them}: ${setupCommand(kit.release)}`,
+      `Once the setup PR is merged, run setup again and it deletes ${them}: ${setupCommand(kit.release)}`
     );
-  }
+  };
+  const repoLevel = repoLevelTokens(atRepoLevel, { caller: state.defaultBranchCaller, branch: state.repo.defaultBranch, release: kit.release, stays });
+  actions.push(...repoLevel.actions);
+  notes.push(...repoLevel.notes);
   return actions;
+}
+
+/**
+ * What Setup does with the Kit's tokens a repo still holds at repo level.
+ * Once the caller workflow its default branch holds pins a Kit that names the
+ * environment, it deletes each, and names the old accounts. Until then, or in
+ * a repo with no default branch yet, it deletes none, and when there is one
+ * to keep it gives the note that they stay, which each repo words its own
+ * way. The Product repo's own unless `repo` names another, as `owner/name`.
+ */
+function repoLevelTokens(
+  tokens: readonly RepoLevelToken[],
+  where: { readonly caller: string | null; readonly branch: string | null; readonly release: string; readonly repo?: string; readonly stays: () => string },
+): { readonly actions: readonly SetupAction[]; readonly notes: readonly string[] } {
+  const { caller, branch, release, repo, stays } = where;
+  if (branch !== null && kitNamesEnvironment(caller, release)) {
+    const actions = deleteRepoSecrets(tokens, KIT_ENVIRONMENT, branch, repo);
+    return { actions, notes: oldAccountsNotes(actions) };
+  }
+  return { actions: [], notes: tokens.length > 0 ? [stays()] : [] };
 }
 
 /**
