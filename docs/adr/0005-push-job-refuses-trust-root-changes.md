@@ -9,7 +9,7 @@ Agents never change the files that steer agents. If an Implementer's commits tou
 
 ## Consequences
 
-- A Pairing session counts as the Operator, not as an agent: the Operator is beside it at every step, it runs on their own credentials, and its file changes go out in a pull request that only the Operator merges. So it may change trust-root files. The push job never sees its branch.
+- A Pairing session counts as the Operator, not as an agent, in the Operator's terminal and as an Operator session alike: it acts on the Operator's own credentials, and its file changes go out in a pull request that only the Operator merges. So it may change trust-root files. The push job never sees its branch.
 - An Implementer run that ends with an empty diff is an Execution flaw, never a pass. A path guard can't pass by default on a diff that has nothing in it.
 - Pilot groundwork that wires a new check into CI edits `.github/workflows/`. That edit is always a `ready-for-human` Ticket, even when an agent writes the code the check runs.
 - A merge that remerge can't judge (an octopus merge, or a merge whose parents share no merge base, as after `main` is rewritten) is listed by combined diff: a path is the run's only where the merge's result differs from every parent. A side taken unchanged isn't counted as the run's change, since that content is judged elsewhere, but a hand edit inside the merge is.
