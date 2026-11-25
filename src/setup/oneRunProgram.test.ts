@@ -1722,6 +1722,8 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     /** What a run said before it applied anything, and its last lines, which follow the wizard's cleared screen. */
     const underThePlan = (said: string[]) => said.slice(0, said.indexOf(`On ${BRANCH}.`));
     const lastLines = (said: string[]) => said.slice(said.lastIndexOf("What setup did:"));
+    /** A step or a note of the move. Setup's report names the repo's own repo-level secrets on every run, in other words. */
+    const OF_THE_MOVE = /delete the repo-level|for now, since the Kit|old service account/;
 
     it("says the repo-level secrets stay on the first run, and names the three old accounts on the run that deletes them, under the plan and again in its last lines, and on no run after", async () => {
       const world = aWorld();
@@ -1743,7 +1745,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
 
       const third = await setupOnce(world);
 
-      expect(third.said.filter((line) => /repo-level|old service account/.test(line))).toEqual([]);
+      expect(third.said.filter((line) => OF_THE_MOVE.test(line))).toEqual([]);
     });
 
     it("on the setup branch before its PR is merged, where the checkout's caller workflow pins Setup's release and the default branch's doesn't, deletes nothing and says the secrets stay", async () => {
@@ -1791,7 +1793,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       const second = await setupOnce(world);
 
       expect(second.said).toContain("Nothing to do: this repo's Fabrik install is complete.");
-      expect([...first.said, ...second.said, world.prs[0]!.body].join("\n")).not.toMatch(/repo-level Actions secret|old service account/);
+      expect([...first.said, ...second.said, world.prs[0]!.body].join("\n")).not.toMatch(OF_THE_MOVE);
       expect([...deleted(first.log), ...deleted(second.log)]).toEqual([]);
       expect([...world.secrets]).toEqual(["STRIPE_KEY"]);
     });
@@ -2299,5 +2301,108 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(said).toContain("Setup would:");
     expect(questions).toEqual([]);
     expect(log.filter((line) => /^git switch|^wizard$/.test(line))).toEqual([]);
+  });
+
+  describe("Setup's report on the repo's own credentials", () => {
+    const HEADING = "Setup's report:";
+    const COMPLETE = "Nothing to do: this repo's Fabrik install is complete.";
+    const RULE =
+      "- A credential that can reach production belongs in an environment held to main alone, or in a role taken by OIDC whose trust names that environment and not the whole repo. Only test and preview credentials sit at repo level.";
+    const OWN_SECRET = [HEADING, "- The repo-level Actions secret STRIPE_KEY can be read by a workflow run on any branch.", RULE];
+    const NONE_OF_ITS_OWN = "- This repo holds no repo-level Actions secret of its own.";
+
+    it("is said under the plan and again in the closing lines, after For the Operator, never in the setup PR, and on a merged install with nothing to apply however Setup is run", async () => {
+      // A repo already on the Kit, whose three tokens sit at repo level beside a secret of its own: the Kit's get no line.
+      const world = aWorld();
+      for (const name of ["STRIPE_KEY", "FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"]) world.secrets.add(name);
+
+      const first = await setupOnce(world);
+
+      expect(first.code).toBe(0);
+      const [underThePlan, inTheLastLines] = first.said.flatMap((line, at) => (line === HEADING ? [at] : []));
+      expect(first.said.filter((line) => line === HEADING)).toHaveLength(2);
+      expect(first.said.slice(underThePlan, underThePlan! + 3)).toEqual(OWN_SECRET);
+      expect(underThePlan).toBeLessThan(first.said.indexOf(`On ${BRANCH}.`));
+      expect(first.said.slice(inTheLastLines! - 1, inTheLastLines! + 4)).toEqual(["", ...OWN_SECRET, ""]);
+      expect(first.said.lastIndexOf("For the Operator:")).toBeGreaterThan(first.said.indexOf("What setup did:"));
+      expect(inTheLastLines).toBeGreaterThan(first.said.lastIndexOf("For the Operator:"));
+      expect(first.said[inTheLastLines! + 4]).toMatch(/^Merge it yourself once its Required checks pass\./);
+      // The Kit's own three names, public in the caller workflow, are in the PR's note that they stay for now (#931), and no line of the report is.
+      expect(world.prs[0]!.body).not.toMatch(/STRIPE_KEY|Setup's report|can be read by a workflow run on any branch|A credential that can reach production/);
+      mergeTheSetupPr(world);
+
+      // The run made, changed and deleted no repo-level secret.
+      expect([...world.secrets].sort()).toEqual(["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN", "STRIPE_KEY"]);
+      // The next run finds the new caller workflow on the default branch and deletes the Kit's three (#931), never the repo's own, which the report still names.
+      const deleting = await setupOnce(world);
+      expect(deleting.said.slice(deleting.said.lastIndexOf(HEADING))).toEqual([...OWN_SECRET, "", expect.stringMatching(/^Every file setup writes is already on main/)]);
+      expect([...world.secrets]).toEqual(["STRIPE_KEY"]);
+      for (const options of [{}, { args: [...FLAGS, "--plan"] }, { terminal: false }]) {
+        const { code, said, questions } = await setupOnce(world, { answers: [], ...options });
+
+        expect(code).toBe(0);
+        expect(questions).toEqual([]);
+        expect(said.indexOf(COMPLETE)).toBeGreaterThan(-1);
+        expect(said.indexOf(COMPLETE)).toBeLessThan(said.indexOf(HEADING));
+        expect(said.slice(said.indexOf(HEADING) - 1)).toEqual(["", ...OWN_SECRET]);
+      }
+      expect(world.prs).toHaveLength(1);
+    });
+
+    it("is said in the last lines of a repair that opens no setup PR, before where the run left the clone", async () => {
+      const world = aWorld();
+      await setupOnce(world);
+      mergeTheSetupPr(world);
+      world.labels.delete("needs-triage");
+
+      const { code, said } = await setupOnce(world);
+
+      expect(code).toBe(0);
+      const last = said.slice(said.lastIndexOf("What setup did:"));
+      expect(last.slice(0, 2)).toEqual(["What setup did:", "- create the label needs-triage"]);
+      expect(last.slice(last.indexOf(HEADING) - 1)).toEqual([
+        "",
+        HEADING,
+        NONE_OF_ITS_OWN,
+        "",
+        "Every file setup writes is already on main, so there's no setup PR to open. Setup switched back to main.",
+      ]);
+    });
+
+    it("says whether the environment the Kit config names for production is held to the default branch alone, once the checkout's Kit config names it, and changes nothing of it", async () => {
+      const world = aWorld();
+      anEnvironment(world, { rules: ["main"] }, "production");
+      const flags = ["--no-time-zone", "--no-second-subscription", "--no-paused", "--no-staging", "--production-url=https://clinic.example.com", "--production-environment=production"];
+
+      const first = await setupOnce(world, { args: flags });
+
+      expect(first.code).toBe(0);
+      // Under the plan the checkout holds no Kit config yet; the last lines are read from the setup branch's, which names it.
+      const [underThePlan, inTheLastLines] = first.said.flatMap((line, at) => (line === HEADING ? [at] : []));
+      expect(first.said.slice(underThePlan, underThePlan! + 3)).toEqual([HEADING, NONE_OF_ITS_OWN, ""]);
+      expect(first.said.slice(inTheLastLines, inTheLastLines! + 4)).toEqual([HEADING, NONE_OF_ITS_OWN, "- Production's environment, production, is held to main alone.", ""]);
+      expect(world.prs[0]!.body).not.toContain("Production's environment");
+      mergeTheSetupPr(world);
+
+      // Someone adds a tag rule on github.com.
+      environmentOf(world, "production")!.rules.push({ id: 900, name: "v*", type: "tag" });
+      const loosened = await setupOnce(world, { args: flags, answers: [] });
+
+      expect(loosened.said.slice(loosened.said.indexOf(HEADING))).toEqual([
+        HEADING,
+        NONE_OF_ITS_OWN,
+        "- Production's environment, production, isn't held to main alone (main, tag v*), so a run on another ref that names it is given its secrets.",
+      ]);
+      expect(loosened.said).toContain(COMPLETE);
+
+      world.environments.delete("acme/clinic/production");
+      const gone = await setupOnce(world, { args: flags, answers: [] });
+
+      expect(gone.said.at(-1)).toBe("- Production's environment, production, isn't on this repo.");
+      expect(gone.said).toContain(COMPLETE);
+      const onProduction = world.environmentCalls.filter((line) => line.includes("environments/production") || line.includes("--env production"));
+      expect(onProduction.length).toBeGreaterThan(0);
+      expect(onProduction.filter((line) => !/^gh api repos\/acme\/clinic\/environments\/production(\/deployment-branch-policies\?per_page=100)?$/.test(line))).toEqual([]);
+    });
   });
 });

@@ -123,7 +123,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Console check release notes, whi
     expect(checksFromGh({ stdout: printed, stderr: "", failed: true })).toEqual([{ name: "build", bucket: "pass" }]);
 
     expect(bullet(changed, "Setup's merge ask follows the key")).toContain("say to merge it from the Console once its Required checks pass");
-    const summary = { done: [], notes: [], blockers: [] };
+    const summary = { done: [], notes: [], blockers: [], report: [] };
     expect(prBody({ release: "v9.0.0", defaultBranch: "main", summary: { ...summary, mergesFromConsole: true } })).toContain("Merge this PR from the Console once its Required checks pass.");
     expect(prBody({ release: "v9.0.0", defaultBranch: "main", summary })).toContain("Merge this PR yourself once its Required checks pass.");
   });

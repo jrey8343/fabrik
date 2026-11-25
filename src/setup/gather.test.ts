@@ -2,9 +2,12 @@
 // refs it lets through and its secrets' names, and of a repo's Deployments, to
 // offer production's environment and address: each environment's name, and
 // the address on its newest successful Deployment where GitHub has one.
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type Answer, fakeCommands } from "../__fixtures__/setupCommands.ts";
-import { gatherDeployments, gatherEnvironment, readEnvironmentPolicy } from "./gather.ts";
+import { type Answer, aReadyOperator, fakeCommands, HEAD_SHA } from "../__fixtures__/setupCommands.ts";
+import { tempDir } from "../__fixtures__/skillsArchive.ts";
+import { gatherDeployments, gatherEnvironment, gatherState, readEnvironmentPolicy } from "./gather.ts";
 
 const REPO = { owner: "acme", name: "clinic", defaultBranch: "main", inOrganization: false };
 const page = (n: number) => `gh api repos/acme/clinic/deployments?per_page=100&page=${n}`;
@@ -220,5 +223,73 @@ describe("Reading a repo's Deployments for production's question", () => {
     });
 
     expect(seen).toEqual({ read: true, environments: [{ name: "production", url: null }] });
+  });
+});
+
+describe("Reading production's environment for Setup's report, when the checkout's Kit config names one", () => {
+  const KIT_CONFIG = ".fabrik/config.json";
+  const LIVE = "gh api repos/acme/clinic/environments/live";
+  const RULES = `${LIVE}/deployment-branch-policies?per_page=100`;
+
+  /** What Setup gathers of acme/clinic from a checkout holding this Kit config, or none, and the environments it asked GitHub for. */
+  async function gathered(config: string | null, script: Record<string, Answer> = {}) {
+    const dir = await tempDir("setup-gather");
+    if (config !== null) {
+      await mkdir(join(dir, ".fabrik"));
+      await writeFile(join(dir, KIT_CONFIG), config);
+    }
+    const commands = fakeCommands({ ...aReadyOperator(dir), ...script });
+    const state = await gatherState(commands.run, dir, REPO, [KIT_CONFIG], HEAD_SHA);
+    return { production: state.production, asked: commands.calls.map((call) => call.line).filter((line) => /environments\/|--env/.test(line)) };
+  }
+  const naming = (environment: string | null) => JSON.stringify({ production: { url: "https://clinic.example.com", environment } });
+
+  it("reads which refs that environment lets through, by its name, and never its secrets' names", async () => {
+    const { production, asked } = await gathered(naming("live"), {
+      [LIVE]: json({ id: 9, name: "live", deployment_branch_policy: { protected_branches: false, custom_branch_policies: true } }),
+      [RULES]: json({ total_count: 2, branch_policies: [{ id: 41, name: "main", type: "branch" }, { id: 42, name: "v*", type: "tag" }] }),
+    });
+
+    expect(production).toEqual({
+      name: "live",
+      policy: {
+        branches: "selected",
+        rules: [
+          { id: 41, name: "main", type: "branch" },
+          { id: 42, name: "v*", type: "tag" },
+        ],
+      },
+    });
+    expect(asked).toEqual(["gh api repos/acme/clinic/environments/fabrik", LIVE, RULES]);
+  });
+
+  it("gives it with no policy when the repo has no environment of that name", async () => {
+    const { production } = await gathered(naming("live"), { [LIVE]: { code: 1, stderr: "gh: Not Found (HTTP 404)\n" } });
+
+    expect(production).toEqual({ name: "live", policy: null });
+  });
+
+  it("asks GitHub for a name that holds a space or a slash as one segment of the path, and keeps the name as the Kit config gives it", async () => {
+    const ENCODED = "gh api repos/acme/clinic/environments/Live%20%2F%20clinic";
+    const { production, asked } = await gathered(naming("Live / clinic"), {
+      [ENCODED]: json({ id: 9, name: "Live / clinic", deployment_branch_policy: { protected_branches: false, custom_branch_policies: true } }),
+      [`${ENCODED}/deployment-branch-policies?per_page=100`]: json({ total_count: 1, branch_policies: [{ id: 41, name: "main", type: "branch" }] }),
+    });
+
+    expect(production).toEqual({ name: "Live / clinic", policy: { branches: "selected", rules: [{ id: 41, name: "main", type: "branch" }] } });
+    expect(asked.slice(1)).toEqual([ENCODED, `${ENCODED}/deployment-branch-policies?per_page=100`]);
+  });
+
+  it.each<[string, string | null]>([
+    ["no Kit config", null],
+    ["a Kit config with no production block", '{ "max_in_flight": 1 }\n'],
+    ["a production block that is null", '{ "production": null }\n'],
+    ["a production block whose environment is null", naming(null)],
+    ["a Kit config that isn't JSON", "{ not json\n"],
+  ])("gives none and reads no environment for it with %s", async (_, config) => {
+    const { production, asked } = await gathered(config);
+
+    expect(production).toBeNull();
+    expect(asked).toEqual(["gh api repos/acme/clinic/environments/fabrik"]);
   });
 });

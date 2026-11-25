@@ -19,7 +19,7 @@ import { apply, describeAction, writtenPaths } from "./apply.ts";
 import { parseSetupArgs, SETUP_USAGE } from "./args.ts";
 import { checkSetup, offerToDeleteOldSetupSkill, type OriginTips } from "./checks.ts";
 import { type Env, ok, type Run } from "./exec.ts";
-import { appliedLines, closingLines, setupCommand } from "./finish.ts";
+import { appliedLines, closingLines, reportSection, setupCommand } from "./finish.ts";
 import { gatherDeployments, gatherState, vaultItems } from "./gather.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
 import { type DoneSources, mergesFromConsole, type OneRunSteps, readinessOf, runOnce, stepsDone, wizardGaps } from "./oneRun.ts";
@@ -374,8 +374,8 @@ function stepsOf(plan: SetupPlan): string[] {
   return ["Setup would:", ...plan.actions.map((action) => `- ${describeAction(action)}`)];
 }
 
-/** The lines, then the plan's notes for the Operator. */
+/** The lines, then the plan's notes for the Operator, then Setup's report: every way the plan is printed says all three. */
 function withNotes(lines: readonly string[], plan: SetupPlan): string {
   const notes = plan.notes.length === 0 ? [] : [...(lines.length === 0 ? [] : [""]), "For the Operator:", ...plan.notes.map((note) => `- ${note}`)];
-  return [...lines, ...notes].join("\n");
+  return [...lines, ...notes, ...reportSection(plan.report)].join("\n");
 }
