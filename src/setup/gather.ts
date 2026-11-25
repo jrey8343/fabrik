@@ -98,7 +98,9 @@ export async function gatherEnvironment(
  * Which refs a repo's environment lets through: its setting, and its rules
  * when it is set to "Selected branches and tags". Null when GitHub answers 404
  * for it, as for a repo that has none of that name. Any other refusal throws,
- * naming GitHub's answer.
+ * naming GitHub's answer. The plan reads with it, and so does each step that
+ * must find the environment held as GitHub has it now: the one that holds it,
+ * once it has, and the one that stores a token in it, before it makes one.
  */
 export async function readEnvironmentPolicy(run: Run, cwd: string, repo: string, name: string): Promise<EnvironmentPolicy | null> {
   // The name is one segment of the path: a Product repo's own may hold a space or a slash.
@@ -121,7 +123,8 @@ interface EnvironmentResponse {
 /**
  * The rules of a repo's environment set to "Selected branches and tags", as
  * GitHub has them now: the step that holds one reads them before it adds its
- * rule and again once it has.
+ * rule. GitHub lists them under any setting, so they alone never say an
+ * environment is held.
  */
 export async function readEnvironmentRules(run: Run, cwd: string, repo: string, name: string): Promise<EnvironmentRule[]> {
   const path = `repos/${repo}/environments/${encodeURIComponent(name)}/deployment-branch-policies?per_page=100`;

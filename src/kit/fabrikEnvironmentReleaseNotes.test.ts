@@ -277,8 +277,8 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The fabrik environment release notes
       const hold = bullet(changed, "Setup makes the `fabrik` environment and holds it to the default branch");
       expect(hold).toContain("plans one step, first among the plan's steps");
       expect(hold).toContain('An environment is held when it is set to "Selected branches and tags" and its rules are exactly one, a branch rule naming the default branch');
-      expect(hold).toContain("a PUT of the environment that sends only its branch policy; the rule naming the default branch added, if it isn't there; only then every other rule deleted; and the rules read back");
-      expect(hold).toContain("Unless they read back as exactly the one rule, Setup stops and stores no token");
+      expect(hold).toContain("a PUT of the environment that sends only its branch policy; the rule naming the default branch added, if it isn't there; only then every other rule deleted; and the environment read back, its setting and its rules");
+      expect(hold).toContain("Unless it reads back as held, Setup stops and stores no token");
 
       expect(planSetup(aCleanProduct(), kit).actions[0]).toEqual({ kind: "hold-environment", environment: KIT_ENVIRONMENT, branch: "main", found: null });
       expect(planSetup(aCleanProduct({ environment: heldTo("main") }), kit).actions.map((action) => action.kind)).not.toContain("hold-environment");
@@ -301,8 +301,11 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The fabrik environment release notes
       await apply(fakeCommands(worldScript(world)).run, step!, "/clinic", PRODUCT);
       const changing = world.environmentCalls.flatMap((line) => /--method (PUT|POST|DELETE)/.exec(line)?.[1] ?? []);
       expect(changing).toEqual(["PUT", "POST", "DELETE"]);
-      expect(world.environmentCalls.at(-1)).toMatch(/deployment-branch-policies/);
-      expect(world.environmentCalls.at(-1)).not.toMatch(/--method/);
+      // The last two calls read it back: its setting, then its rules.
+      expect(world.environmentCalls.slice(-2)).toEqual([
+        "gh api repos/acme/clinic/environments/fabrik",
+        "gh api repos/acme/clinic/environments/fabrik/deployment-branch-policies?per_page=100",
+      ]);
       expect(environmentOf(world)?.rules.map(({ name, type }) => ({ name, type }))).toEqual([{ name: "main", type: "branch" }]);
     });
 
@@ -330,12 +333,12 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The fabrik environment release notes
       expect(await readEnvironmentPolicy(missing, "/clinic", "acme/clinic", KIT_ENVIRONMENT)).toBeNull();
     });
 
-    it("name the three new accounts as Setup names them, each one's token a secret of the environment, stored on gh's stdin after a read of the rules", async () => {
+    it("name the three new accounts as Setup names them, each one's token a secret of the environment, stored on gh's stdin after a read of the environment", async () => {
       const tokens = bullet(changed, "The three tokens are in the `fabrik` environment, under new service accounts");
       expect(tokens).toContain("A token is missing when the `fabrik` environment lacks it, wherever else it sits");
       expect(tokens).toContain("`FABRIK_OP_AGENT_TOKEN`, `FABRIK_OP_IMPLEMENT_TOKEN` or `FABRIK_OP_PUSH_TOKEN`");
       expect(tokens).toContain("with `gh secret set --env`, on its stdin");
-      expect(tokens).toContain("the step reads the environment's rules itself, whether or not this run changed the environment, and stops with no account made unless they are the one rule");
+      expect(tokens).toContain("the step reads the environment itself, its setting and its rules, whether or not this run changed the environment, and stops with no account made unless it is held");
 
       // A repo on the Kit before the move: its three tokens at repo level, and no environment.
       const onTheKit = aCleanProduct({ secrets: [...TOKENS] });
@@ -353,7 +356,11 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The fabrik environment release notes
       const stored = commands.calls.find(({ line }) => line.startsWith("gh secret set"));
       expect(stored?.line).toBe("gh secret set FABRIK_OP_AGENT_TOKEN --env fabrik");
       expect(stored?.input).toEqual(expect.stringMatching(/\S/));
-      expect(commands.calls.findIndex(({ line }) => line.includes("deployment-branch-policies"))).toBeLessThan(commands.calls.findIndex(({ line }) => line.startsWith("op service-account create")));
+      const lines = commands.calls.map(({ line }) => line);
+      expect(lines.slice(0, lines.findIndex((line) => line.startsWith("op service-account create")))).toEqual([
+        "gh api repos/acme/clinic/environments/fabrik",
+        "gh api repos/acme/clinic/environments/fabrik/deployment-branch-policies?per_page=100",
+      ]);
       expect([...(environmentOf(world)?.secrets ?? [])]).toEqual(["FABRIK_OP_AGENT_TOKEN"]);
       expect(world.secrets.has("FABRIK_OP_AGENT_TOKEN")).toBe(false);
 

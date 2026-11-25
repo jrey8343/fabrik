@@ -4,15 +4,15 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { CONSOLE_CHECK } from "../kit/consoleCheck.ts";
 import { ok, type Run } from "./exec.ts";
-import { readDefaultBranch, readEnvironmentRules, storeFile } from "./gather.ts";
+import { readDefaultBranch, readEnvironmentPolicy, readEnvironmentRules, storeFile } from "./gather.ts";
 import {
   ADMIN_BYPASS,
   type BranchProtection,
   bypassAllowances,
+  environmentHeld,
   type EnvironmentRule,
   MERGE_GATE_RULESET,
   namedPolicy,
-  namedRules,
   onlyRuleNames,
   type ProductState,
   type SetupAction,
@@ -39,19 +39,19 @@ export async function apply(run: Run, action: SetupAction, productDir: string, r
       }
       // The rule naming the default branch goes in before any other comes out, so an environment that holds secrets is never left with no rule (#846).
       const rules = await readEnvironmentRules(run, cwd, repoName, environment);
-      const wanted = (rule: EnvironmentRule) => onlyRuleNames([rule], branch);
-      if (!rules.some(wanted)) {
+      // The rule that holds it: a branch rule naming the branch, never a tag rule of that name.
+      const namesTheBranch = (rule: EnvironmentRule) => onlyRuleNames([rule], branch);
+      if (!rules.some(namesTheBranch)) {
         await ok(run, "gh", ["api", "--method", "POST", `${path}/deployment-branch-policies`, "-f", `name=${branch}`, "-f", "type=branch"], { cwd });
       }
-      for (const rule of rules.filter((found) => !wanted(found))) {
+      for (const rule of rules.filter((found) => !namesTheBranch(found))) {
         await ok(run, "gh", ["api", "--method", "DELETE", `${path}/deployment-branch-policies/${rule.id}`], { cwd });
       }
-      // Read back: only the one rule holds it, never the setting, and never a call's having been taken.
-      const readBack = await readEnvironmentRules(run, cwd, repoName, environment);
-      if (!onlyRuleNames(readBack, branch)) {
-        throw new Error(
-          `The ${environment} environment on ${repoName} reads back as ${namedRules(readBack)}, not held to ${branch} alone, so Setup stored no token in it. Run setup again.`,
-        );
+      // Read back whole, its setting with its rules, by the test the plan uses: never a call's having been taken, and never the rule alone, which GitHub lists under any setting.
+      const readBack = await readEnvironmentPolicy(run, cwd, repoName, environment);
+      if (!environmentHeld(readBack, branch)) {
+        const as = readBack === null ? "missing" : namedPolicy(readBack);
+        throw new Error(`The ${environment} environment on ${repoName} reads back as ${as}, not held to ${branch} alone, so Setup stored no token in it. Run setup again.`);
       }
       return;
     }
@@ -72,9 +72,9 @@ export async function apply(run: Run, action: SetupAction, productDir: string, r
       const repoName = action.repo ?? `${repo.owner}/${repo.name}`;
       // The rule must name the default branch of the repo that holds the environment: another repo's own, as GitHub has it now, never the Product repo's.
       const branch = action.repo === undefined ? repo.defaultBranch : await defaultBranchNow(run, cwd, action.repo, environment);
-      // The environment's rules are read first, whether or not this run changed it: one that isn't held gives its secrets to other refs (#846).
-      const rules = await readEnvironmentRules(run, cwd, repoName, environment);
-      if (!onlyRuleNames(rules, branch)) {
+      // The environment is read first, its setting and its rules, whether or not this run changed it: one that isn't held gives its secrets to other refs (#846).
+      const found = await readEnvironmentPolicy(run, cwd, repoName, environment);
+      if (!environmentHeld(found, branch)) {
         throw new Error(`The ${environment} environment on ${repoName} isn't held to ${branch} alone, so Setup stored no token in it. Run setup again.`);
       }
       // Read-only, no expiry (ADR-0004). The token is shown once: it goes

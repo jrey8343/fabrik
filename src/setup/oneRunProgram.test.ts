@@ -1406,7 +1406,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect([...environmentOf(world)!.secrets]).toEqual(["STRIPE_KEY", "FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"]);
     });
 
-    it("adds the rule naming the default branch before it deletes any other, then reads the rules back", async () => {
+    it("adds the rule naming the default branch before it deletes any other, then reads the environment back, its setting and its rules", async () => {
       const world = aWorld();
       const found = anEnvironment(world, { rules: ["release", { name: "main", type: "tag" }] });
       const [release, tag] = found.rules.map((rule) => rule.id);
@@ -1415,12 +1415,13 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
 
       const RULES = `${ENVIRONMENT}/deployment-branch-policies`;
       const applying = world.environmentCalls.slice(world.environmentCalls.indexOf(`gh api --method PUT ${ENVIRONMENT} --input -`));
-      expect(applying.slice(0, 6)).toEqual([
+      expect(applying.slice(0, 7)).toEqual([
         `gh api --method PUT ${ENVIRONMENT} --input -`,
         `gh api ${RULES}?per_page=100`,
         `gh api --method POST ${RULES} -f name=main -f type=branch`,
         `gh api --method DELETE ${RULES}/${release}`,
         `gh api --method DELETE ${RULES}/${tag}`,
+        `gh api ${ENVIRONMENT}`,
         `gh api ${RULES}?per_page=100`,
       ]);
     });
@@ -1507,6 +1508,27 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(changedElsewhere(world, log)).toEqual(NOTHING);
     });
 
+    it.each<[string, WorldEnvironment["policy"]]>([
+      ["every branch", null],
+      ["protected branches only", { protected_branches: true, custom_branch_policies: false }],
+    ])("stops when the setting reads back as %s though the one rule is listed, saying so, and runs no later step", async (setting, policy) => {
+      const world = aWorld();
+      anEnvironment(world, { rules: ["release"] });
+      // Someone changes the setting on github.com once Setup has set it, before Setup reads the environment back.
+      const during = (line: string) => {
+        if (line.startsWith(`gh api --method POST ${ENVIRONMENT}/deployment-branch-policies `)) environmentOf(world)!.policy = policy;
+      };
+
+      const { code, complaints, log } = await setupOnce(world, { during });
+
+      expect(rulesOf(world)).toEqual([{ name: "main", type: "branch" }]);
+      expect(code).toBe(1);
+      expect(complaints).toEqual([
+        `The fabrik environment on acme/clinic reads back as ${setting}, not held to main alone, so Setup stored no token in it. Run setup again.`,
+      ]);
+      expect(changedElsewhere(world, log)).toEqual(NOTHING);
+    });
+
     it("stops when GitHub refuses the environment, naming its answer and the plans that have environments, and applies no other step of the plan", async () => {
       const world = aWorld();
       world.environmentRefusal = "gh: Not Found (HTTP 404)\n";
@@ -1561,26 +1583,28 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect([...said, ...complaints, world.prs[0]!.body].join("\n")).not.toContain("ops_token");
     });
 
-    it("reads the environment's rules before it makes each account, and makes none before the rule the run added reads back", async () => {
+    it("reads the environment, its setting and its rules, before it makes each account, and makes none before the environment the run held reads back", async () => {
       const world = aWorld();
 
       const { log } = await setupOnce(world);
 
       const PUT = `gh api --method PUT ${ENVIRONMENT} --input -`;
       const RULES = `gh api ${ENVIRONMENT}/deployment-branch-policies?per_page=100`;
+      /** The environment read whole: its setting, then its rules. */
+      const READ = [`gh api ${ENVIRONMENT}`, RULES];
       const steps = log.filter((line) => line.includes(ENVIRONMENT) || /^op service-account create |^gh secret set /.test(line));
-      expect(steps.slice(steps.indexOf(PUT), steps.indexOf(PUT) + 13)).toEqual([
+      expect(steps.slice(steps.indexOf(PUT), steps.indexOf(PUT) + 17)).toEqual([
         PUT,
         RULES,
         `gh api --method POST ${ENVIRONMENT}/deployment-branch-policies -f name=main -f type=branch`,
-        RULES,
-        RULES,
+        ...READ,
+        ...READ,
         "op service-account create fabrik-acme-clinic-agent-env --vault Fabrik:read_items --raw",
         "gh secret set FABRIK_OP_AGENT_TOKEN --env fabrik",
-        RULES,
+        ...READ,
         "op service-account create fabrik-acme-clinic-implement-env --vault Fabrik:read_items --vault Fabrik Sandbox · clinic:read_items --raw",
         "gh secret set FABRIK_OP_IMPLEMENT_TOKEN --env fabrik",
-        RULES,
+        ...READ,
         "op service-account create fabrik-acme-clinic-push-env --vault Fabrik App:read_items --raw",
         "gh secret set FABRIK_OP_PUSH_TOKEN --env fabrik",
       ]);
@@ -1597,6 +1621,12 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       ["a rule naming another branch", (environment) => void (environment.rules = [{ id: 201, name: "release", type: "branch" }])],
       ["a tag rule named main", (environment) => void (environment.rules = [{ id: 201, name: "main", type: "tag" }])],
       ["another rule beside its one", (environment) => void environment.rules.push({ id: 201, name: "release/*", type: "branch" })],
+      // GitHub keeps an environment's rules, and lists them, under a setting that doesn't use them.
+      ["its one rule, under a setting changed to every branch", (environment) => void (environment.policy = null)],
+      [
+        "its one rule, under a setting changed to protected branches only",
+        (environment) => void (environment.policy = { protected_branches: true, custom_branch_policies: false }),
+      ],
     ])("in a run that found the environment held and planned no step for it, stops before it makes an account when its rules read as %s", async (_, change) => {
       const world = aWorld();
       const environment = anEnvironment(world, { rules: ["main"] });
@@ -1612,12 +1642,13 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect([...world.secrets]).toEqual([]);
     });
 
-    it("stops before it makes an account when the read of the environment's rules fails, as for one deleted since Setup read it", async () => {
+    it("stops before it makes an account when the environment is gone, as one deleted since Setup read it", async () => {
       const world = aWorld();
       anEnvironment(world, { rules: ["main"] });
 
-      const { code, log } = await setupOnce(world, { during: afterTheYes(() => world.environments.clear()) });
+      const { code, complaints, log } = await setupOnce(world, { during: afterTheYes(() => world.environments.clear()) });
 
+      expect(complaints).toEqual([STORED_NONE]);
       expect(code).toBe(1);
       expect(made(log)).toEqual([]);
       expect(log.filter((line) => line.startsWith("gh secret set "))).toEqual([]);
@@ -1960,6 +1991,8 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
         '- create the read-only service account "fabrik-jrey8343-fabrik-runs-push-env" (reads "Fabrik App") and store it as FABRIK_OP_PUSH_TOKEN in the fabrik environment in jrey8343/fabrik-runs',
       ]);
       const RULES = `gh api ${STORE_ENVIRONMENT}/deployment-branch-policies?per_page=100`;
+      /** The environment read whole: its setting, then its rules. */
+      const READ = [`gh api ${STORE_ENVIRONMENT}`, RULES];
       const BRANCH_NOW = `gh repo view ${STORE} --json defaultBranchRef`;
       const steps = log.slice(index(log, /^gh repo create /));
       expect(steps.slice(0, steps.indexOf(`gh secret set ${TOKEN} --env fabrik --repo ${STORE}`) + 1).filter((line) => line.includes(STORE) || line.startsWith("op service-account"))).toEqual([
@@ -1972,9 +2005,9 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
         `gh api --method PUT ${STORE_ENVIRONMENT} --input -`,
         RULES,
         `gh api --method POST ${STORE_ENVIRONMENT}/deployment-branch-policies -f name=trunk -f type=branch`,
-        RULES,
+        ...READ,
         BRANCH_NOW,
-        RULES,
+        ...READ,
         NEW_ACCOUNT,
         `gh secret set ${TOKEN} --env fabrik --repo ${STORE}`,
       ]);
