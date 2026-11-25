@@ -6,7 +6,51 @@
 // Loop rules; those all live in src/loop/rules.ts.
 import type { LoopEvent } from "../loop/types.ts";
 import type { ReadClient, Repo } from "./client.ts";
-import { type HandOff, type SubmittedReview, submittedReviewEventFrom } from "./events.ts";
+import { type HandOff, handOffFrom, loopEventFrom, type SubmittedReview, submittedReviewEventFrom } from "./events.ts";
+
+/** The Loop event a job's run is for, and the hand-off that started the run, when one did. */
+export interface RunEvent {
+  /** Null when the Loop doesn't act: on an event it ignores, or on a hand-off whose read gave nothing. */
+  readonly event: LoopEvent | null;
+  readonly handOff: HandOff | null;
+}
+
+/**
+ * The Loop event the Actions event of a job's run stands for, as the Kit job,
+ * the claim job and the push job each work it out, with their own client: on
+ * a hand-off, the event of the review `github` reads (readHandOff), with
+ * `operator` the Kit config's, or else the repo's owner; on any other event,
+ * what the event itself stands for (loopEventFrom), with nothing read. So no
+ * job takes a review from the inputs, or from what another job read.
+ */
+export async function runEventFrom(
+  github: ReadClient,
+  repo: Repo,
+  operator: string | null,
+  eventName: string,
+  payload: Record<string, unknown>,
+  now: Date = new Date(),
+  kitRef = "",
+): Promise<RunEvent> {
+  const handOff = handOffFrom(eventName, payload);
+  if (handOff === null) return { event: loopEventFrom(eventName, payload, now, kitRef), handOff: null };
+  return { event: await readHandOff(github, repo, handOff, operator ?? repo.owner), handOff };
+}
+
+/** What both lines below say of a hand-off whose read gave nothing: what it named, and that it is no review to act on. */
+function namedNoReview({ pullRequest, review }: HandOff): string {
+  return `hand-off names review ${review} on PR #${pullRequest}, which isn't a submitted review of the Operator's`;
+}
+
+/** The line the Kit job logs for a hand-off whose read gave nothing. */
+export function nothingToDoFor(handOff: HandOff): string {
+  return `The ${namedNoReview(handOff)}: nothing to do.`;
+}
+
+/** Why the push job or the claim job has nothing to do on such a hand-off, as its summary says it after "Nothing to do: ". */
+export function whyNothingFor(handOff: HandOff): string {
+  return `the ${namedNoReview(handOff)}`;
+}
 
 /** The states of a review that was submitted and still stands, as GitHub's REST API writes them: not `DISMISSED`, and not `PENDING`, which was never submitted. */
 const SUBMITTED_STATES: readonly string[] = ["CHANGES_REQUESTED", "COMMENTED", "APPROVED"];
