@@ -462,6 +462,14 @@ _Avoid_: test plan, test script, QA checklist, acceptance criteria (a Ticket's)
 A Staging trial the Operator runs with an agent driving their own browser, which ends in the Operator's verdict.
 _Avoid_: Pairing session (works an issue, not a merged change), QA session, test run
 
+**Held workflow**:
+A workflow on a Product repo's main branch that does an act only the Operator may start, such as a production deploy the Operator promotes by hand, and so reads a Start check before it takes a role. The Product repo lists it in Kit config.
+_Avoid_: gated workflow, protected workflow, approved deploy
+
+**Start check**:
+The check only the Console can report that a Held workflow reads before it takes a role, made at the Operator's tap on the main branch's head for that one workflow and good only for a run that begins soon after. It is neither a Required check nor the Console check, and GitHub requires it of nothing.
+_Avoid_: approval, deploy check, the Console's go-ahead
+
 ## Measuring the factory
 
 **Run record**:

@@ -1,12 +1,17 @@
-// The README's shapes for a workflow that holds a role (Spec #917): its place
-// after the Merge gate, the Held workflow's step as it ran on trial, held to the
-// Start check's name and minutes the read library exports, and Setup's line.
+// Held workflows and the Start check in the docs (Spec #917): the README's shapes
+// for a workflow that holds a role, its place after the Merge gate, the Held
+// workflow's step as it ran on trial, held to the Start check's name and minutes
+// the read library exports, and Setup's line; the glossary's two terms after the
+// Promote list; and ADR-0038's two sentences on whose word production takes.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { START_CHECK_MINUTES, startCheckName } from "../read/index.ts";
 import { CALLER_FILE } from "../setup/shims.ts";
 
-const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+const root = new URL("../../", import.meta.url);
+const read = (path: string) => readFileSync(new URL(path, root), "utf8");
+
+const readme = read("README.md");
 const lines = readme.split("\n");
 
 /** The README's `##` section of this title, from its heading to the next `##` heading. */
@@ -112,5 +117,45 @@ describe("the README's part on Setup's line", () => {
 
     expect(setupsLine).toContain(`leaves out the Kit's own caller workflow, \`${CALLER_FILE}\`, by name`);
     expect(setupsLine.match(/`[^`]+\.ya?ml`/g)).toEqual([`\`${CALLER_FILE}\``]);
+  });
+});
+
+describe("the glossary's Held workflow and Start check", () => {
+  // The Trial steps' two terms (#962) stand straight after the Promote list, so
+  // these two follow them, after the Promote list and last before Measuring the factory.
+  it("has both terms, as written, after the Promote list and straight before Measuring the factory", () => {
+    const glossary = read("GLOSSARY.md");
+    const terms = [
+      "",
+      "**Held workflow**:",
+      "A workflow on a Product repo's main branch that does an act only the Operator may start, such as a production deploy the Operator promotes by hand, and so reads a Start check before it takes a role. The Product repo lists it in Kit config.",
+      "_Avoid_: gated workflow, protected workflow, approved deploy",
+      "",
+      "**Start check**:",
+      "The check only the Console can report that a Held workflow reads before it takes a role, made at the Operator's tap on the main branch's head for that one workflow and good only for a run that begins soon after. It is neither a Required check nor the Console check, and GitHub requires it of nothing.",
+      "_Avoid_: approval, deploy check, the Console's go-ahead",
+      "",
+      "## Measuring the factory",
+    ].join("\n");
+
+    expect(glossary.indexOf(terms)).toBeGreaterThan(glossary.indexOf("**Promote list**:"));
+  });
+});
+
+describe("ADR-0038 on whose word production takes", () => {
+  const adr = read("docs/adr/0038-a-staging-trials-result-is-a-label-the-operator-puts-on-the-merged-pull-request.md");
+
+  it("says the Operator's tap is the word where the production workflow is a Held workflow", () => {
+    expect(adr).toContain(
+      "\n- **It is advisory from end to end.** No Loop rule waits on staging, and neither the Kit nor the Console deploys production or refuses a deploy for a Staging trial's result. The word that production takes what is merged is the Operator's alone: their own dispatch of the production workflow, or, where that workflow is a Held workflow, their tap in the Console, which makes the Start check it reads (the ADR on an Operator session's posture). The Promote list, every pull request a production deployment would take with its result, only tells them what that deploy holds.\n",
+    );
+    expect(adr).not.toContain("The Operator's own dispatch of their production workflow is the approval.");
+  });
+
+  it("has the considered option say a Start check carries the Operator's word and no judgement of the Promote list", () => {
+    expect(adr).toContain(
+      "\n- **The Kit or the Console deploying production, or refusing a deploy on a Staging trial's result.** The Operator's word is the approval. A Start check carries that word and no judgement of the Promote list.\n",
+    );
+    expect(adr).not.toContain("The Operator's own dispatch is the approval.");
   });
 });
