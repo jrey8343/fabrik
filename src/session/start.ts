@@ -18,7 +18,7 @@ import { cp, readdir, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { checkCallerWorkflow } from "../kit/caller.ts";
 import { type FetchSource, fetchSkills } from "../skills/fetch.ts";
-import { cloudSessionLines, isCloudSession, type SessionEnvironment } from "./cloudSession.ts";
+import { type CloudSessionVars, cloudSessionLines, isCloudSession } from "./cloudSession.ts";
 import { foundOldSetupSkill, oldSetupSkillIn, personalSkillsDir, staleOldSetupSkill } from "../skills/oldSetupSkill.ts";
 
 /** The caller workflow, the only place the Kit's version appears. */
@@ -46,23 +46,27 @@ export interface SessionStartOutput {
   readonly systemMessage?: string;
 }
 
+/**
+ * Which checkout the hook runs in, decided once from the hook entry's
+ * arguments: `fabrik` itself (`--kit`), whose checkout is the Kit, so there is
+ * no caller workflow to read, no pin to check and no Researcher; or a Product
+ * repo, with the release its hook entry read from the caller workflow and
+ * fetched Fabrik at.
+ */
+export type HookCheckout = { readonly kind: "kit" } | { readonly kind: "product"; readonly release: string };
+
 export interface SessionStartInput {
-  /** Fabrik, checked out at `release`, or `fabrik`'s own checkout when `release` is null. */
+  /** Fabrik, checked out at the Product repo's release, or `fabrik`'s own checkout. */
   readonly kitDir: string;
-  /** The checkout the skills go into: `kitDir` itself when `release` is null. */
+  /** The checkout the skills go into: `kitDir` itself in `fabrik`. */
   readonly productDir: string;
-  /**
-   * The release the hook entry read from the caller workflow and fetched Fabrik
-   * at; null in `fabrik` itself, whose checkout is the Kit, so there is no
-   * caller workflow to read and no pin to check.
-   */
-  readonly release: string | null;
+  readonly checkout: HookCheckout;
   /** How each Skills source is fetched at its commit; git's own shallow fetch from github.com unless a test hands another. */
   readonly fetchSource?: FetchSource;
   /** The Operator's personal skills folder, where an old copy of the fabrik-setup skill may be. Unset, the hook doesn't look. */
   readonly personalSkills?: string;
   /** The session's environment, from which the hook reads whether it is a cloud session and what one needs; unset, a terminal. */
-  readonly env?: SessionEnvironment;
+  readonly env?: CloudSessionVars;
 }
 
 export async function sessionStart({ personalSkills, env = {}, ...input }: SessionStartInput): Promise<SessionStartOutput> {
@@ -83,23 +87,23 @@ export async function sessionStart({ personalSkills, env = {}, ...input }: Sessi
  */
 async function withCloudLines(
   output: SessionStartOutput,
-  { productDir, release }: Pick<SessionStartInput, "productDir" | "release">,
-  env: SessionEnvironment,
+  { productDir, checkout }: Pick<SessionStartInput, "productDir" | "checkout">,
+  env: CloudSessionVars,
 ): Promise<SessionStartOutput> {
-  const lines = await cloudSessionLines({ productDir, kit: release === null, env });
+  const lines = await cloudSessionLines({ productDir, hasResearcher: checkout.kind === "product", env });
   const { additionalContext } = output.hookSpecificOutput;
   return { ...output, hookSpecificOutput: { ...output.hookSpecificOutput, additionalContext: [additionalContext, ...lines].join("\n") } };
 }
 
-async function installSkills({ kitDir, productDir, release, fetchSource }: Omit<SessionStartInput, "personalSkills">): Promise<SessionStartOutput> {
+async function installSkills({ kitDir, productDir, checkout, fetchSource }: Omit<SessionStartInput, "personalSkills">): Promise<SessionStartOutput> {
   try {
-    if (release !== null) {
+    if (checkout.kind === "product") {
       const caller = await readFile(join(productDir, CALLER_WORKFLOW_PATH), "utf8").catch(() => null);
       if (caller === null) return notInstalled(`${CALLER_WORKFLOW_PATH} was not found`);
       const pins = checkCallerWorkflow(caller);
       if (!pins.ok) return notInstalled(`${CALLER_WORKFLOW_PATH}: ${pins.error}`);
-      if (pins.release !== release) {
-        return notInstalled(`the hook fetched Fabrik ${release}, but ${CALLER_WORKFLOW_PATH} pins ${pins.release}`);
+      if (pins.release !== checkout.release) {
+        return notInstalled(`the hook fetched Fabrik ${checkout.release}, but ${CALLER_WORKFLOW_PATH} pins ${pins.release}`);
       }
     }
 
@@ -114,9 +118,9 @@ async function installSkills({ kitDir, productDir, release, fetchSource }: Omit<
       hookSpecificOutput: {
         hookEventName: "SessionStart",
         additionalContext: [
-          release === null
+          checkout.kind === "kit"
             ? `This checkout is Fabrik itself. The skills its skills.lock.json pins (mattpocock/skills at ${sha}) and its own skills/ are in .claude/skills/, as this branch held them when the session started, installed by the SessionStart hook; they're gitignored, so never commit or edit them there: a skill of Fabrik's own is edited under skills/.`
-            : `Fabrik ${release} is installed in this repo. The skills it pins (mattpocock/skills at ${sha}) are in .claude/skills/, fetched by the SessionStart hook; they're gitignored, so never commit or edit them.`,
+            : `Fabrik ${checkout.release} is installed in this repo. The skills it pins (mattpocock/skills at ${sha}) are in .claude/skills/, fetched by the SessionStart hook; they're gitignored, so never commit or edit them.`,
           extraSkills.length > 0
             ? `This repo's Extra skills are also in .claude/skills/: ${extraSkills.join(", ")}. This repo's .fabrik/<phase>.md instructions say when to use them.`
             : "",
@@ -173,12 +177,12 @@ function notInstalled(why: string): SessionStartOutput {
 }
 
 /** Where the skills go and which release they come from, from the hook entry's arguments, or null for a usage error. */
-function parseArgs(args: readonly string[]): Pick<SessionStartInput, "kitDir" | "productDir" | "release"> | null {
+function parseArgs(args: readonly string[]): Pick<SessionStartInput, "kitDir" | "productDir" | "checkout"> | null {
   const [first, second] = args;
   if (first === undefined || second === undefined) return null;
   // fabrik's own hook entry: the checkout is the Kit, so there's no release and no download.
-  if (first === "--kit") return { kitDir: second, productDir: second, release: null };
-  return { kitDir: resolve(import.meta.dirname, "..", ".."), productDir: first, release: second };
+  if (first === "--kit") return { kitDir: second, productDir: second, checkout: { kind: "kit" } };
+  return { kitDir: resolve(import.meta.dirname, "..", ".."), productDir: first, checkout: { kind: "product", release: second } };
 }
 
 if (import.meta.main) {

@@ -42,7 +42,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
     const product = await aProduct(callerAt("v1.2.3"));
     const { fetched, fetchSource } = serving(await aSkillsSource({ "skills/engineering/grilling": "# grilling" }));
 
-    const output = await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", fetchSource });
+    const output = await sessionStart({ kitDir: kit, productDir: product, checkout: { kind: "product", release: "v1.2.3" }, fetchSource });
 
     expect(fetched).toEqual([{ repository: "mattpocock/skills", sha: LOCKED_SHA }]);
     expect(await readFile(join(product, ".claude/skills/grilling/SKILL.md"), "utf8")).toBe("# grilling");
@@ -60,7 +60,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
     const output = await sessionStart({
       kitDir: kit,
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: serving(await aSkillsSource()).fetchSource,
     });
 
@@ -78,7 +78,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
     const output = await sessionStart({
       kitDir: kit,
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: serving(await aSkillsSource()).fetchSource,
     });
 
@@ -90,7 +90,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
     const kit = resolve(import.meta.dirname, "..", "..");
     const product = await aProduct(callerAt("v1.2.3"));
 
-    const output = await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", fetchSource: serving(await aSkillsSource()).fetchSource });
+    const output = await sessionStart({ kitDir: kit, productDir: product, checkout: { kind: "product", release: "v1.2.3" }, fetchSource: serving(await aSkillsSource()).fetchSource });
 
     expect(await readFile(join(product, ".claude/skills/fabrik-visual-evidence/SKILL.md"), "utf8")).toBe(
       await readFile(join(kit, "skills/fabrik-visual-evidence/SKILL.md"), "utf8"),
@@ -104,7 +104,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
     const kit = resolve(import.meta.dirname, "..", "..");
     const product = await aProduct(callerAt("v1.2.3"));
 
-    const output = await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", fetchSource: serving(await aSkillsSource()).fetchSource });
+    const output = await sessionStart({ kitDir: kit, productDir: product, checkout: { kind: "product", release: "v1.2.3" }, fetchSource: serving(await aSkillsSource()).fetchSource });
 
     expect(await readFile(join(product, ".claude/skills/fabrik-trial/SKILL.md"), "utf8")).toBe(await readFile(join(kit, "skills/fabrik-trial/SKILL.md"), "utf8"));
     expect(output.hookSpecificOutput.additionalContext.split("\n")).toContain(
@@ -116,7 +116,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
     const kit = resolve(import.meta.dirname, "..", "..");
     const product = await aProduct(callerAt("v1.2.3"));
 
-    await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", fetchSource: serving(await aSkillsSource()).fetchSource });
+    await sessionStart({ kitDir: kit, productDir: product, checkout: { kind: "product", release: "v1.2.3" }, fetchSource: serving(await aSkillsSource()).fetchSource });
 
     expect(await readFile(join(product, ".claude/skills/fabrik-operator-session/SKILL.md"), "utf8")).toBe(
       await readFile(join(kit, "skills/fabrik-operator-session/SKILL.md"), "utf8"),
@@ -130,7 +130,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
     const output = await sessionStart({
       kitDir: await aKitCheckout(LOCKED_SHA, { "skills/fabrik-pair/SKILL.md": "---\nname: fabrik-pair\n---\n# Pair" }),
       productDir: await aProduct(callerAt("v1.2.3")),
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: serving(await aSkillsSource()).fetchSource,
     });
 
@@ -142,7 +142,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
     const output = await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: await aProduct(callerAt("v1.2.3")),
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: serving(await aSkillsSource()).fetchSource,
     });
 
@@ -152,12 +152,12 @@ describe("The SessionStart hook in a cloud or local session", () => {
   it("still reloads skills when the right ones were already installed", async () => {
     const kit = await kitWithLiveSkill();
     const product = await aProduct(callerAt("v1.2.3"));
-    await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", fetchSource: serving(await aSkillsSource()).fetchSource });
+    await sessionStart({ kitDir: kit, productDir: product, checkout: { kind: "product", release: "v1.2.3" }, fetchSource: serving(await aSkillsSource()).fetchSource });
 
     const output = await sessionStart({
       kitDir: kit,
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: serving(await aSkillsSource()).fetchSource,
     });
 
@@ -169,7 +169,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
     const product = await aProduct(callerAt("v1.2.4"));
     const { fetched, fetchSource } = serving(await aSkillsSource());
 
-    const output = await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", fetchSource });
+    const output = await sessionStart({ kitDir: kit, productDir: product, checkout: { kind: "product", release: "v1.2.3" }, fetchSource });
 
     expect(fetched).toEqual([]);
     expect(output.hookSpecificOutput.reloadSkills).toBe(false);
@@ -187,7 +187,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
     const output = await sessionStart({
       kitDir: kit,
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: serving(await aSkillsSource()).fetchSource,
     });
 
@@ -200,7 +200,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
     const output = await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: await aProduct(null),
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: serving(await aSkillsSource()).fetchSource,
     });
 
@@ -213,7 +213,7 @@ describe("The SessionStart hook in a cloud or local session", () => {
     const output = await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: await aProduct(callerAt("v1.2.3")),
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: servingEach({}).fetchSource,
     });
 
@@ -237,7 +237,7 @@ describe("The SessionStart hook in fabrik itself, whose checkout is the Kit", ()
     const fabrik = await aFabrikCheckout();
     const { fetched, fetchSource } = serving(await aSkillsSource({ "skills/engineering/grilling": "# grilling" }));
 
-    const output = await sessionStart({ kitDir: fabrik, productDir: fabrik, release: null, fetchSource });
+    const output = await sessionStart({ kitDir: fabrik, productDir: fabrik, checkout: { kind: "kit" }, fetchSource });
 
     expect(fetched).toEqual([{ repository: "mattpocock/skills", sha: LOCKED_SHA }]);
     expect(await installedFolders(fabrik)).toEqual(["fabrik-live-design", "fabrik-pair", "fabrik-visual-evidence", "grilling"]);
@@ -252,7 +252,7 @@ describe("The SessionStart hook in fabrik itself, whose checkout is the Kit", ()
     const output = await sessionStart({
       kitDir: fabrik,
       productDir: fabrik,
-      release: null,
+      checkout: { kind: "kit" },
       fetchSource: serving(await aSkillsSource()).fetchSource,
     });
 
@@ -267,7 +267,7 @@ describe("The SessionStart hook in fabrik itself, whose checkout is the Kit", ()
   it("warns rather than throwing when the Base skills can't be fetched from github.com", async () => {
     const fabrik = await aFabrikCheckout();
 
-    const output = await sessionStart({ kitDir: fabrik, productDir: fabrik, release: null, fetchSource: servingEach({}).fetchSource });
+    const output = await sessionStart({ kitDir: fabrik, productDir: fabrik, checkout: { kind: "kit" }, fetchSource: servingEach({}).fetchSource });
 
     expect(output.hookSpecificOutput.reloadSkills).toBe(false);
     expect(output.systemMessage).toBe(
@@ -326,7 +326,7 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
     const output = await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: servingEach(await upstream()).fetchSource,
     });
 
@@ -352,7 +352,7 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
     const output = await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: servingEach(await upstream()).fetchSource,
     });
 
@@ -368,7 +368,7 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
     const output = await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: servingEach(await upstream()).fetchSource,
     });
 
@@ -386,7 +386,7 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
     const output = await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: servingEach(reachable).fetchSource,
     });
 
@@ -404,7 +404,7 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
     const output = await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: servingEach(await upstream()).fetchSource,
     });
 
@@ -419,7 +419,7 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       review: ["someone/skills/threat-model"],
     });
     const start = async (fetchSource: FetchSource) =>
-      sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", fetchSource });
+      sessionStart({ kitDir: kit, productDir: product, checkout: { kind: "product", release: "v1.2.3" }, fetchSource });
     await start(servingEach(await upstream()).fetchSource);
     const again = servingEach(await upstream());
 
@@ -439,7 +439,7 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
     await sessionStart({
       kitDir: kit,
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: servingEach(await upstream()).fetchSource,
     });
     await mkdir(join(product, ".claude/skills/my-own-skill"));
@@ -452,7 +452,7 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
     const output = await sessionStart({
       kitDir: kit,
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: servingEach(await upstream()).fetchSource,
     });
 
@@ -466,7 +466,7 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
     const output = await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: servingEach(await upstream()).fetchSource,
     });
 
@@ -520,7 +520,7 @@ async function contextIn(productDir: string, env: Record<string, string>, { kit 
   const output = await sessionStart({
     kitDir,
     productDir,
-    release: kit ? null : "v1.2.3",
+    checkout: kit ? { kind: "kit" } : { kind: "product", release: "v1.2.3" },
     fetchSource: serving(await aSkillsSource()).fetchSource,
     env,
   });
@@ -714,7 +714,7 @@ describe("The SessionStart hook in a cloud session", () => {
     const output = await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: serving(await aSkillsSource()).fetchSource,
       env: CLOUD,
     });
@@ -748,7 +748,7 @@ describe("The SessionStart hook, now Setup is no longer a skill", () => {
     const output = await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: serving(await aSkillsSource({ "skills/engineering/grilling": "# grilling" })).fetchSource,
       personalSkills,
     });
@@ -766,7 +766,7 @@ describe("The SessionStart hook, now Setup is no longer a skill", () => {
     const output = await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: servingEach(await upstream()).fetchSource,
       personalSkills,
     });
@@ -779,7 +779,7 @@ describe("The SessionStart hook, now Setup is no longer a skill", () => {
   it("warns about it too when it can't install the skills", async () => {
     const { personalSkills, copy } = await personalSkillsWithAnOldCopy();
 
-    const output = await sessionStart({ kitDir: await kitWithLiveSkill(), productDir: await aProduct(null), release: "v1.2.3", personalSkills });
+    const output = await sessionStart({ kitDir: await kitWithLiveSkill(), productDir: await aProduct(null), checkout: { kind: "product", release: "v1.2.3" }, personalSkills });
 
     expect(output.systemMessage).toBe(`Fabrik didn't install its skills: .github/workflows/fabrik.yml was not found. ${warning(copy)}`);
   });
@@ -791,7 +791,7 @@ describe("The SessionStart hook, now Setup is no longer a skill", () => {
     const output = await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: await aProduct(callerAt("v1.2.3")),
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: serving(await aSkillsSource()).fetchSource,
       personalSkills,
     });
@@ -807,7 +807,7 @@ describe("The SessionStart hook, now Setup is no longer a skill", () => {
     await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: serving(await aSkillsSource({ "skills/engineering/grilling": "# grilling" })).fetchSource,
     });
 
@@ -820,7 +820,7 @@ describe("The SessionStart hook, now Setup is no longer a skill", () => {
     await sessionStart({
       kitDir: await kitWithLiveSkill(),
       productDir: product,
-      release: "v1.2.3",
+      checkout: { kind: "product", release: "v1.2.3" },
       fetchSource: servingEach({
         [BASE]: await aSkillsSource({ "skills/engineering/grilling": "# grilling" }),
         [OPERATOR]: await aSkillsSource({ "skills/setup/fabrik-setup": "# the repo's own" }),

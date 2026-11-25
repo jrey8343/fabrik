@@ -12,8 +12,12 @@ import { OPERATOR_SESSION_PATH, operatorSessionMarker, sessionAddressOf, session
 
 const run = promisify(execFile);
 
-/** The variables of the session's environment the hook reads. */
-export interface SessionEnvironment {
+/**
+ * The process's environment variables the hook reads for a cloud session. Not
+ * a Session environment, which is where an Operator session opens, though one
+ * of them names it.
+ */
+export interface CloudSessionVars {
   /** `"true"` in a Claude Code cloud session; anything else, unset included, is a terminal. */
   readonly CLAUDE_CODE_REMOTE?: string | undefined;
   /** A cloud session's id, `cse_` and an id, from which its address is made. */
@@ -23,24 +27,24 @@ export interface SessionEnvironment {
 }
 
 /** Whether the session is a Claude Code cloud session, read once from `CLAUDE_CODE_REMOTE`. */
-export function isCloudSession(env: SessionEnvironment): boolean {
+export function isCloudSession(env: CloudSessionVars): boolean {
   return env.CLAUDE_CODE_REMOTE === "true";
 }
 
 /**
  * The lines a cloud session's context gains, in order: where it is, the
  * Operator, the Researcher, the Session environment, the address with the
- * marker to write, and what the repo attaches. `kit` is `fabrik` itself, which
- * has no Researcher.
+ * marker to write, and what the repo attaches. `hasResearcher` is false in
+ * `fabrik` itself, which has none, and true in a Product repo.
  */
 export async function cloudSessionLines({
   productDir,
-  kit,
+  hasResearcher,
   env,
 }: {
   readonly productDir: string;
-  readonly kit: boolean;
-  readonly env: SessionEnvironment;
+  readonly hasResearcher: boolean;
+  readonly env: CloudSessionVars;
 }): Promise<readonly string[]> {
   const repo = repoOf(await gitIn(productDir, "remote", "get-url", "origin"));
   const read = await readKitConfigFromCheckout(productDir).catch(() => null);
@@ -51,9 +55,9 @@ export async function cloudSessionLines({
     operator === null
       ? "The Operator's login isn't known here: ask the Operator for it before you claim or assign."
       : `The Operator is ${operator}: claim and assign with that login, since REST has no @me.`,
-    kit
-      ? "This repo has no Researcher: fire a research subagent for each unblocked research Decision you file, as fabrik-operator-session says."
-      : "This repo has a Researcher: fire no research subagent, since the Kit's Researcher takes each unblocked research Decision.",
+    hasResearcher
+      ? "This repo has a Researcher: fire no research subagent, since the Kit's Researcher takes each unblocked research Decision."
+      : "This repo has no Researcher: fire a research subagent for each unblocked research Decision you file, as fabrik-operator-session says.",
     sessionEnvironmentLine(sessionEnvironmentOf(config), env.FABRIK_SESSION_ENVIRONMENT),
     ...addressLines(sessionAddressOf(env.CLAUDE_CODE_REMOTE_SESSION_ID)),
     await attachedLine(productDir),
