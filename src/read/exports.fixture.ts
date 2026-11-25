@@ -1228,7 +1228,7 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
 
   joinRuns: () =>
     joinRuns(
-      [{ standing: A_KEPT_STANDING, title: "Build the thing", lastWord: null, related: [], mentions: [], relatedTo: null, followUps: [], ticketClosed: null, plainPullRequest: null, evidence: null, shots: null, production: null, prototype: null, digest: null, operatorSession: null }],
+      rowsOf(homeFactsOf({ github: factsOf({ openIssues: [A_TICKET_WAITING] }) }), null, null, null, NOW),
       { ...A_RUNS_READ, runs: [{ ...A_RUN_IN_FLIGHT, issue: 7, pullRequest: null, kind: "first", retry: null }] },
       NOW,
     ),

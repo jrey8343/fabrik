@@ -89,7 +89,12 @@ const fetchFromGitHub: FetchSource = async (repository, sha, folder) => {
 function whyGitFailed(error: unknown): string {
   const stderr = typeof error === "object" && error !== null && "stderr" in error ? String(error.stderr) : "";
   const lines = stderr.split("\n").map((line) => line.trim()).filter((line) => line !== "");
-  return lines.findLast((line) => line.startsWith("fatal:")) ?? lines.at(-1) ?? (error instanceof Error ? error.message : String(error));
+  return lines.findLast((line) => line.startsWith("fatal:")) ?? lines.at(-1) ?? messageOf(error);
+}
+
+/** An error's own message, or what was thrown, as text. */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** Fabrik's own skills, the folders under the Kit's skills/. */
@@ -139,13 +144,13 @@ export async function fetchSkills(
 
   const work = await mkdtemp(join(tmpdir(), "fabrik-skills-"));
   try {
-    const fetchSource = async (repository: string, sha: string) => {
+    // One source at its commit, into its own folder under `work`, with its manifest.
+    const fetchPinned = async (repository: string, sha: string) => {
       const fetchedInto = join(work, `${repository.replace("/", "-")}-${sha}`);
       try {
         await fetchFrom(repository, sha, fetchedInto);
       } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        throw new Error(`${repository} at ${shortSha(sha)} could not be fetched from github.com: ${reason}`);
+        throw new Error(`${repository} at ${shortSha(sha)} could not be fetched from github.com: ${messageOf(error)}`);
       }
       const manifest = await readFile(join(fetchedInto, PLUGIN_MANIFEST_PATH), "utf8").catch(() => null);
       return { fetchedInto, manifest };
@@ -156,7 +161,7 @@ export async function fetchSkills(
     if (base?.sha === lock.sha) {
       baseWanted = { ...lock, skills: base.skills };
     } else {
-      const fetched = await fetchSource(lock.repository, lock.sha);
+      const fetched = await fetchPinned(lock.repository, lock.sha);
       // The Base source must have a manifest; without one there's nothing to install.
       const folders = skillFolders(fetched.manifest ?? "{}");
       baseWanted = { ...lock, skills: folders.map((folder) => folder.name), ...fetched };
@@ -172,9 +177,9 @@ export async function fetchSkills(
         extras.push({ ...source, skills });
       } else {
         try {
-          extras.push({ ...source, skills, ...(await fetchSource(source.repository, source.sha)) });
+          extras.push({ ...source, skills, ...(await fetchPinned(source.repository, source.sha)) });
         } catch (error) {
-          fetchErrors.push(error instanceof Error ? error.message : String(error));
+          fetchErrors.push(messageOf(error));
         }
       }
     }
