@@ -22,6 +22,7 @@ export const RELEASED_NOTES: ReadonlySet<string> = new Set(
     "run-records",
     "scorers",
     "subscription-rotation",
+    "trial-steps",
     "ui-prototypes",
     "visual-evidence",
   ].map((name) => `docs/release-notes/${name}.md`),
