@@ -18,6 +18,7 @@ import {
   type BranchProtection,
   type DeploymentsSeen,
   type EnvironmentPolicy,
+  type EnvironmentRead,
   type EnvironmentRule,
   type EnvironmentState,
   FABRIK_VAULT,
@@ -69,14 +70,22 @@ export async function gatherState(
 
 /**
  * Each environment a job of `roleJobs` names, for Setup's report, read once
- * each: which refs it lets through, never its secrets' names. One the repo
- * doesn't have is null, and so is one whose read GitHub refused, as Setup never
- * blocks on its report: either way it isn't held to the default branch alone.
- * The repo is `owner/name`.
+ * each: which refs it lets through, never its secrets' names, with a null
+ * policy for one the repo doesn't have. A refused read is given with GitHub's
+ * answer, never thrown: Setup never blocks on its report. The repo is
+ * `owner/name`.
  */
-async function gatherRoleEnvironments(run: Run, cwd: string, repo: string, workflows: Readonly<Record<string, string>>): Promise<Record<string, EnvironmentPolicy | null>> {
+async function gatherRoleEnvironments(run: Run, cwd: string, repo: string, workflows: Readonly<Record<string, string>>): Promise<Record<string, EnvironmentRead>> {
   const names = [...new Set(roleJobs(workflows).flatMap(({ environment }) => (environment === null ? [] : [environment])))];
-  const read = await Promise.all(names.map(async (name) => [name, await readEnvironmentPolicy(run, cwd, repo, name).catch(() => null)] as const));
+  const read = await Promise.all(
+    names.map(async (name): Promise<readonly [string, EnvironmentRead]> => {
+      try {
+        return [name, { policy: await readEnvironmentPolicy(run, cwd, repo, name) }];
+      } catch (error) {
+        return [name, { refused: refusedAnswer(error) }];
+      }
+    }),
+  );
   return Object.fromEntries(read);
 }
 
@@ -112,8 +121,13 @@ async function gatherProduction(run: Run, cwd: string, repo: string, kitConfig: 
   try {
     return { name, policy: await readEnvironmentPolicy(run, cwd, repo, name) };
   } catch (error) {
-    return { name, policy: null, refused: error instanceof RefusedRead ? error.answer : error instanceof Error ? error.message : String(error) };
+    return { name, policy: null, refused: refusedAnswer(error) };
   }
+}
+
+/** GitHub's answer to a read it refused, or the error's own message for any other failure. */
+function refusedAnswer(error: unknown): string {
+  return error instanceof RefusedRead ? error.answer : error instanceof Error ? error.message : String(error);
 }
 
 /** A read GitHub refused. Its message names the read and GitHub's answer, and the answer is kept apart for a line that gives it alone. */

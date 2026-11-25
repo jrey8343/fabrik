@@ -75,12 +75,18 @@ export interface ProductState {
   readonly workflows: Readonly<Record<string, string>>;
   /**
    * Each environment a job of `roleJobs` names, read once each for Setup's
-   * report: which refs it lets through, or null when the repo has none of that
-   * name or GitHub refused the read. An environment missing here is read as
-   * null: either way it isn't held to the default branch alone.
+   * report. An environment missing here is read as one the repo has none of:
+   * either way it isn't held to the default branch alone.
    */
-  readonly roleEnvironments: Readonly<Record<string, EnvironmentPolicy | null>>;
+  readonly roleEnvironments: Readonly<Record<string, EnvironmentRead>>;
 }
+
+/**
+ * An environment as Setup's report reads it: which refs it lets through, null
+ * when the repo has none of that name, or GitHub's answer when it refused the
+ * read, which the report gives in place of whether it is held.
+ */
+export type EnvironmentRead = { readonly policy: EnvironmentPolicy | null } | { readonly refused: string };
 
 /**
  * What setup read of a repo's Deployments, to offer production's environment
@@ -545,16 +551,25 @@ export function roleJobs(workflows: Readonly<Record<string, string>>): RoleJob[]
  * one of `roleJobs` that names no environment, so a run on any branch can, or
  * that names one not held to the default branch alone, by the test the
  * `fabrik` environment is held to (environmentHeld). One the repo doesn't
- * have isn't held. Setup can't read a role's trust, so it judges none.
+ * have isn't held; one whose read GitHub refused couldn't be read, with the
+ * first line of GitHub's answer, as Setup can't say whether it is held. Setup
+ * can't read a role's trust, so it judges none.
  */
 function offDefaultBranchRoles({ workflows, roleEnvironments, repo: { defaultBranch } }: ProductState): string[] {
   return roleJobs(workflows).flatMap(({ file, job, environment }) => {
     const named = `.github/workflows/${printable(file)}: its job \`${printable(job)}\` asks for id-token: write`;
     if (environment === null) return [`${named} and names no environment, so a run on any branch can take a role this repo's trust allows.`];
-    const policy = Object.hasOwn(roleEnvironments, environment) ? (roleEnvironments[environment] ?? null) : null;
-    if (environmentHeld(policy, defaultBranch)) return [];
-    return [`${named} and names the environment \`${printable(environment)}\`, which isn't held to the default branch alone, so a run on another branch can take its role.`];
+    const read = Object.hasOwn(roleEnvironments, environment) ? roleEnvironments[environment]! : { policy: null };
+    const namedEnvironment = `${named} and names the environment \`${printable(environment)}\`,`;
+    if ("refused" in read) return [`${namedEnvironment} which couldn't be read (${answerOf(read.refused)}), so Setup can't say whether it is held to the default branch alone.`];
+    if (environmentHeld(read.policy, defaultBranch)) return [];
+    return [`${namedEnvironment} which isn't held to the default branch alone, so a run on another branch can take its role.`];
   });
+}
+
+/** The first line of GitHub's answer to a refused read, with no control characters, for the Operator's terminal to print. */
+function answerOf(refused: string): string {
+  return printable(refused.trim().split("\n")[0]!.trim());
 }
 
 /** Text the Product repo wrote, with no control characters, such as a terminal escape, for the Operator's terminal to print. */
@@ -590,10 +605,7 @@ function productionHeld({ production, repo: { defaultBranch } }: ProductState): 
   if (production === null) return [];
   const { name, policy, refused } = production;
   const named = `Production's environment, ${printable(name)},`;
-  if (refused !== undefined) {
-    const answer = printable(refused.trim().split("\n")[0]!.trim());
-    return [`${named} couldn't be read (${answer}), so Setup can't say whether it is held to ${defaultBranch} alone.`];
-  }
+  if (refused !== undefined) return [`${named} couldn't be read (${answerOf(refused)}), so Setup can't say whether it is held to ${defaultBranch} alone.`];
   if (policy === null) return [`${named} isn't on this repo.`];
   if (environmentHeld(policy, defaultBranch)) return [`${named} is held to ${defaultBranch} alone.`];
   return [`${named} isn't held to ${defaultBranch} alone (${namedPolicy(policy)}), so a run on another ref that names it is given its secrets.`];

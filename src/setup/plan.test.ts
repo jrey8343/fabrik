@@ -2662,27 +2662,38 @@ describe("Setup's report on what an Operator session could reach", () => {
     const text = pushed(...roleJob("deploy", "    environment: production"));
     const held: EnvironmentPolicy = { branches: "selected", rules: [{ id: 1, name: "main", type: "branch" }] };
 
-    expect(onRoles({ "deploy.yml": text }, { production: { branches: "all", rules: [] } })).toEqual([
+    expect(onRoles({ "deploy.yml": text }, { production: { policy: { branches: "all", rules: [] } } })).toEqual([
       ".github/workflows/deploy.yml: its job `deploy` asks for id-token: write and names the environment `production`, which isn't held to the default branch alone, so a run on another branch can take its role.",
     ]);
-    expect(onRoles({ "deploy.yml": text }, { production: { branches: "selected", rules: [{ id: 1, name: "main", type: "tag" }] } })).toEqual([
+    expect(onRoles({ "deploy.yml": text }, { production: { policy: { branches: "selected", rules: [{ id: 1, name: "main", type: "tag" }] } } })).toEqual([
       NOT_HELD("deploy.yml", "deploy", "production"),
     ]);
-    expect(onRoles({ "deploy.yml": text }, { production: held })).toEqual([]);
+    expect(onRoles({ "deploy.yml": text }, { production: { policy: held } })).toEqual([]);
   });
 
   it("counts an environment the repo doesn't have as not held, whether read as missing or never read", () => {
     const text = pushed(...roleJob("deploy", "    environment:", "      name: production", "      url: https://clinic.example.com"));
 
-    expect(onRoles({ "deploy.yml": text }, { production: null })).toEqual([NOT_HELD("deploy.yml", "deploy", "production")]);
+    expect(onRoles({ "deploy.yml": text }, { production: { policy: null } })).toEqual([NOT_HELD("deploy.yml", "deploy", "production")]);
     expect(onRoles({ "deploy.yml": text })).toEqual([NOT_HELD("deploy.yml", "deploy", "production")]);
     expect(onRoles({ "deploy.yml": pushed(...roleJob("deploy", "    environment: constructor")) })).toEqual([NOT_HELD("deploy.yml", "deploy", "constructor")]);
+  });
+
+  it("says an environment GitHub refused the read of couldn't be read, with the first line of GitHub's answer, word for word, and never that it isn't held", () => {
+    const text = pushed(...roleJob("deploy", "    environment: production"));
+
+    expect(onRoles({ "deploy.yml": text }, { production: { refused: "gh: Resource not accessible by personal access token (HTTP 403)\n" } })).toEqual([
+      ".github/workflows/deploy.yml: its job `deploy` asks for id-token: write and names the environment `production`, which couldn't be read (gh: Resource not accessible by personal access token (HTTP 403)), so Setup can't say whether it is held to the default branch alone.",
+    ]);
+    expect(onRoles({ "deploy.yml": text }, { production: { refused: "gh: Bad \u001b[31mGateway (HTTP 502)\nmore" } })).toEqual([
+      ".github/workflows/deploy.yml: its job `deploy` asks for id-token: write and names the environment `production`, which couldn't be read (gh: Bad [31mGateway (HTTP 502)), so Setup can't say whether it is held to the default branch alone.",
+    ]);
   });
 
   it("judges an environment by the repo's default branch, whatever that is called", () => {
     const clean = aCleanProduct({
       workflows: { "deploy.yml": pushed(...roleJob("deploy", "    environment: production")) },
-      roleEnvironments: { production: { branches: "selected", rules: [{ id: 1, name: "main", type: "branch" }] } },
+      roleEnvironments: { production: { policy: { branches: "selected", rules: [{ id: 1, name: "main", type: "branch" }] } } },
     });
 
     expect(planSetup({ ...clean, repo: { ...clean.repo, defaultBranch: "trunk" } }, kit).report.slice(1)).toEqual([NOT_HELD("deploy.yml", "deploy", "production")]);

@@ -405,19 +405,19 @@ describe("Reading the environments a job that asks for id-token: write names, fo
     );
 
     expect(roleEnvironments).toEqual({
-      staging: { branches: "all", rules: [] },
-      dns: null,
-      production: { branches: "selected", rules: [{ id: 41, name: "main", type: "branch" }] },
+      staging: { policy: { branches: "all", rules: [] } },
+      dns: { policy: null },
+      production: { policy: { branches: "selected", rules: [{ id: 41, name: "main", type: "branch" }] } },
     });
     expect(asked).toEqual([ENV("staging"), ENV("dns"), ENV("production"), RULES("production")]);
   });
 
-  it("counts one GitHub refuses the read of as not on the repo, and stops nothing", async () => {
+  it("keeps GitHub's answer for one it refuses the read of, in place of whether it is on the repo, and stops nothing", async () => {
     const { roleEnvironments } = await gathered({ "deploy.yml": workflow(...roleJob("deploy", "production")) }, {
       [ENV("production")]: { code: 1, stderr: "gh: Resource not accessible by personal access token (HTTP 403)\n" },
     });
 
-    expect(roleEnvironments).toEqual({ production: null });
+    expect(roleEnvironments).toEqual({ production: { refused: "gh: Resource not accessible by personal access token (HTTP 403)" } });
   });
 
   it("reads none for a checkout with no job that asks for id-token: write and names an environment", async () => {
