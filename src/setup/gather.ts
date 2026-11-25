@@ -1,6 +1,7 @@
 // What setup reads before planning, with the Operator's own gh and op: the
 // Product repo's files, labels, secrets, fabrik environment, branch protection
-// and Merge gate, the 1Password account's vaults, and the fabrik-runs store.
+// and Merge gate, the 1Password account's vaults, and the fabrik-runs store,
+// with its default branch and its own fabrik environment.
 // With git it reads the caller workflow the default branch holds.
 // For Setup's report it reads production's environment too, when the Kit
 // config names one. It only reads.

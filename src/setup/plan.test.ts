@@ -1693,6 +1693,22 @@ describe("The store's one token, the push account's, in the store's own fabrik e
     expect(notes.filter((note) => note.startsWith(STORE))).toEqual([]);
   });
 
+  it("is said in the README: the last sentence of the fabrik environment's bullet, and the last of the paragraph on a repo's move", () => {
+    const OF_ITS_OWN = " `fabrik-runs` gets a `fabrik` environment of its own, held to its own default branch, for its one token, the push account's.";
+    const THE_SAME_WAY =
+      " The store's one token moves the same way: on the first run that sets the store up at the major, and on the next, which finds its new caller workflow and deletes the repo-level secret, naming the old `fabrik-<owner>-fabrik-runs-push` account.";
+    const lines = readFileSync(resolve(KIT_DIR, "README.md"), "utf8").split("\n");
+
+    const bullet = lines.find((line) => line.startsWith("- **The `fabrik` environment**")) ?? "";
+    expect(bullet.slice(-OF_ITS_OWN.length)).toBe(OF_ITS_OWN);
+    // Straight after the sentences #929 wrote, which end on the stop with no fallback.
+    expect(bullet.slice(0, -OF_ITS_OWN.length)).toMatch(/there is no fallback to repo-level secrets\.$/);
+    const paragraph = lines.find((line) => line.startsWith("A repo already on the Kit moves its tokens")) ?? "";
+    expect(paragraph.slice(-THE_SAME_WAY.length)).toBe(THE_SAME_WAY);
+    // Straight after the sentences #931 wrote, which end on 1Password's limit.
+    expect(paragraph.slice(0, -THE_SAME_WAY.length)).toMatch(/against 1Password's limit of 100\.$/);
+  });
+
   it("is held, with its token in it, once the plan for a new store is applied, so the next run plans nothing for the store", () => {
     const clean = aCleanProduct();
     const setUp = afterApplying(clean, planSetup(clean, kit, operator));
