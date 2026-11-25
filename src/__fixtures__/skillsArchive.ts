@@ -86,6 +86,37 @@ export function servingEach(archives: Readonly<Record<string, Buffer>>): {
   };
 }
 
+/** Runs git in a folder, with no signing and a fixed author, whatever this machine's git config says. */
+export function git(dir: string, ...args: string[]): string {
+  return execFileSync(
+    "git",
+    ["-C", dir, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", ...args],
+    { encoding: "utf8" },
+  ).trim();
+}
+
+/** Makes `dir` a repository whose one branch holds these files in a commit, and gives that commit. */
+export async function aRepository(dir: string, files: Record<string, string>): Promise<string> {
+  await writeFiles(dir, files);
+  git(dir, "init", "-q", "-b", "main");
+  git(dir, "add", "-A");
+  git(dir, "commit", "-q", "-m", "The fixture's commit");
+  return git(dir, "rev-parse", "HEAD");
+}
+
+/**
+ * The environment that has git read `https://github.com/<owner>/<repo>` from
+ * `<folder>/<owner>/<repo>`, so the real git runs on the address the code
+ * builds and nothing reaches the network.
+ */
+export function gitHubFrom(folder: string): Record<string, string> {
+  return {
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: `url.file://${folder}/.insteadOf`,
+    GIT_CONFIG_VALUE_0: "https://github.com/",
+  };
+}
+
 /** A Product checkout pinning these Skills sources, with these roles' Extra skill picks. */
 export async function aProductCheckout(
   pins: readonly { readonly repository: string; readonly sha: string }[] = [],

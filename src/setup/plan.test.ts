@@ -37,6 +37,10 @@ beforeAll(async () => {
   kit = await loadSetupKit(KIT_DIR, "v1.4.2");
 });
 
+/** The hook entry's command as releases before the shallow fetch shipped it, downloading Fabrik's archive from codeload. */
+const OLD_HOOK_COMMAND =
+  "f=\"$CLAUDE_PROJECT_DIR/.github/workflows/fabrik.yml\"; v=$(sed -n -E \"s|^[[:space:]-]*uses:[[:space:]\\\"']*jrey8343/fabrik/[^@]*@([A-Za-z0-9._+-]+).*|\\1|p\" \"$f\" 2>/dev/null | head -n 1); if [ -z \"$v\" ]; then echo \"{\\\"systemMessage\\\":\\\"Fabrik didn't install its skills: .github/workflows/fabrik.yml pins no Fabrik release\\\"}\"; exit 0; fi; d=$(mktemp -d); if curl -fsSL \"https://codeload.github.com/jrey8343/fabrik/tar.gz/refs/tags/$v\" 2>/dev/null | tar -xzf - -C \"$d\" --strip-components=1 2>/dev/null && [ -f \"$d/src/session/start.ts\" ]; then node \"$d/src/session/start.ts\" \"$CLAUDE_PROJECT_DIR\" \"$v\"; else echo \"{\\\"systemMessage\\\":\\\"Fabrik didn't install its skills: downloading Fabrik $v failed\\\"}\"; fi; rm -rf \"$d\"";
+
 function written(actions: readonly SetupAction[], path: string): string | undefined {
   const action = actions.find((a) => a.kind === "write-file" && a.path === path);
   return action?.kind === "write-file" ? action.content : undefined;
@@ -69,7 +73,8 @@ describe("Setting up a clean Product repo", () => {
 
     const settings = JSON.parse(written(actions, ".claude/settings.json") ?? "{}") as Record<string, unknown>;
     expect(settings["enabledPlugins"]).toEqual({ "mattpocock-skills@claude-plugins-official": false });
-    expect(JSON.stringify(settings["hooks"])).toContain("codeload.github.com/jrey8343/fabrik");
+    expect(JSON.stringify(settings["hooks"])).toContain("https://github.com/jrey8343/fabrik");
+    expect(JSON.stringify(settings["hooks"])).not.toContain("codeload.github.com");
   });
 
   it("gitignores the skills the Kit installs", () => {
@@ -214,6 +219,25 @@ describe("Merging a shim into a file the Product repo already has", () => {
     expect(settings.hooks.SessionStart).toEqual(
       (JSON.parse(kit.templates.claudeSettings) as { hooks: { SessionStart: unknown[] } }).hooks.SessionStart,
     );
+  });
+
+  it("replaces the entry that downloaded Fabrik from codeload with the one that fetches it from github.com, keeping the repo's other hooks", () => {
+    const theirs = { hooks: [{ type: "command", command: "echo hi" }] };
+    const old = { hooks: [{ type: "command", command: OLD_HOOK_COMMAND, timeout: 120 }] };
+    const files = { ".claude/settings.json": JSON.stringify({ hooks: { SessionStart: [theirs, old], Stop: [theirs] } }) };
+
+    const { actions } = planSetup(aCleanProduct({ files }), kit);
+
+    const settings = JSON.parse(written(actions, ".claude/settings.json") ?? "{}") as {
+      hooks: { SessionStart: { hooks: { command: string }[] }[]; Stop: unknown[] };
+    };
+    expect(settings.hooks.Stop).toEqual([theirs]);
+    expect(settings.hooks.SessionStart).toHaveLength(2);
+    expect(settings.hooks.SessionStart[0]).toEqual(theirs);
+    expect(settings.hooks.SessionStart[1]?.hooks[0]?.command).toContain(
+      'git -C "$d" fetch -q --depth 1 https://github.com/jrey8343/fabrik "refs/tags/$v"',
+    );
+    expect(JSON.stringify(settings.hooks)).not.toContain("codeload.github.com");
   });
 
   it("asks the Operator to fix settings that aren't JSON, rather than overwrite them", () => {
