@@ -7,6 +7,7 @@ export function aCleanProduct(overrides: Partial<ProductState> = {}): ProductSta
     files: {},
     labels: [],
     secrets: [],
+    environment: null,
     vaults: [],
     fabrikItems: [],
     protection: null,
@@ -42,6 +43,14 @@ export function afterApplying(state: ProductState, plan: SetupPlan): ProductStat
   let next = state;
   for (const action of plan.actions) {
     switch (action.kind) {
+      case "hold-environment":
+        // The Product repo's own: its one rule names the branch, and its secrets stay as they were.
+        if (action.repo !== undefined) break;
+        next = {
+          ...next,
+          environment: { branches: "selected", rules: [{ id: 1, name: action.branch, type: "branch" }], secrets: next.environment?.secrets ?? [] },
+        };
+        break;
       case "write-file":
         next = { ...next, files: { ...next.files, [action.path]: action.content } };
         break;

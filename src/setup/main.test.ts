@@ -35,6 +35,7 @@ case "$*" in
   "repo view --json owner,name,defaultBranchRef,isInOrganization,viewerPermission")
     printf '%s' '{"owner":{"login":"acme"},"name":"clinic","defaultBranchRef":{"name":"main"},"isInOrganization":false,"viewerPermission":"ADMIN"}'; exit 0 ;;
   "label list --limit 1000 --json name"|"secret list --json name") printf '[]'; exit 0 ;;
+  "api repos/acme/clinic/environments/fabrik") echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
   "api repos/acme/clinic/branches/main/protection") echo "gh: Branch not protected (HTTP 404)" >&2; exit 1 ;;
   "api repos/acme/clinic/rulesets?includes_parents=false") printf '[]'; exit 0 ;;
   "repo view jrey8343/fabrik-runs --json visibility") echo "GraphQL: Could not resolve to a Repository" >&2; exit 1 ;;

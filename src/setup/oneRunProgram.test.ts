@@ -7,7 +7,7 @@ import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { aReadyOperator, fakeCommands } from "../__fixtures__/setupCommands.ts";
-import { aWorld, store, type World, worldScript } from "../__fixtures__/setupWorld.ts";
+import { anEnvironment, aWorld, environmentOf, store, type World, worldScript } from "../__fixtures__/setupWorld.ts";
 import { tempDir } from "../__fixtures__/skillsArchive.ts";
 import { resolveKitConfig } from "../kit/config.ts";
 import { type Env, type Run, spawnRun } from "./exec.ts";
@@ -1355,6 +1355,166 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(git("branch", "--show-current").trim()).toBe("main");
     expect(git("branch", "--list", BRANCH)).toBe("");
     expect((await setupOnce(world)).said).toContain("Nothing to do: this repo's Fabrik install is complete.");
+  });
+
+  describe("the fabrik environment, held to the default branch (ADR-0004)", () => {
+    const ENVIRONMENT = "repos/acme/clinic/environments/fabrik";
+    const CREATE = "- create the fabrik environment, held to main alone: only a run of main is given its secrets";
+    /** The environment's rules as GitHub holds them, without the ids it gave them. */
+    const rulesOf = (world: World) => environmentOf(world)?.rules.map(({ name, type }) => ({ name, type }));
+
+    it("on a fresh repo, plans making it as the first step, and makes it with one branch rule naming the default branch", async () => {
+      const world = aWorld();
+
+      const { code, said, complaints, calls } = await setupOnce(world);
+
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(said[said.indexOf("Setup would:") + 1]).toBe(CREATE);
+      expect(environmentOf(world)?.policy).toEqual({ protected_branches: false, custom_branch_policies: true });
+      expect(rulesOf(world)).toEqual([{ name: "main", type: "branch" }]);
+      const puts = calls.filter((call) => call.line === `gh api --method PUT ${ENVIRONMENT} --input -`);
+      expect(puts.map((call) => call.input)).toEqual(['{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}']);
+    });
+
+    type Found = Parameters<typeof anEnvironment>[1];
+
+    it.each<[string, Found, string]>([
+      ["every branch, as GitHub makes one a workflow names", { policy: "all" }, "every branch"],
+      ["protected branches only", { policy: "protected" }, "protected branches only"],
+      ["selected branches and tags with no rule", { policy: "selected" }, "none"],
+      ["a rule naming another branch", { rules: ["release"] }, "release"],
+      ["a tag rule named main", { rules: [{ name: "main", type: "tag" }] }, "tag main"],
+      ["the right rule beside another", { rules: ["main", "release/*"] }, "main, release/*"],
+      ["a rule naming what the default branch was called before it was renamed", { rules: ["master"] }, "master"],
+    ])("found with %s, plans holding it first, from what to what, and leaves exactly the one rule and its secrets", async (_, found, before) => {
+      const world = aWorld();
+      anEnvironment(world, { ...found, secrets: ["STRIPE_KEY"] });
+
+      const { code, said, complaints } = await setupOnce(world);
+
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(said[said.indexOf("Setup would:") + 1]).toBe(`- hold the fabrik environment to main alone: rules ${before} → main`);
+      expect(environmentOf(world)?.policy).toEqual({ protected_branches: false, custom_branch_policies: true });
+      expect(rulesOf(world)).toEqual([{ name: "main", type: "branch" }]);
+      expect([...environmentOf(world)!.secrets]).toEqual(["STRIPE_KEY"]);
+    });
+
+    it("adds the rule naming the default branch before it deletes any other, then reads the rules back", async () => {
+      const world = aWorld();
+      const found = anEnvironment(world, { rules: ["release", { name: "main", type: "tag" }] });
+      const [release, tag] = found.rules.map((rule) => rule.id);
+
+      await setupOnce(world);
+
+      const RULES = `${ENVIRONMENT}/deployment-branch-policies`;
+      const applying = world.environmentCalls.slice(world.environmentCalls.indexOf(`gh api --method PUT ${ENVIRONMENT} --input -`));
+      expect(applying.slice(0, 6)).toEqual([
+        `gh api --method PUT ${ENVIRONMENT} --input -`,
+        `gh api ${RULES}?per_page=100`,
+        `gh api --method POST ${RULES} -f name=main -f type=branch`,
+        `gh api --method DELETE ${RULES}/${release}`,
+        `gh api --method DELETE ${RULES}/${tag}`,
+        `gh api ${RULES}?per_page=100`,
+      ]);
+    });
+
+    it("adds no rule to one that has the default branch's rule beside another, and deletes only the other", async () => {
+      const world = aWorld();
+      const found = anEnvironment(world, { rules: ["main", "release"] });
+      const [main, release] = found.rules.map((rule) => rule.id);
+
+      await setupOnce(world);
+
+      const changes = world.environmentCalls.filter((line) => /--method (POST|DELETE)/.test(line));
+      expect(changes).toEqual([`gh api --method DELETE ${ENVIRONMENT}/deployment-branch-policies/${release}`]);
+      expect(environmentOf(world)?.rules).toEqual([{ id: main, name: "main", type: "branch" }]);
+    });
+
+    const changing = (world: World) => world.environmentCalls.filter((line) => line.includes("--method"));
+
+    it("on a working install, whose environment the first run held, plans no step, changes nothing of it and says the install is complete", async () => {
+      const world = aWorld();
+      await setupOnce(world);
+      mergeTheSetupPr(world);
+      world.environmentCalls.length = 0;
+
+      const { code, said } = await setupOnce(world);
+
+      expect(code).toBe(0);
+      expect(said).toContain("Nothing to do: this repo's Fabrik install is complete.");
+      expect(said.join("\n")).not.toContain("the fabrik environment");
+      expect(changing(world)).toEqual([]);
+    });
+
+    it("on a working install whose one rule was deleted since, puts it back, opens no PR, and the next run plans nothing", async () => {
+      const world = aWorld();
+      await setupOnce(world);
+      mergeTheSetupPr(world);
+      environmentOf(world)!.rules = [];
+
+      const { code, said, complaints } = await setupOnce(world);
+
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(said.filter((line) => line.startsWith("- "))).toContain("- hold the fabrik environment to main alone: rules none → main");
+      expect(rulesOf(world)).toEqual([{ name: "main", type: "branch" }]);
+      expect(world.prs).toHaveLength(1);
+      expect(said).toContain("Every file setup writes is already on main, so there's no setup PR to open. Setup switched back to main.");
+      expect((await setupOnce(world)).said).toContain("Nothing to do: this repo's Fabrik install is complete.");
+    });
+
+    it("with --plan, names the step and changes nothing of the environment", async () => {
+      const world = aWorld();
+      anEnvironment(world, { rules: ["release"] });
+
+      const { code, said } = await setupOnce(world, { args: [...FLAGS, "--plan"] });
+
+      expect(code).toBe(0);
+      expect(said[said.indexOf("Setup would:") + 1]).toBe("- hold the fabrik environment to main alone: rules release → main");
+      expect(changing(world)).toEqual([]);
+      expect(rulesOf(world)).toEqual([{ name: "release", type: "branch" }]);
+    });
+
+    /** What a run changed beyond the fabrik environment: nothing, when it stopped at the environment's step. */
+    const changedElsewhere = (world: World, log: string[]) => ({
+      labels: [...world.labels],
+      secrets: [...world.secrets],
+      vaults: [...world.vaults],
+      protection: world.protection,
+      ruleset: world.ruleset,
+      prs: world.prs.length,
+      commands: log.filter((line) => /^gh (label create|secret set|pr create)|^op (vault|service-account) create|^git (commit|push)|^wizard$/.test(line)),
+    });
+    const NOTHING = { labels: [], secrets: [], vaults: [], protection: null, ruleset: null, prs: 0, commands: [] };
+
+    it("stops when the rules don't read back as the one rule, saying what they read back as, and runs no later step", async () => {
+      const world = aWorld();
+      anEnvironment(world, { policy: "all" }).dropsNewRules = true;
+
+      const { code, complaints, log } = await setupOnce(world);
+
+      expect(code).toBe(1);
+      expect(complaints).toEqual([
+        "The fabrik environment on acme/clinic reads back as none, not held to main alone, so Setup stored no token in it. Run setup again.",
+      ]);
+      expect(changedElsewhere(world, log)).toEqual(NOTHING);
+    });
+
+    it("stops when GitHub refuses the environment, naming its answer and the plans that have environments, and applies no other step of the plan", async () => {
+      const world = aWorld();
+      world.environmentRefusal = "gh: Not Found (HTTP 404)\n";
+
+      const { code, complaints, log } = await setupOnce(world);
+
+      expect(code).toBe(1);
+      expect(complaints).toEqual([
+        "GitHub refused the fabrik environment on acme/clinic: gh: Not Found (HTTP 404). A private repo needs a GitHub plan with environments: GitHub Pro for a personal account's repo, or GitHub Team for an organization's. The Kit keeps no fallback to repo-level secrets, so Setup stopped before changing anything else.",
+      ]);
+      expect(world.environments.size).toBe(0);
+      expect(changedElsewhere(world, log)).toEqual(NOTHING);
+    });
   });
 
   describe("holding admins to the default branch's rules", () => {

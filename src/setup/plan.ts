@@ -2,6 +2,7 @@
 // and the Kit being set up, it returns every step that would leave the repo
 // ready to run the Loop, and nothing a working install already has.
 import { CONSOLE_CHECK } from "../kit/consoleCheck.ts";
+import { KIT_ENVIRONMENT } from "../kit/environment.ts";
 import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, type ProductionConfig, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH, type StagingConfig } from "../kit/config.ts";
 import { ALL_LABELS, type Label as LoopLabel, LOOP_LABELS, READY_FOR_AGENT } from "../loop/labels.ts";
 import { isTimeZone } from "../loop/readable.ts";
@@ -41,6 +42,8 @@ export interface ProductState {
   readonly files: Readonly<Record<string, string | null>>;
   readonly labels: readonly string[];
   readonly secrets: readonly string[];
+  /** The repo's `fabrik` environment, whose secrets are the Kit's tokens (ADR-0004), or null when the repo has none. */
+  readonly environment: EnvironmentState | null;
   readonly vaults: readonly string[];
   /** The titles of the items in the `Fabrik` vault, where each Subscription's token lives. Empty when the vault is missing. */
   readonly fabrikItems: readonly string[];
@@ -61,6 +64,31 @@ export interface ProductState {
 export type DeploymentsSeen =
   | { readonly read: true; readonly environments: readonly { readonly name: string; readonly url: string | null }[] }
   | { readonly read: false; readonly why: string };
+
+/** One rule of an environment set to "Selected branches and tags": the branches, or the tags, of that name. */
+export interface EnvironmentRule {
+  /** GitHub's id for it, which a delete names. */
+  readonly id: number;
+  /** The name, or the pattern, of the branches or tags it lets through. */
+  readonly name: string;
+  readonly type: "branch" | "tag";
+}
+
+/**
+ * Which refs a GitHub environment gives its secrets to, as Setup reads it:
+ * its setting, and the rules of one set to "Selected branches and tags".
+ */
+export interface EnvironmentPolicy {
+  /** `all` is every branch, `protected` is protected branches only, `selected` is selected branches and tags. */
+  readonly branches: "all" | "protected" | "selected";
+  /** Its rules. Only one set to `selected` has any. */
+  readonly rules: readonly EnvironmentRule[];
+}
+
+/** A GitHub environment as Setup reads it: which refs it lets through, and its secrets' names, never their values. */
+export interface EnvironmentState extends EnvironmentPolicy {
+  readonly secrets: readonly string[];
+}
 
 /** What setup reads about the fabrik-runs store (ADR-0009). */
 export interface RunStoreState {
@@ -200,6 +228,22 @@ export const MERGE_GATE_RULESET = "Fabrik Merge gate";
 export const ADMIN_BYPASS = "RepositoryRole:5";
 
 export type SetupAction =
+  | {
+      /**
+       * Makes the environment when the repo lacks it, and holds it to the
+       * default branch: "Selected branches and tags" with one branch rule
+       * naming that branch, and no other rule.
+       */
+      readonly kind: "hold-environment";
+      /** The environment's name. */
+      readonly environment: string;
+      /** The default branch, the one branch its one rule names. */
+      readonly branch: string;
+      /** Which refs it lets through as found, or null when the repo has no such environment. */
+      readonly found: EnvironmentPolicy | null;
+      /** The repo, as `owner/name`, whose environment it is when it isn't the Product repo. */
+      readonly repo?: string;
+    }
   | { readonly kind: "write-file"; readonly path: string; readonly content: string; readonly why: string }
   | { readonly kind: "create-label"; readonly name: LoopLabel; readonly color: string; readonly description: string }
   | { readonly kind: "create-vault"; readonly name: string }
@@ -260,7 +304,8 @@ export interface PlanContext {
 }
 
 export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnswers = {}, context: PlanContext = {}): SetupPlan {
-  const actions: SetupAction[] = [];
+  // The fabrik environment goes first: when GitHub refuses it, Setup stops before it changes anything else.
+  const actions: SetupAction[] = [...holdEnvironment(KIT_ENVIRONMENT, state.environment, state.repo.defaultBranch)];
   const notes: string[] = [];
   const shims: [string, FileUpdate, string][] = [
     [CALLER_PATH, callerUpdate(file(state, CALLER_PATH), kit.templates.caller, kit.release), "the caller workflow, pinning one Fabrik release"],
@@ -290,6 +335,55 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
   actions.push(...runStore(state.store, kit, answers, notes));
   notes.push(...subscriptions(state, kit, answers, context));
   return { actions, notes };
+}
+
+/**
+ * Whether an environment is held to the default branch alone: it exists, it is
+ * set to "Selected branches and tags", and its rules are exactly one, a branch
+ * rule naming the default branch. Its being there, or its setting, is never
+ * taken for its being held: GitHub makes one a workflow names with no rule,
+ * and one set to "Selected branches and tags" with no rule gives its secrets
+ * to every ref (#846).
+ */
+export function environmentHeld(environment: EnvironmentPolicy | null, defaultBranch: string): boolean {
+  return environment !== null && environment.branches === "selected" && onlyRuleNames(environment.rules, defaultBranch);
+}
+
+/**
+ * Whether these rules are exactly one, a branch rule naming the branch. A tag
+ * rule of that name doesn't count: it lets a tag's run in, where a branch rule
+ * refuses a tag named as the branch is (#846).
+ */
+export function onlyRuleNames(rules: readonly EnvironmentRule[], branch: string): boolean {
+  return rules.length === 1 && rules[0]!.type === "branch" && rules[0]!.name === branch;
+}
+
+/**
+ * The step that makes an environment and holds it to the default branch, with
+ * which refs it lets through as found, or no step for one already held. The
+ * Product repo's own unless `repo` names another, as `owner/name`.
+ */
+export function holdEnvironment(environment: string, found: EnvironmentPolicy | null, defaultBranch: string, repo?: string): SetupAction[] {
+  if (environmentHeld(found, defaultBranch)) return [];
+  const policy = found === null ? null : { branches: found.branches, rules: found.rules };
+  return [{ kind: "hold-environment", environment, branch: defaultBranch, found: policy, ...(repo === undefined ? {} : { repo }) }];
+}
+
+/**
+ * Which refs an environment lets through, as Setup names it: `every branch`,
+ * `protected branches only`, or the rules of one set to "Selected branches
+ * and tags".
+ */
+export function namedPolicy(policy: EnvironmentPolicy): string {
+  return policy.branches === "all" ? "every branch" : policy.branches === "protected" ? "protected branches only" : namedRules(policy.rules);
+}
+
+/**
+ * An environment's rules as Setup names them: each by its name, a tag rule as
+ * `tag <name>`, or `none`.
+ */
+export function namedRules(rules: readonly EnvironmentRule[]): string {
+  return rules.length === 0 ? "none" : rules.map((rule) => (rule.type === "tag" ? `tag ${rule.name}` : rule.name)).join(", ");
 }
 
 /**

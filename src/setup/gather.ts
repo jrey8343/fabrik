@@ -1,12 +1,26 @@
 // What setup reads before planning, with the Operator's own gh and op: the
-// Product repo's files, labels, secrets, branch protection and Merge gate, the
-// 1Password account's vaults, and the fabrik-runs store. It only reads.
+// Product repo's files, labels, secrets, fabrik environment, branch protection
+// and Merge gate, the 1Password account's vaults, and the fabrik-runs store.
+// It only reads.
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { KIT_ENVIRONMENT } from "../kit/environment.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import { READY_FOR_AGENT } from "../loop/labels.ts";
 import { ok, type Run } from "./exec.ts";
-import { type Allowances, type DeploymentsSeen, FABRIK_VAULT, MERGE_GATE_RULESET, type BranchProtection, type MergeGateRuleset, type ProductState, type RunStoreState } from "./plan.ts";
+import {
+  type Allowances,
+  type BranchProtection,
+  type DeploymentsSeen,
+  type EnvironmentPolicy,
+  type EnvironmentRule,
+  type EnvironmentState,
+  FABRIK_VAULT,
+  MERGE_GATE_RULESET,
+  type MergeGateRuleset,
+  type ProductState,
+  type RunStoreState,
+} from "./plan.ts";
 import { DEPENDABOT_PATH, STORE_CALLER_PATH } from "./shims.ts";
 
 /** Everything planSetup needs, for the repo the checks found. */
@@ -20,13 +34,69 @@ export async function gatherState(run: Run, productDir: string, repo: ProductSta
   const secrets = names(await ok(run, "gh", ["secret", "list", "--json", "name"], { cwd }));
   const vaults = names(await ok(run, "op", ["vault", "list", "--format", "json"], { cwd }));
   const fabrikItems = vaults.includes(FABRIK_VAULT) ? await vaultItems(run, cwd, FABRIK_VAULT) : [];
-  const [protection, mergeGate, store] = await Promise.all([
+  const [environment, protection, mergeGate, store] = await Promise.all([
+    gatherEnvironment(run, cwd, `${repo.owner}/${repo.name}`, KIT_ENVIRONMENT),
     gatherProtection(run, cwd, repo),
     gatherMergeGate(run, cwd, repo),
     gatherStore(run, cwd),
   ]);
   const readyForAgent = await gatherReadyForAgent(run, cwd, labels);
-  return { repo, files, labels, secrets, vaults, fabrikItems, protection, mergeGate, store, readyForAgent };
+  return { repo, files, labels, secrets, environment, vaults, fabrikItems, protection, mergeGate, store, readyForAgent };
+}
+
+/**
+ * A repo's environment: which refs it lets through and its secrets' names, or
+ * null when the repo has none of that name. The repo is `owner/name`.
+ * `elsewhere` says it isn't the checkout's own repo, so `gh secret` is told it
+ * with `--repo`.
+ */
+export async function gatherEnvironment(
+  run: Run,
+  cwd: string,
+  repo: string,
+  name: string,
+  { elsewhere = false }: { readonly elsewhere?: boolean } = {},
+): Promise<EnvironmentState | null> {
+  const policy = await readEnvironmentPolicy(run, cwd, repo, name);
+  if (policy === null) return null;
+  const where = elsewhere ? ["--repo", repo] : [];
+  const secrets = JSON.parse(await ok(run, "gh", ["secret", "list", "--env", name, ...where, "--json", "name"], { cwd })) as { name: string }[];
+  return { ...policy, secrets: secrets.map((secret) => secret.name) };
+}
+
+/**
+ * Which refs a repo's environment lets through: its setting, and its rules
+ * when it is set to "Selected branches and tags". Null when GitHub answers 404
+ * for it, as for a repo that has none of that name. Any other refusal throws,
+ * naming GitHub's answer.
+ */
+export async function readEnvironmentPolicy(run: Run, cwd: string, repo: string, name: string): Promise<EnvironmentPolicy | null> {
+  const read = await run("gh", ["api", `repos/${repo}/environments/${name}`], { cwd });
+  if (read.code !== 0) {
+    if (/HTTP 404/.test(read.stderr + read.stdout)) return null;
+    throw new Error(`Reading the ${name} environment on ${repo} failed: ${read.stderr.trim() || `exit ${read.code}`}`);
+  }
+  const policy = (JSON.parse(read.stdout) as EnvironmentResponse).deployment_branch_policy ?? null;
+  if (policy === null) return { branches: "all", rules: [] };
+  if (policy.custom_branch_policies !== true) return { branches: "protected", rules: [] };
+  return { branches: "selected", rules: await readEnvironmentRules(run, cwd, repo, name) };
+}
+
+/** GitHub's environment, as far as Setup reads it: null is every branch, and exactly one of the two switches is on otherwise. */
+interface EnvironmentResponse {
+  deployment_branch_policy?: { protected_branches?: boolean; custom_branch_policies?: boolean } | null;
+}
+
+/**
+ * The rules of a repo's environment set to "Selected branches and tags", as
+ * GitHub has them now: the step that holds one reads them before it adds its
+ * rule and again once it has.
+ */
+export async function readEnvironmentRules(run: Run, cwd: string, repo: string, name: string): Promise<EnvironmentRule[]> {
+  const path = `repos/${repo}/environments/${name}/deployment-branch-policies?per_page=100`;
+  const listed = JSON.parse(await ok(run, "gh", ["api", path], { cwd })) as { branch_policies?: { id: number; name: string; type?: string }[] };
+  // A rule made before GitHub's rules had a type is a branch rule.
+  return (listed.branch_policies ?? []).map(({ id, name: ruleName, type }) => ({ id, name: ruleName, type: type === "tag" ? "tag" : "branch" }));
 }
 
 /** A page of the repo's Deployments, as many as GitHub gives to one. */

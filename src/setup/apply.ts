@@ -4,12 +4,16 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { CONSOLE_CHECK } from "../kit/consoleCheck.ts";
 import { ok, type Run } from "./exec.ts";
-import { storeFile } from "./gather.ts";
+import { readEnvironmentRules, storeFile } from "./gather.ts";
 import {
   ADMIN_BYPASS,
   type BranchProtection,
   bypassAllowances,
+  type EnvironmentRule,
   MERGE_GATE_RULESET,
+  namedPolicy,
+  namedRules,
+  onlyRuleNames,
   type ProductState,
   type SetupAction,
   UNPROTECTED,
@@ -18,6 +22,37 @@ import {
 export async function apply(run: Run, action: SetupAction, productDir: string, repo: ProductState["repo"]): Promise<void> {
   const cwd = productDir;
   switch (action.kind) {
+    case "hold-environment": {
+      const { environment, branch } = action;
+      const repoName = action.repo ?? `${repo.owner}/${repo.name}`;
+      const path = `repos/${repoName}/environments/${environment}`;
+      // Makes it, or sets it to "Selected branches and tags". Only the branch policy is sent, so any other protection rule stays as it is.
+      const body = { deployment_branch_policy: { protected_branches: false, custom_branch_policies: true } };
+      const put = await run("gh", ["api", "--method", "PUT", path, "--input", "-"], { cwd, input: JSON.stringify(body) });
+      if (put.code !== 0) {
+        const answer = (put.stderr.trim() || put.stdout.trim()).split("\n")[0]?.trim() || `exit ${put.code}`;
+        throw new Error(
+          `GitHub refused the ${environment} environment on ${repoName}: ${answer}. A private repo needs a GitHub plan with environments: GitHub Pro for a personal account's repo, or GitHub Team for an organization's. The Kit keeps no fallback to repo-level secrets, so Setup stopped before changing anything else.`,
+        );
+      }
+      // The rule naming the default branch goes in before any other comes out, so an environment that holds secrets is never left with no rule (#846).
+      const rules = await readEnvironmentRules(run, cwd, repoName, environment);
+      const wanted = (rule: EnvironmentRule) => onlyRuleNames([rule], branch);
+      if (!rules.some(wanted)) {
+        await ok(run, "gh", ["api", "--method", "POST", `${path}/deployment-branch-policies`, "-f", `name=${branch}`, "-f", "type=branch"], { cwd });
+      }
+      for (const rule of rules.filter((found) => !wanted(found))) {
+        await ok(run, "gh", ["api", "--method", "DELETE", `${path}/deployment-branch-policies/${rule.id}`], { cwd });
+      }
+      // Read back: only the one rule holds it, never the setting, and never a call's having been taken.
+      const readBack = await readEnvironmentRules(run, cwd, repoName, environment);
+      if (!onlyRuleNames(readBack, branch)) {
+        throw new Error(
+          `The ${environment} environment on ${repoName} reads back as ${namedRules(readBack)}, not held to ${branch} alone, so Setup stored no token in it. Run setup again.`,
+        );
+      }
+      return;
+    }
     case "write-file": {
       const target = resolve(productDir, action.path);
       await mkdir(dirname(target), { recursive: true });
@@ -88,6 +123,12 @@ export async function apply(run: Run, action: SetupAction, productDir: string, r
 
 export function describeAction(action: SetupAction): string {
   switch (action.kind) {
+    case "hold-environment": {
+      const { branch, found } = action;
+      const environment = `the ${action.environment} environment${action.repo === undefined ? "" : ` in ${action.repo}`}`;
+      if (found === null) return `create ${environment}, held to ${branch} alone: only a run of ${branch} is given its secrets`;
+      return `hold ${environment} to ${branch} alone: rules ${namedPolicy(found)} → ${branch}`;
+    }
     case "write-file":
       return `write ${action.path} (${action.why})`;
     case "create-label":

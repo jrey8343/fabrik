@@ -104,6 +104,8 @@ export function aReadyOperator(productDir: string, release = "v1.4.2"): Record<s
     // What setup gathers about the repo and the fabrik-runs store.
     "gh label list --limit 1000 --json name": { stdout: "[]" },
     "gh secret list --json name": { stdout: "[]" },
+    // The repo has no fabrik environment.
+    "gh api repos/acme/clinic/environments/fabrik": { code: 1, stderr: "gh: Not Found (HTTP 404)" },
     "gh api repos/acme/clinic/branches/main/protection": { code: 1, stderr: "gh: Branch not protected (HTTP 404)" },
     "gh api repos/acme/clinic/rulesets?includes_parents=false": { stdout: "[]" },
     "gh repo view jrey8343/fabrik-runs --json visibility": { code: 1, stderr: "GraphQL: Could not resolve to a Repository" },
