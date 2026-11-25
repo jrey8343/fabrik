@@ -44,6 +44,8 @@ export interface ProductState {
   readonly secrets: readonly string[];
   /** The repo's `fabrik` environment, whose secrets are the Kit's tokens (ADR-0004), or null when the repo has none. */
   readonly environment: EnvironmentState | null;
+  /** Production's environment, for Setup's report, when the checkout's Kit config's `production` block names one. Null when it names none: then Setup reads no environment for it. */
+  readonly production: ProductionEnvironment | null;
   readonly vaults: readonly string[];
   /** The titles of the items in the `Fabrik` vault, where each Subscription's token lives. Empty when the vault is missing. */
   readonly fabrikItems: readonly string[];
@@ -88,6 +90,17 @@ export interface EnvironmentPolicy {
 /** A GitHub environment as Setup reads it: which refs it lets through, and its secrets' names, never their values. */
 export interface EnvironmentState extends EnvironmentPolicy {
   readonly secrets: readonly string[];
+}
+
+/**
+ * The environment the Kit config's `production` block names, as Setup reads it
+ * for its report. It is the Product repo's own: Setup never makes or changes it.
+ */
+export interface ProductionEnvironment {
+  /** Its name, as the Kit config gives it. */
+  readonly name: string;
+  /** Which refs it lets through, or null when the repo has no environment of that name. */
+  readonly policy: EnvironmentPolicy | null;
 }
 
 /** What setup reads about the fabrik-runs store (ADR-0009). */
@@ -284,6 +297,12 @@ export interface SetupPlan {
   readonly actions: readonly SetupAction[];
   /** What the Operator should know or do that setup can't do for them. */
   readonly notes: readonly string[];
+  /**
+   * Setup's report: what Setup read of the repo and says on every run, under
+   * the plan and in the run's last lines, never in the setup PR. No line of it
+   * is a step or a note, and none holds anything back.
+   */
+  readonly report: readonly string[];
 }
 
 /** Where the plan stands in setup's run. */
@@ -334,7 +353,7 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
   actions.push(...mergeGate(state));
   actions.push(...runStore(state.store, kit, answers, notes));
   notes.push(...subscriptions(state, kit, answers, context));
-  return { actions, notes };
+  return { actions, notes, report: setupReport(state) };
 }
 
 /**
@@ -384,6 +403,49 @@ export function namedPolicy(policy: EnvironmentPolicy): string {
  */
 export function namedRules(rules: readonly EnvironmentRule[]): string {
   return rules.length === 0 ? "none" : rules.map((rule) => (rule.type === "tag" ? `tag ${rule.name}` : rule.name)).join(", ");
+}
+
+/** The Kit's own three Actions secrets, which Setup's report never counts among the repo's own. */
+const KIT_SECRETS: readonly string[] = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
+
+/**
+ * Setup's report, each part's lines in the order it says them. Its first part
+ * is the Product repo's own credentials (Spec #915): a repo-level Actions
+ * secret is one a run on any branch can spend, so each of the repo's own is
+ * named, never judged by its name, with the Kit's rule for a credential that
+ * can reach production. A later part adds its lines after these.
+ */
+function setupReport(state: ProductState): string[] {
+  return [...ownSecrets(state), ...productionHeld(state)];
+}
+
+/**
+ * The report's lines on the repo-level Actions secrets that aren't the Kit's
+ * three: each by name, in name order, then the Kit's rule once, or one line
+ * that the repo holds none, so the Operator sees the check ran.
+ */
+function ownSecrets(state: ProductState): string[] {
+  const own = state.secrets.filter((name) => !KIT_SECRETS.includes(name)).toSorted();
+  if (own.length === 0) return ["This repo holds no repo-level Actions secret of its own."];
+  return [
+    ...own.map((name) => `The repo-level Actions secret ${name} can be read by a workflow run on any branch.`),
+    `A credential that can reach production belongs in an environment held to ${state.repo.defaultBranch} alone, or in a role taken by OIDC whose trust names that environment and not the whole repo. Only test and preview credentials sit at repo level.`,
+  ];
+}
+
+/**
+ * The report's line on production's environment, when the Kit config names
+ * one: whether it is held to the default branch alone, by the test the
+ * `fabrik` environment is held to (environmentHeld), with its rules as the
+ * plan writes them when it isn't, or that the repo has none of that name.
+ */
+function productionHeld({ production, repo: { defaultBranch } }: ProductState): string[] {
+  if (production === null) return [];
+  const { name, policy } = production;
+  const named = `Production's environment, ${name},`;
+  if (policy === null) return [`${named} isn't on this repo.`];
+  if (environmentHeld(policy, defaultBranch)) return [`${named} is held to ${defaultBranch} alone.`];
+  return [`${named} isn't held to ${defaultBranch} alone (${namedPolicy(policy)}), so a run on another ref that names it is given its secrets.`];
 }
 
 /**

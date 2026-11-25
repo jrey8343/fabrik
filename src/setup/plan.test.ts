@@ -1141,7 +1141,7 @@ describe("The fabrik-runs store, the opt-in step for Run records and the Weekly 
     let state = aCleanProduct();
     for (let run = 0; run < 3; run++) state = afterApplying(state, planSetup(state, kit, operator));
 
-    expect(planSetup(state, kit, operator)).toEqual({ actions: [], notes: expect.any(Array) as unknown });
+    expect(planSetup(state, kit, operator)).toEqual({ actions: [], notes: expect.any(Array) as unknown, report: expect.any(Array) as unknown });
     expect(storeActions(state)).toEqual([]);
   });
 
@@ -1824,6 +1824,89 @@ describe("Installing with Dispatch paused", () => {
 
       expect(written(plan.actions, ".fabrik/config.json")).toBeUndefined();
       expect(pausedNote(plan)).toEqual(["--paused had no effect: .fabrik/config.json already exists. Set max_in_flight to 0 in it by hand to pause Dispatch."]);
+    });
+  });
+});
+
+describe("Setup's report on a Product repo's own credentials", () => {
+  const RULE =
+    "A credential that can reach production belongs in an environment held to main alone, or in a role taken by OIDC whose trust names that environment and not the whole repo. Only test and preview credentials sit at repo level.";
+
+  it("names each repo-level Actions secret of the repo's own, in name order, then the Kit's rule, with no line for the Kit's three", () => {
+    const secrets = ["STRIPE_KEY", "FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "CLOUDFLARE_API_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
+
+    const { report } = planSetup(aCleanProduct({ secrets }), kit);
+
+    expect(report).toEqual([
+      "The repo-level Actions secret CLOUDFLARE_API_TOKEN can be read by a workflow run on any branch.",
+      "The repo-level Actions secret STRIPE_KEY can be read by a workflow run on any branch.",
+      RULE,
+    ]);
+  });
+
+  it("says a repo with none of its own holds none, and gives no rule's line, whether or not it holds the Kit's three", () => {
+    const NONE = ["This repo holds no repo-level Actions secret of its own."];
+
+    expect(planSetup(aCleanProduct({ secrets: [] }), kit).report).toEqual(NONE);
+    expect(planSetup(aCleanProduct({ secrets: ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"] }), kit).report).toEqual(NONE);
+  });
+
+  it("names the repo's default branch in the rule's line", () => {
+    const clean = aCleanProduct({ secrets: ["STRIPE_KEY"] });
+
+    const { report } = planSetup({ ...clean, repo: { ...clean.repo, defaultBranch: "trunk" } }, kit);
+
+    expect(report.at(-1)).toBe(RULE.replace("held to main alone", "held to trunk alone"));
+  });
+
+  describe("on production's environment, when the Kit config's production block names one", () => {
+    const rule = (name: string, type: "branch" | "tag" = "branch", id = 1) => ({ id, name, type });
+    const NONE_OF_ITS_OWN = "This repo holds no repo-level Actions secret of its own.";
+    /** The report's lines after those on the repo-level secrets. */
+    const onProduction = (policy: EnvironmentPolicy | null, name = "production") =>
+      planSetup(aCleanProduct({ production: { name, policy } }), kit).report.slice(1);
+
+    it("says it is held to the default branch alone, after the lines on the repo-level secrets", () => {
+      const held: EnvironmentPolicy = { branches: "selected", rules: [rule("main")] };
+
+      expect(planSetup(aCleanProduct({ production: { name: "production", policy: held } }), kit).report).toEqual([
+        NONE_OF_ITS_OWN,
+        "Production's environment, production, is held to main alone.",
+      ]);
+      expect(planSetup(aCleanProduct({ secrets: ["STRIPE_KEY"], production: { name: "production", policy: held } }), kit).report).toEqual([
+        "The repo-level Actions secret STRIPE_KEY can be read by a workflow run on any branch.",
+        RULE,
+        "Production's environment, production, is held to main alone.",
+      ]);
+    });
+
+    it.each<[string, EnvironmentPolicy, string]>([
+      ["every branch", { branches: "all", rules: [] }, "every branch"],
+      ["protected branches only", { branches: "protected", rules: [] }, "protected branches only"],
+      ["selected branches and tags with no rule", { branches: "selected", rules: [] }, "none"],
+      ["a second rule", { branches: "selected", rules: [rule("main"), rule("release/*", "branch", 2)] }, "main, release/*"],
+      ["a tag rule named as the default branch is", { branches: "selected", rules: [rule("main", "tag")] }, "tag main"],
+      ["a tag rule beside the right one", { branches: "selected", rules: [rule("main"), rule("v*", "tag", 2)] }, "main, tag v*"],
+    ])("says it isn't held with %s, naming its rules as the plan writes them", (_, policy, rules) => {
+      expect(onProduction(policy)).toEqual([
+        `Production's environment, production, isn't held to main alone (${rules}), so a run on another ref that names it is given its secrets.`,
+      ]);
+    });
+
+    it("says it isn't on the repo when GitHub has none of that name", () => {
+      expect(onProduction(null, "Production – clinic")).toEqual(["Production's environment, Production – clinic, isn't on this repo."]);
+    });
+
+    it("judges it by the repo's default branch, whatever that is called", () => {
+      const clean = aCleanProduct({ production: { name: "live", policy: { branches: "selected", rules: [rule("main")] } } });
+
+      const { report } = planSetup({ ...clean, repo: { ...clean.repo, defaultBranch: "trunk" } }, kit);
+
+      expect(report.slice(1)).toEqual(["Production's environment, live, isn't held to trunk alone (main), so a run on another ref that names it is given its secrets."]);
+    });
+
+    it("says nothing of production when the Kit config names no environment for it", () => {
+      expect(planSetup(aCleanProduct({ production: null }), kit).report).toEqual([NONE_OF_ITS_OWN]);
     });
   });
 });

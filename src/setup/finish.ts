@@ -103,6 +103,16 @@ export function lastOfEach(steps: readonly string[]): string[] {
   return steps.filter((step, i) => steps.lastIndexOf(step) === i);
 }
 
+/**
+ * Setup's report as it's said, under the plan and again in the run's last
+ * lines: a blank line, its heading, then each line. Nothing for a report with
+ * no line. The setup PR's body never holds it, since a public repo's PR would
+ * show a secret's name, so prBody never calls this.
+ */
+export function reportSection(report: readonly string[]): string[] {
+  return report.length === 0 ? [] : ["", "Setup's report:", ...bullets(report)];
+}
+
 export interface ClosingInputs extends PrBodyInputs {
   readonly url: string;
 }
@@ -117,6 +127,7 @@ export function closingLines({ release, defaultBranch, url, summary }: ClosingIn
     "What setup did:",
     ...(summary.done.length === 0 ? ["- nothing new in this run"] : bullets(summary.done)),
     ...(summary.notes.length === 0 ? [] : ["", "For the Operator:", ...bullets(summary.notes)]),
+    ...reportSection(summary.report),
     "",
     ...(summary.blockers.length === 0 && byHand.length === 0 ? [mergeAsk("Merge it", defaultBranch, fromConsole)] : []),
     ...(summary.blockers.length === 0
@@ -150,6 +161,7 @@ export function appliedLines(defaultBranch: string, summary: RunSummary, upToDat
     "What setup did:",
     ...(summary.done.length === 0 ? ["- nothing new in this run"] : bullets(summary.done)),
     ...(summary.notes.length === 0 ? [] : ["", "For the Operator:", ...bullets(summary.notes)]),
+    ...reportSection(summary.report),
     "",
     upToDate
       ? `${noPr} Setup switched back to ${defaultBranch}.`
