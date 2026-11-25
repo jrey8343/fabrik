@@ -1746,6 +1746,23 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(third.said.filter((line) => /repo-level|old service account/.test(line))).toEqual([]);
     });
 
+    it("on the setup branch before its PR is merged, where the checkout's caller workflow pins Setup's release and the default branch's doesn't, deletes nothing and says the secrets stay", async () => {
+      const world = aWorld();
+      await onTheKitAt(world, "v0.9.1");
+      await setupOnce(world);
+
+      const { code, said, log } = await setupOnce(world);
+
+      expect(code).toBe(0);
+      expect(git("branch", "--show-current").trim()).toBe(BRANCH);
+      expect(await readFile(join(checkout, ".github/workflows/fabrik.yml"), "utf8")).toContain("loop.yml@v1.4.2");
+      expect(git("show", "origin/main:.github/workflows/fabrik.yml")).toContain("loop.yml@v0.9.1");
+      expect(said).toContain(STAY);
+      expect(said.filter((line) => line.includes("delete the repo-level"))).toEqual([]);
+      expect(deleted(log)).toEqual([]);
+      expect([...world.secrets]).toEqual([...TOKENS, "STRIPE_KEY"]);
+    });
+
     it("with only one Kit secret at repo level, deletes only it, names only its role's old account, and leaves every other repo-level secret", async () => {
       const world = aWorld();
       await setupOnce(world);
