@@ -356,12 +356,21 @@ export interface PlanContext {
    * pausing sets its max_in_flight, and its notes are a fresh install's.
    */
   readonly wroteStarter?: boolean;
+  /**
+   * The store's caller workflow as this run first read it, null when the store
+   * had none, for a plan made later in the run than that read. Setup commits
+   * the store's caller straight to its default branch, so such a plan finds
+   * the one the run just wrote, and the store's repo-level secret goes only on
+   * a run that found the new caller there to begin with. Without it, the plan
+   * is made from the run's first read, and the store's caller is as it reads.
+   */
+  readonly storeCallerAtStart?: string | null;
 }
 
 export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnswers = {}, context: PlanContext = {}): SetupPlan {
   // The store's notes keep their place among the plan's, after the Merge gate's, wherever its steps go.
   const storeNotes: string[] = [];
-  const store = runStore(state.store, kit, answers, storeNotes);
+  const store = runStore(state.store, kit, answers, storeNotes, context);
   // The fabrik environment goes first: when GitHub refuses it, Setup stops before it changes anything else.
   // The store's own goes right after it, when the store has a default branch to hold it to.
   const actions: SetupAction[] = [...holdEnvironment(KIT_ENVIRONMENT, state.environment, state.repo.defaultBranch), ...store.first];
@@ -845,7 +854,7 @@ interface StoreSteps {
  * The fabrik-runs store: Run records and the Weekly summary turn on once it
  * exists with the Fabrik App installed on it (the wizard's stage).
  */
-function runStore(store: RunStoreState, kit: SetupKit, answers: SetupAnswers, notes: string[]): StoreSteps {
+function runStore(store: RunStoreState, kit: SetupKit, answers: SetupAnswers, notes: string[], context: PlanContext): StoreSteps {
   const nothing: StoreSteps = { first: [], actions: [] };
   const { timeZone } = answers;
   if (timeZone === undefined) return nothing;
@@ -899,7 +908,15 @@ function runStore(store: RunStoreState, kit: SetupKit, answers: SetupAnswers, no
       repo: RUN_STORE_REPO,
     });
   }
-  if (store.secrets.includes(STORE_SECRET)) {
+  // A repo-level secret of the token's name is the old account's. It goes once nothing reads it, after the environment holds the token:
+  // on a run that found the store's caller pinning a Kit that names the environment, never on the run that writes that caller.
+  const atRepoLevel = store.secrets.includes(STORE_SECRET) ? [{ secret: STORE_SECRET, account: STORE_OLD_ACCOUNT }] : [];
+  const callerAsFirstRead = context.storeCallerAtStart !== undefined ? context.storeCallerAtStart : (store.files[STORE_CALLER_PATH] ?? null);
+  if (store.defaultBranch !== null && kitNamesEnvironment(callerAsFirstRead, kit.release)) {
+    const deletions = deleteRepoSecrets(atRepoLevel, KIT_ENVIRONMENT, store.defaultBranch, RUN_STORE_REPO);
+    actions.push(...deletions);
+    notes.push(...oldAccountsNotes(deletions));
+  } else if (atRepoLevel.length > 0) {
     notes.push(
       `${RUN_STORE_REPO}: The repo-level Actions secret ${STORE_SECRET} stays for now, since the caller workflow setup found there pins no Kit that names the ${KIT_ENVIRONMENT} environment. ` +
         `Once setup has written the one that does, run setup again and it deletes it: ${setupCommand(kit.release)}`,
