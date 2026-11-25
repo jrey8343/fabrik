@@ -4,7 +4,7 @@
 import { checkCallerWorkflow } from "../kit/caller.ts";
 import { CONSOLE_CHECK } from "../kit/consoleCheck.ts";
 import { KIT_ENVIRONMENT } from "../kit/environment.ts";
-import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, type ProductionConfig, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH, type StagingConfig } from "../kit/config.ts";
+import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, type KitConfigResult, type ProductionConfig, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH, type StagingConfig } from "../kit/config.ts";
 import { ALL_LABELS, type Label as LoopLabel, LOOP_LABELS, READY_FOR_AGENT } from "../loop/labels.ts";
 import { isTimeZone } from "../loop/readable.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "../kit/runStore.ts";
@@ -408,12 +408,14 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
     if (!present.has(name.toLowerCase())) actions.push({ kind: "create-label", name, ...LOOP_LABELS[name] });
   }
   actions.push(...secrets(state, kit, notes));
-  actions.push(...protection(state, kit, notes));
+  // The Kit config as the Required checks read it, the starter where the checkout has none: protection and the report both read this one.
+  const config = resolveKitConfig({ config: state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig, skillsLock: file(state, SKILLS_SOURCES_LOCK_PATH) });
+  actions.push(...protection(state, config, notes));
   actions.push(...mergeGate(state));
   actions.push(...store.actions);
   notes.push(...storeNotes);
   notes.push(...subscriptions(state, kit, answers, context));
-  return { actions, notes, report: setupReport(state, kit) };
+  return { actions, notes, report: setupReport(state, config) };
 }
 
 /**
@@ -491,8 +493,8 @@ const KIT_SECRETS: readonly string[] = KIT_ROLES.map((role) => KIT_TOKENS[role])
  * workflow a session can start that holds a role, and whether Kit config
  * holds it (Spec #917). Spec #918 adds its parts' lines after these.
  */
-function setupReport(state: ProductState, kit: SetupKit): string[] {
-  return [...ownSecrets(state), ...productionHeld(state), ...heldWorkflowLines(state, kit)];
+function setupReport(state: ProductState, config: KitConfigResult): string[] {
+  return [...ownSecrets(state), ...productionHeld(state), ...heldWorkflowLines(state, config)];
 }
 
 /** Text the Product repo wrote, with no control characters, such as a terminal escape, for the Operator's terminal to print. */
@@ -545,24 +547,21 @@ function productionHeld({ production, repo: { defaultBranch } }: ProductState): 
  * whether `console.held_workflows` lists it. Setup can't tell which of them
  * only the Operator may start, so it lists every one and judges none, whatever
  * a role's trust holds. The Kit's own caller workflow is left out by name: its
- * jobs ask for `id-token: write` in every repo. The Kit config is read as the
- * Required checks read it, the starter where the checkout has none; an invalid
- * one still gives every line, and its errors are a note of their own.
+ * jobs ask for `id-token: write` in every repo. The Kit config is the one the
+ * Required checks read; an invalid one still gives every line, and its errors
+ * are a note of their own.
  */
-function heldWorkflowLines(state: ProductState, kit: SetupKit): string[] {
-  const config = resolveKitConfig({ config: state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig, skillsLock: file(state, SKILLS_SOURCES_LOCK_PATH) });
+function heldWorkflowLines(state: ProductState, config: KitConfigResult): string[] {
   return Object.keys(state.workflows)
     .filter((name) => name !== CALLER_FILE)
     .toSorted()
     .flatMap((name) => {
-      const { dispatchable, jobs } = workflowRolesOf(state.workflows[name]!);
-      const idToken = jobs.some((job) => job.idToken);
-      const environments = [...new Set(jobs.flatMap((job) => (job.environment === null ? [] : [job.environment])))];
+      const { dispatchable, idToken, environments } = workflowRolesOf(state.workflows[name]!);
       if (!dispatchable || (!idToken && environments.length === 0)) return [];
       const named = environments.map((environment) => `\`${printable(environment)}\``);
       const asks = [
         ...(idToken ? ["asks for id-token: write"] : []),
-        ...(named.length === 0 ? [] : [`names the environment${named.length === 1 ? "" : "s"} ${andList(named)}`]),
+        ...(named.length === 0 ? [] : [`names the environment${named.length === 1 ? "" : "s"} ${listed(named)}`]),
       ].join(" and ");
       const held = !config.ok
         ? "Kit config is invalid, so setup can't say whether console.held_workflows lists it."
@@ -571,11 +570,6 @@ function heldWorkflowLines(state: ProductState, kit: SetupKit): string[] {
           : 'Kit config doesn\'t list it in console.held_workflows, so a session can start it with no tap of yours: if only you may start it, make it a Held workflow (README, "Held workflows").';
       return [`\`${printable(name)}\` can be started by dispatch, and a job of it ${asks}. ${held}`];
     });
-}
-
-/** Items as a list read aloud: `a`, `a and b`, or `a, b and c`. */
-function andList(items: readonly string[]): string {
-  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 }
 
 /**
@@ -1030,9 +1024,7 @@ function file(state: ProductState, path: string): string | null {
  * reviews, its bypass allowances and admin enforcement, and keeps every other
  * one as it finds it.
  */
-function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupAction[] {
-  const configText = state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig;
-  const config = resolveKitConfig({ config: configText, skillsLock: file(state, SKILLS_SOURCES_LOCK_PATH) });
+function protection(state: ProductState, config: KitConfigResult, notes: string[]): SetupAction[] {
   if (!config.ok) notes.push(`${KIT_CONFIG_PATH} is invalid, so the Required checks it lists weren't added to the branch: ${config.errors.join("; ")}`);
   const listedChecks = config.ok ? config.config.sandbox.checks : [];
   // The Console's App, where the Kit config names it: Setup then requires the
