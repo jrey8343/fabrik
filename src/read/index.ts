@@ -244,3 +244,7 @@ export type { OwedRollIn } from "./owedRollIn.ts";
 
 export { newerStandingSchemaOf, readStanding } from "../kit/keptStanding.ts";
 export { readRow } from "./keptRow.ts";
+
+// Held workflows and the Start check
+
+export { START_CHECK_MINUTES, startCheckName } from "../kit/startCheck.ts";

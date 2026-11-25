@@ -10,16 +10,9 @@
 // `callerChangeErrors` does the reads.
 import type { Repo } from "../github/client.ts";
 import { checkCallerWorkflow, fabrikUsesIn, KIT_REPO } from "./caller.ts";
-
-type Level = "none" | "read" | "write";
+import { type Level, type Permissions, permissionsOf, unquoted, workflowKeysOf } from "./workflowLines.ts";
 
 const RANK: Readonly<Record<Level, number>> = { none: 0, read: 1, write: 2 };
-
-/** A `permissions:` value: `read-all`/`write-all` as `all`, else each scope's level, `{}` as none. */
-interface Permissions {
-  readonly all: Level | null;
-  readonly scopes: ReadonlyMap<string, Level>;
-}
 
 interface Job {
   readonly name: string;
@@ -34,97 +27,18 @@ interface Workflow {
   readonly jobs: readonly Job[];
 }
 
-/** One line of a workflow as the check reads it: how far it's indented, and its text with the indent and any comment dropped. */
-interface Line {
-  readonly indent: number;
-  readonly body: string;
-}
-
-/** A workflow text as the check reads it, with every comment and blank line dropped. */
-function linesOf(text: string): Line[] {
-  return text.split("\n").flatMap((raw) => {
-    const line = raw.replace(/\s+#.*$/, "").trimEnd();
-    if (line.trim() === "" || line.trim().startsWith("#")) return [];
-    return [{ indent: line.length - line.trimStart().length, body: line.trim() }];
-  });
-}
-
-function unquoted(value: string): string {
-  return value.trim().replace(/^(["'])(.*)\1$/, "$2");
-}
-
-function levelOf(value: string): Level {
-  const level = unquoted(value);
-  return level === "read" || level === "write" ? level : "none";
-}
-
-/** A `permissions:` value from its inline form (`{}`, `read-all`, `{ contents: read }`) or its block lines. */
-function permissionsOf(inline: string, block: readonly Line[]): Permissions {
-  const scopes = new Map<string, Level>();
-  const value = unquoted(inline);
-  if (value === "read-all" || value === "write-all") return { all: value === "read-all" ? "read" : "write", scopes };
-  const entries =
-    value === ""
-      ? block.map((line) => line.body)
-      : value
-          .replace(/^\{|\}$/g, "")
-          .split(",")
-          .map((entry) => entry.trim())
-          .filter((entry) => entry !== "");
-  for (const entry of entries) {
-    const at = entry.indexOf(":");
-    if (at === -1) continue;
-    scopes.set(unquoted(entry.slice(0, at)), levelOf(entry.slice(at + 1)));
-  }
-  return { all: null, scopes };
-}
-
 /** The workflow's top-level `permissions:` and each of its jobs' `uses:` and `permissions:`. */
-export function workflowOf(text: string): Workflow {
-  const lines = linesOf(text);
-  let permissions: Permissions | null = null;
-  const jobs: Job[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (line.indent !== 0) continue;
-    const key = /^([^:\s]+):(.*)$/.exec(line.body);
-    if (key === null) continue;
-    const children = childrenOf(lines, i);
-    if (key[1] === "permissions") permissions = permissionsOf(key[2] ?? "", children);
-    if (key[1] === "jobs") {
-      for (let j = 0; j < children.length; j++) {
-        const child = children[j]!;
-        if (child.indent !== children[0]!.indent) continue;
-        const name = /^([A-Za-z_][\w-]*):\s*$/.exec(child.body)?.[1];
-        if (name === undefined) continue;
-        jobs.push(jobOf(name, childrenOf(children, j)));
-      }
-    }
-  }
-  return { permissions, jobs };
-}
-
-/** The lines nested under the line at `at`: every following line indented more than it. */
-function childrenOf(lines: readonly Line[], at: number): Line[] {
-  const parent = lines[at]!;
-  const children: Line[] = [];
-  for (let i = at + 1; i < lines.length && lines[i]!.indent > parent.indent; i++) children.push(lines[i]!);
-  return children;
-}
-
-function jobOf(name: string, lines: readonly Line[]): Job {
-  let uses: string | null = null;
-  let permissions: Permissions | null = null;
-  const own = lines.length === 0 ? 0 : lines[0]!.indent;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (line.indent !== own) continue;
-    const key = /^([^:\s]+):(.*)$/.exec(line.body);
-    if (key === null) continue;
-    if (key[1] === "uses") uses = unquoted(key[2] ?? "");
-    if (key[1] === "permissions") permissions = permissionsOf(key[2] ?? "", childrenOf(lines, i));
-  }
-  return { name, uses, permissions };
+function workflowOf(text: string): Workflow {
+  const { top, jobs } = workflowKeysOf(text);
+  const permissions = top.find((key) => key.name === "permissions");
+  return {
+    permissions: permissions === undefined ? null : permissionsOf(permissions.value, permissions.block),
+    jobs: jobs.map(({ name, keys }) => {
+      const uses = keys.find((key) => key.name === "uses");
+      const own = keys.find((key) => key.name === "permissions");
+      return { name, uses: uses === undefined ? null : unquoted(uses.value), permissions: own === undefined ? null : permissionsOf(own.value, own.block) };
+    }),
+  };
 }
 
 function grantOf(permissions: Permissions, scope: string): Level {

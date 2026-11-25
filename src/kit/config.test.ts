@@ -53,7 +53,7 @@ const DEFAULTS = {
   production: null,
   staging: null,
   timeZone: null,
-  console: { appId: null },
+  console: { appId: null, heldWorkflows: [] },
 };
 
 describe("Kit config", () => {
@@ -1160,6 +1160,22 @@ describe("The Kit config template", () => {
     expect(bullet).toContain("the starter Kit config never sets it");
   });
 
+  it("documents console.held_workflows in the README's Kit config section, directly after console.app_id, with an example that resolves", () => {
+    const lines = readme.slice(readme.indexOf("## Kit config"), readme.indexOf("### Extra skills")).split("\n");
+    const appId = lines.findIndex((line) => line.startsWith("- `console.app_id` (default unset)"));
+    const bullet = lines[appId + 1] ?? "";
+    const example = /such as `(\{[^`]*\})`/.exec(bullet)?.[1] ?? "";
+
+    expect(bullet).toMatch(/^- `console\.held_workflows` \(default `\[\]`\) lists the repo's Held workflows, each by its workflow file's name/);
+    expect(bullet).toContain("(see [Held workflows](#held-workflows))");
+    expect(bullet).toContain("It is valid only beside `console.app_id`, since the step reads the check by that App's id.");
+    expect(bullet).toContain("Kit config is a Trust-root file, so no agent can change the list.");
+    expect(resolveKitConfig({ config: example })).toEqual({
+      ok: true,
+      config: { ...DEFAULTS, console: { appId: 1234567, heldWorkflows: ["promote.yml"] } },
+    });
+  });
+
   it("documents the Fable opt-in in the README's Kit config section, with its guards and ADR-0034", () => {
     const section = readme.slice(readme.indexOf("## Kit config"), readme.indexOf("### Extra skills"));
 
@@ -2153,7 +2169,7 @@ describe("The console block, whose app_id says the Console covers a Product repo
   it("reads the Console's App's id from console.app_id, every other field at its default", () => {
     const result = resolveKitConfig({ config: `{ "console": { "app_id": 1234567 } }` });
 
-    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, console: { appId: 1234567 } } });
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, console: { appId: 1234567, heldWorkflows: [] } } });
   });
 
   it.each([null, "1234567", 1.5, 0, -1])("refuses an app_id of %j, which isn't a whole number of at least 1", (appId) => {
@@ -2176,6 +2192,71 @@ describe("The console block, whose app_id says the Console covers a Product repo
     const result = resolveKitConfig({ config: JSON.stringify({ console: { app_id: 0 }, staging: { environment: "staging" } }) });
 
     expect(result).toEqual({ ok: false, errors: ["staging.url is missing", "console.app_id must be a whole number of at least 1"] });
+  });
+});
+
+describe("console.held_workflows, the Product repo's Held workflows by their workflow file's names", () => {
+  it("reads each listed workflow file's name, in the order listed, beside the Console's App's id", () => {
+    const result = resolveKitConfig({
+      config: `{ "console": { "app_id": 1234567, "held_workflows": ["promote.yml", "dns-apply.yaml"] } }`,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      config: { ...DEFAULTS, console: { appId: 1234567, heldWorkflows: ["promote.yml", "dns-apply.yaml"] } },
+    });
+  });
+
+  it.each([
+    ["", `console.held_workflows[1] is "": a workflow's file name can't be blank`],
+    ["  ", `console.held_workflows[1] is "  ": a workflow's file name can't be blank`],
+    ["promote.yml\ndns-apply.yml", `console.held_workflows[1] is "promote.yml\\ndns-apply.yml": a workflow's file name is one line`],
+    [".github/workflows/promote.yml", `console.held_workflows[1] is ".github/workflows/promote.yml": a workflow is named by its file's name alone, such as deploy.yml, not by a path`],
+    ["workflows\\promote.yml", `console.held_workflows[1] is "workflows\\\\promote.yml": a workflow is named by its file's name alone, such as deploy.yml, not by a path`],
+    ["promote", `console.held_workflows[1] is "promote": a workflow's file name ends in .yml or .yaml`],
+    ["promote.json", `console.held_workflows[1] is "promote.json": a workflow's file name ends in .yml or .yaml`],
+  ])("refuses a listed name of %j as production.workflow's is refused, by its place in the list", (name, error) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ console: { app_id: 1234567, held_workflows: ["promote.yml", name] } }) });
+
+    expect(result).toEqual({ ok: false, errors: [error] });
+  });
+
+  it.each([[["promote.yml", 42]], ["promote.yml"], [{ "promote.yml": true }], [null]])(
+    "refuses a held_workflows of %j, which isn't a list of strings",
+    (heldWorkflows) => {
+      const result = resolveKitConfig({ config: JSON.stringify({ console: { app_id: 1234567, held_workflows: heldWorkflows } }) });
+
+      expect(result).toEqual({ ok: false, errors: ["console.held_workflows must be a list of strings"] });
+    },
+  );
+
+  it("refuses a name listed twice, naming the entry and the earlier one that already lists it", () => {
+    const result = resolveKitConfig({
+      config: JSON.stringify({ console: { app_id: 1234567, held_workflows: ["promote.yml", "dns-apply.yml", "promote.yml"] } }),
+    });
+
+    expect(result).toEqual({ ok: false, errors: [`console.held_workflows[2] is "promote.yml", which console.held_workflows[0] already lists`] });
+  });
+
+  it("takes two names that differ only in case as two workflows, as GitHub's file names are case-sensitive", () => {
+    const result = resolveKitConfig({ config: JSON.stringify({ console: { app_id: 1234567, held_workflows: ["promote.yml", "Promote.yml"] } }) });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, console: { appId: 1234567, heldWorkflows: ["promote.yml", "Promote.yml"] } } });
+  });
+
+  it.each([[["promote.yml"]], [[]]])("refuses a held_workflows of %j with no app_id, naming both, since the step reads its check by that App's id", (heldWorkflows) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ console: { held_workflows: heldWorkflows } }) });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: ["console.held_workflows is valid only beside console.app_id: a Held workflow reads its Start check by that App's id"],
+    });
+  });
+
+  it("gives only app_id's own error when app_id is there but refused", () => {
+    const result = resolveKitConfig({ config: JSON.stringify({ console: { app_id: 0, held_workflows: ["promote.yml"] } }) });
+
+    expect(result).toEqual({ ok: false, errors: ["console.app_id must be a whole number of at least 1"] });
   });
 });
 

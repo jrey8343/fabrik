@@ -4,7 +4,7 @@
 import { checkCallerWorkflow } from "../kit/caller.ts";
 import { CONSOLE_CHECK } from "../kit/consoleCheck.ts";
 import { KIT_ENVIRONMENT } from "../kit/environment.ts";
-import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, type ProductionConfig, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH, type StagingConfig } from "../kit/config.ts";
+import { DEFAULT_KIT_CONFIG, KIT_CONFIG_PATH, type KitConfigResult, type ProductionConfig, resolveKitConfig, SKILLS_SOURCES_LOCK_PATH, type StagingConfig } from "../kit/config.ts";
 import { ALL_LABELS, type Label as LoopLabel, LOOP_LABELS, READY_FOR_AGENT } from "../loop/labels.ts";
 import { isTimeZone } from "../loop/readable.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "../kit/runStore.ts";
@@ -12,6 +12,7 @@ import { setupCommand } from "./finish.ts";
 import { withMember } from "./json.ts";
 import type { SetupKit } from "./kit.ts";
 import {
+  CALLER_FILE,
   CALLER_PATH,
   callerUpdate,
   compareMajors,
@@ -30,6 +31,7 @@ import {
   STORE_CALLER_PATH,
   storeCallerUpdate,
 } from "./shims.ts";
+import { workflowRolesOf } from "./workflowRoles.ts";
 
 /** What Setup reads from a Product repo and its 1Password account before planning. */
 export interface ProductState {
@@ -64,6 +66,12 @@ export interface ProductState {
   readonly store: RunStoreState;
   /** How many open issues are labelled ready-for-agent: Dispatch releases them once the caller workflow is on the default branch. */
   readonly readyForAgent: number;
+  /**
+   * Each `.yml` or `.yaml` file directly in the checkout's `.github/workflows/`,
+   * by its file's name (`promote.yml`, not its path), to its text, for Setup's
+   * report. Empty for a checkout with no such folder.
+   */
+  readonly workflows: Readonly<Record<string, string>>;
 }
 
 /**
@@ -400,12 +408,14 @@ export function planSetup(state: ProductState, kit: SetupKit, answers: SetupAnsw
     if (!present.has(name.toLowerCase())) actions.push({ kind: "create-label", name, ...LOOP_LABELS[name] });
   }
   actions.push(...secrets(state, kit, notes));
-  actions.push(...protection(state, kit, notes));
+  // The Kit config as the Required checks read it, the starter where the checkout has none: protection and the report both read this one.
+  const config = resolveKitConfig({ config: state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig, skillsLock: file(state, SKILLS_SOURCES_LOCK_PATH) });
+  actions.push(...protection(state, config, notes));
   actions.push(...mergeGate(state));
   actions.push(...store.actions);
   notes.push(...storeNotes);
   notes.push(...subscriptions(state, kit, answers, context));
-  return { actions, notes, report: setupReport(state) };
+  return { actions, notes, report: setupReport(state, config) };
 }
 
 /**
@@ -474,16 +484,22 @@ const KIT_TOKENS: Readonly<Record<KitRole, string>> = {
 const KIT_SECRETS: readonly string[] = KIT_ROLES.map((role) => KIT_TOKENS[role]);
 
 /**
- * Setup's report, each part's lines in the order it says them. Both of its
+ * Setup's report, each part's lines in the order it says them. Its first two
  * parts are on the Product repo's own credentials (Spec #915). The first is
  * its repo-level Actions secrets: one is a secret a run on any branch can
  * spend, so each of the repo's own is named, never judged by its name, with
  * the Kit's rule for a credential that can reach production. The second is
- * production's environment, when the Kit config names one. The two later
- * Specs, #917 and #918, add their parts' lines after these.
+ * production's environment, when the Kit config names one. The third is each
+ * workflow a session can start that holds a role, and whether Kit config
+ * holds it (Spec #917). Spec #918 adds its parts' lines after these.
  */
-function setupReport(state: ProductState): string[] {
-  return [...ownSecrets(state), ...productionHeld(state)];
+function setupReport(state: ProductState, config: KitConfigResult): string[] {
+  return [...ownSecrets(state), ...productionHeld(state), ...heldWorkflowLines(state, config)];
+}
+
+/** Text the Product repo wrote, with no control characters, such as a terminal escape, for the Operator's terminal to print. */
+function printable(text: string): string {
+  return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
 }
 
 /**
@@ -513,7 +529,6 @@ function ownSecrets(state: ProductState): string[] {
 function productionHeld({ production, repo: { defaultBranch } }: ProductState): string[] {
   if (production === null) return [];
   const { name, policy, refused } = production;
-  const printable = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
   const named = `Production's environment, ${printable(name)},`;
   if (refused !== undefined) {
     const answer = printable(refused.trim().split("\n")[0]!.trim());
@@ -522,6 +537,39 @@ function productionHeld({ production, repo: { defaultBranch } }: ProductState): 
   if (policy === null) return [`${named} isn't on this repo.`];
   if (environmentHeld(policy, defaultBranch)) return [`${named} is held to ${defaultBranch} alone.`];
   return [`${named} isn't held to ${defaultBranch} alone (${namedPolicy(policy)}), so a run on another ref that names it is given its secrets.`];
+}
+
+/**
+ * The report's lines on the workflows a session can start that hold a role:
+ * one for each workflow the checkout holds that can be started by
+ * `workflow_dispatch` and has a job that asks for `id-token: write` or names an
+ * environment, in the order of the files' names, saying what it asks for and
+ * whether `console.held_workflows` lists it. Setup can't tell which of them
+ * only the Operator may start, so it lists every one and judges none, whatever
+ * a role's trust holds. The Kit's own caller workflow is left out by name: its
+ * jobs ask for `id-token: write` in every repo. The Kit config is the one the
+ * Required checks read; an invalid one still gives every line, and its errors
+ * are a note of their own.
+ */
+function heldWorkflowLines(state: ProductState, config: KitConfigResult): string[] {
+  return Object.keys(state.workflows)
+    .filter((name) => name !== CALLER_FILE)
+    .toSorted()
+    .flatMap((name) => {
+      const { dispatchable, idToken, environments } = workflowRolesOf(state.workflows[name]!);
+      if (!dispatchable || (!idToken && environments.length === 0)) return [];
+      const named = environments.map((environment) => `\`${printable(environment)}\``);
+      const asks = [
+        ...(idToken ? ["asks for id-token: write"] : []),
+        ...(named.length === 0 ? [] : [`names the environment${named.length === 1 ? "" : "s"} ${listed(named)}`]),
+      ].join(" and ");
+      const held = !config.ok
+        ? "Kit config is invalid, so setup can't say whether console.held_workflows lists it."
+        : config.config.console.heldWorkflows.includes(name)
+          ? "Kit config lists it in console.held_workflows, so the Console offers a tap for it."
+          : 'Kit config doesn\'t list it in console.held_workflows, so a session can start it with no tap of yours: if only you may start it, make it a Held workflow (README, "Held workflows").';
+      return [`\`${printable(name)}\` can be started by dispatch, and a job of it ${asks}. ${held}`];
+    });
 }
 
 /**
@@ -976,9 +1024,7 @@ function file(state: ProductState, path: string): string | null {
  * reviews, its bypass allowances and admin enforcement, and keeps every other
  * one as it finds it.
  */
-function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupAction[] {
-  const configText = state.files[KIT_CONFIG_PATH] ?? kit.templates.kitConfig;
-  const config = resolveKitConfig({ config: configText, skillsLock: file(state, SKILLS_SOURCES_LOCK_PATH) });
+function protection(state: ProductState, config: KitConfigResult, notes: string[]): SetupAction[] {
   if (!config.ok) notes.push(`${KIT_CONFIG_PATH} is invalid, so the Required checks it lists weren't added to the branch: ${config.errors.join("; ")}`);
   const listedChecks = config.ok ? config.config.sandbox.checks : [];
   // The Console's App, where the Kit config names it: Setup then requires the

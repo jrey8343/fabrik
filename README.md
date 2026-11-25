@@ -150,6 +150,7 @@ Another program can know what the Kit knows (where each piece of work stands, th
   - **The Promote list.** `promoteListOf` takes a gather's facts and the `StagingRead` made for the rows, and gives a `PromoteList`, or null for a repo that declares no `staging`: the `repo`; its `start`, the newest successful production Deployment, or the first successful staging one where production has none; its `entries`, a `PromoteEntry` for each pull request merged since, agent or Plain, newest first, the 100 most recent; `notAccepted`, how many need a Staging trial and are not accepted; `leftOut`, how many older merges it holds no entry for; and `dispatchPage`, GitHub's page for the workflow `production.workflow` names, or null. An agent pull request's entry carries its `result` and, beside it, `standing`, its Standing at Staging for the same facts, which `wordStanding` words, so a reader words no result itself. Nothing in it deploys, dispatches or refuses anything.
   - **Fake data.** `aStagingFacts` builds what the gather reads past the last day, `aStagingRead` a staging read and `aMainChecksRead` a Main checks read, as `aDeploymentsRead` builds production's read, so a reader's fake data is the Kit's own facts. A pull request's Trial steps go in `trialStepsMarkers`, each `{ pullRequest, marker }` with the steps as `trialStepsIn` gives them: on `homeFactsOf` for one merged in the last day, and on `aStagingFacts` for one the gather keeps past it. Both give none unless told.
   - **What the gather reads for it.** In such a repo the gather reads past the last day: the pull requests merged since that start, agent and Plain together, the 100 most recent at most, with their label events and the Trial problems that name them. Those 100 are the Promote list's entries, and the agent ones among them are the pull requests production has not taken that have a row. It reads the repo's Deployments for the start, so the credential needs Deployments read whether or not `production` names an environment. GitHub keeps a Deployment's statuses for 90 days, all but its current one, so a Deployment that shows `inactive` and no `success` is taken for a success only when it was created more than 90 days ago, and is passed over when younger, as `readDeployments` passes it over.
+- **Held workflows.** A Product repo lists its Held workflows in Kit config, as `console.held_workflows` (see [Held workflows](#held-workflows)), so a reader finds them in the `KitConfig` the gather hands back, as `console.heldWorkflows`, with no read of its own. It is empty where Kit config lists none, as it is wherever `console.appId` is null. `startCheckName` gives the Start check's name for a workflow file, `Start promote.yml from the Console` for `promote.yml`, and `START_CHECK_MINUTES`, 15, is how old a Start check may be, from its `completed_at`, when a Held workflow's first job reads it. Nothing in the Kit makes, reads or waits on a Start check: the Console makes it at the Operator's tap, and the Held workflow's own first job reads it.
 
 ## Vision and Roadmap
 
@@ -350,6 +351,114 @@ A passing PR leaves draft and requests the Operator's review. Only the Operator 
 On a Product repo whose Kit config names the Console's App (`console.app_id`, see [Kit config](#kit-config)), the Merge gate holds every merge to the Console (ADR-0019). Setup requires one more check there, the Console check: a check run named `Merge from the Console`, expected from the Console's own GitHub App. The Console makes it when you tap Merge, on the head the screen named, and merges naming that head. Until then every open PR shows it on github.com as expected and not yet reported, and GitHub refuses a merge from github.com, `gh`, an Operator session or anywhere else, the PR's Required checks green or not. It is not a Required check: the Kit's read of the branch's list leaves it out by name, so the Review never waits on it, the Kit never re-runs it, and no Standing names it as in the way. Where the Kit config doesn't name the App, Setup requires no Console check, and a repo whose branch doesn't require it merges as above.
 
 The way past the Merge gate is by hand, on github.com. In the default branch's protection settings, switch off "Do not allow bypassing the above settings", or take the check off the required list; merge; then run Setup, which puts enforcement back. That's how to merge past a Required check on purpose, and the only way out when a Required check can never report again, as after a CI job is renamed, where the PR that corrects `sandbox.checks` in the Kit config can't itself go green while the old name is still required. On a repo the Console covers it is also the only way to merge while the Console is down: there is no second way past. Setup adds Required checks and never takes one off, so a check that has gone for good is taken off the branch's required list by hand: switching enforcement off alone would leave it still required once Setup has put enforcement back, and no PR would merge.
+
+## Workflows that hold a role
+
+A Product repo's workflow that takes a cloud role, by asking for `id-token: write`, or names an environment and so is given its secrets, holds power beyond GitHub. An Operator session, and a Pairing session, starts any workflow on the default branch that can be dispatched, and re-runs any run, as the Operator: GitHub records the Operator as both the actor and the triggering actor, so a gate that checks the actor's name holds nothing against a session. The Kit ships no action and no template for any of these workflows. Each is the repo's own, written to one of the shapes below.
+
+### The shape of a workflow that holds a role
+
+For a workflow a session starts by dispatch to reach a cloud account whose requests are signed, and reads the run of:
+
+- **It is on the default branch and is started by dispatch only.**
+- **Every job that takes the role names an environment held to the default branch,** and the role's trust names that environment, so a branch's copy of the workflow can't take it.
+- **No input reaches a command line except as a fixed choice.**
+- **Its steps are a fixed script from the default branch,** cut to reads and reversible writes. A workflow that runs whatever command it is handed would undo the cut: the merged steps are what hold the role to reads.
+- **Its output is the job log,** which everyone who can read the repo can read.
+
+```yaml
+# .github/workflows/read-logs.yml, on the default branch
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [errors, latency]
+permissions: {}
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    environment: read-logs # held to the default branch alone, and named by the read role's trust
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Take the role
+        uses: <the cloud's own login action, pinned to a commit> # by OIDC, to a role cut to reads
+      - env:
+          MODE: ${{ inputs.mode }}
+        run: ./scripts/read-logs.sh "$MODE"
+```
+
+### Held workflows
+
+A workflow that does an act only the Operator may start, such as a production deploy they promote by hand from staging, or a DNS change they apply by hand, is a **Held workflow**. What it does is held by the merge: every job that takes a role names an environment held to the default branch and the workflow takes no input, so it runs merged code alone. That it starts is held by a **Start check**, which its first job reads before any role is taken.
+
+- **List it in Kit config,** in `console.held_workflows`, beside `console.app_id` (see [Kit config](#kit-config)). The Console then shows one tap for it on the repo's card. The tap makes the Start check on the default branch's head and starts nothing: the run is started as before, by a session, by the Operator on GitHub, or from a terminal.
+- **The Start check** is a check run named `Start <workflow file> from the Console`, such as `Start promote.yml from the Console`, made by the Console's App on the run's own commit, successful, and no more than 15 minutes old when the first job reads it. With none, the first job fails, the job that takes the role is skipped, and the run ends failed.
+- **The App's id is the whole of the hold, and the name none of it.** A workflow on a branch can make a check run of the same name on the default branch's head, and GitHub records it as GitHub Actions'. So the step reads only a check made by the Console's App, by its id. Write the id in the workflow file beside the check's name: the same number `console.app_id` holds, never read from Kit config when the workflow runs, which would put a checkout ahead of the check. An App registered again has a new id, and every Held workflow's file changes with it.
+- **One tap is for one workflow on one commit.** The check's name carries the workflow's file, so a tap for a deploy can't be spent on a DNS apply. The Console makes no Start check on an older commit.
+- **Time spends it.** Nothing but the App can change its check run, so the step judges one by its age: from the check's `completed_at` to the job's own clock. The step reads it on every attempt, so a re-run after the 15 minutes is refused. A job that waits long for a runner can be refused too; tap again. Inside the 15 minutes a Start check is open to anyone who can start the workflow, for more than one run: that is a commit the Operator has just tapped for.
+- **A rollback is a revert merged through the [Merge gate](#merge-gate).** A re-run of an earlier run is refused, since its commit has no fresh Start check. In a repo that promotes by hand, a revert takes a staging deploy and then a promote.
+- **There is no way past of its own.** While the Console is down, use the Merge gate's way past by hand to merge the step out. A variable on GitHub that the workflow also accepted would make the stop only as strong as the Claude GitHub App's permission list.
+- **The step is as strong as the default branch's copy of the workflow.** A branch's copy without it is refused the environment, and a merge that takes it out goes through the Merge gate.
+
+The step, as it ran on trial, with a made-up number in place of the trial's App id: write your Console's App's id there. It needs `checks: read` and nothing else, and `jq -e` fails it on `false` and on no answer at all:
+
+```yaml
+# .github/workflows/promote.yml, on the default branch
+on:
+  workflow_dispatch:
+permissions: {}
+jobs:
+  start-check:
+    name: Read the Start check
+    runs-on: ubuntu-latest
+    permissions:
+      checks: read
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          APP_ID: "1234567" # the Console's App, Kit config's console.app_id
+        run: |
+          gh api --method GET "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" \
+            -f check_name='Start promote.yml from the Console' -F app_id="$APP_ID" \
+          | jq -e --argjson app "$APP_ID" '
+              .check_runs | map(select(.app.id == $app)) | max_by(.completed_at)
+              | . != null and .conclusion == "success"
+                and now - (.completed_at | fromdateiso8601) <= 900'
+  deploy:
+    needs: start-check
+    runs-on: ubuntu-latest
+    environment: production # held to the default branch
+    steps:
+      - run: # takes the role
+```
+
+### A deploy on every merge
+
+A workflow that deploys on a push to the default branch, and by dispatch to deploy again after a deploy that failed halfway, reads no Start check: a dispatch on the default branch runs the head the merge already deployed. Its hold is a step that refuses any run whose commit is not the default branch's head. That refuses a re-run of an older run, which would be a rollback, with no Console in it, so its deploys work while the Console is down. The step needs `contents: read`.
+
+```yaml
+      - name: Refuse any commit but the head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/${{ github.event.repository.default_branch }}" --jq .object.sha)
+          [ "$head" = "$GITHUB_SHA" ] || { echo "::error::$GITHUB_SHA is not the head, so nothing is deployed"; exit 1; }
+```
+
+- **Of two merges close together, the overtaken run is refused.** Written as a failing step, as above, it ends failed: a red run for a merge that did nothing wrong. Written as a first job whose output the deploy job's `if` reads, it ends successful with the deploy job skipped. Which to take is the repo's own choice.
+- **It holds a re-run and nothing finer.** A merge that lands between the step's read and the deploy itself is not caught.
+
+### Runs from before the step
+
+A re-run uses the workflow file of the run's own commit, so a run from before a workflow gained its step re-runs without it, and is given the environment's secrets, for the 30 days GitHub re-runs a run. A deleted run can't be re-run. So once a workflow has its step, delete its runs from before it, or wait the 30 days out, before an Operator session works on the repo.
+
+### Setup's line
+
+On every run, Setup's report lists each workflow on the default branch that can be started by dispatch and has a job that asks for `id-token: write` or names an environment, by its file's name with the environment beside it, and says whether `console.held_workflows` lists it. It reads only the workflows' triggers, permissions and environments, never a step, and leaves out the Kit's own caller workflow, `fabrik.yml`, by name. It never blocks and changes nothing. Which of them do an act only the Operator may start is the Operator's judgement: nothing in the Kit makes a repo list one.
 
 ## Trial session
 
@@ -641,6 +750,7 @@ What Setup and the Visual evidence writer write in `.fabrik/config.json` is prin
 
   - Setup asks for the block beside production's, and creates the two labels a Staging trial ends in, `fabrik:trial-accepted` and `fabrik:trial-problem`, which the Operator puts on the merged pull request they tried. A repo set up before them gets both by running Setup again.
 - `console.app_id` (default unset) is the numeric id of the Console's own GitHub App, such as `{ "console": { "app_id": 1234567 } }`, and its presence says the Console covers this repo. The next Setup run then requires the Console check on the default branch, a check run named `Merge from the Console` expected from that App, and from that run on the repo merges only from the Console (see [Merge gate](#merge-gate) and ADR-0019). Give it only once the Console can pass a head in this repo: given before that, the repo merges only by the Merge gate's by-hand way past. Left out, Setup requires no Console check and the repo merges as before, and the starter Kit config never sets it. A value that isn't a whole number of at least 1, or a field the `console` block doesn't know, is a Kit config error naming the field, and so is `sandbox.checks` naming `Merge from the Console`, since the Console check is never a Required check. No Loop rule, job or prompt reads it: Setup does, and a reader of the Kit. Kit config is a Trust-root file, so no agent can change it.
+- `console.held_workflows` (default `[]`) lists the repo's Held workflows, each by its workflow file's name, such as `{ "console": { "app_id": 1234567, "held_workflows": ["promote.yml"] } }`: a workflow on the default branch that does an act only the Operator may start, such as a production deploy promoted by hand from staging or a DNS change applied by hand, and so reads a Start check before it takes a role (see [Held workflows](#held-workflows)). The Console shows one tap for each, which makes the Start check on the default branch's head and starts nothing. Listing one is the repo's own choice, workflow by workflow: nothing in the Kit makes a repo list one, and nothing checks that a listed file exists or that it reads its check. It is valid only beside `console.app_id`, since the step reads the check by that App's id. A name that is blank, many lines, a path, not a `.yml` or `.yaml` file's name, or listed twice, and `held_workflows` without `app_id`, are each a Kit config error naming the field. No Loop rule, job or prompt reads it: Setup does, and a reader of the Kit. Kit config is a Trust-root file, so no agent can change the list.
 - `operator` is the Operator's GitHub login: the one person whose comments drive a Design session, whom its rounds and failure notices @-mention, and to whom `ready-for-human` work is assigned. `null` means the repo's owner; set it for a repo an organization owns.
 - Per-phase instructions are optional Markdown files: `.fabrik/triage.md`, `.fabrik/design.md`, `.fabrik/implement.md` and `.fabrik/review.md`, the Auditor's `.fabrik/audit.md`, the Retro's `.fabrik/retro.md`, the Researcher's `.fabrik/research.md` and the Digest writer's `.fabrik/digest.md`.
 - `CODING_STANDARDS.md` at the repo root is optional too, though it isn't Kit config: it holds the repo's coding standards. The Reviewer judges every PR against it when it's there (see [Review](#review)), every Implement run is given it inline, and the Retro proposes Judgement lessons as lines for it. It's a Trust-root file, so only the Operator changes it, and the Kit ships no template for it.
