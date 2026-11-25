@@ -221,6 +221,58 @@ describe("The SessionStart hook in a cloud or local session", () => {
   });
 });
 
+describe("The SessionStart hook in fabrik itself, whose checkout is the Kit", () => {
+  /** A stand-in Fabrik checkout: a skills.lock.json, its own skills/ and no caller workflow. */
+  const aFabrikCheckout = () =>
+    aKitCheckout(LOCKED_SHA, {
+      "skills/fabrik-live-design/SKILL.md": "---\nname: fabrik-live-design\n---\n# Live",
+      "skills/fabrik-pair/SKILL.md": "---\nname: fabrik-pair\n---\n# Pair",
+      "skills/fabrik-visual-evidence/SKILL.md": "---\nname: fabrik-visual-evidence\n---\n# Visual evidence",
+    });
+
+  it("installs the Base skills its skills.lock.json pins and its own skills/ into its own .claude/skills/, with no caller workflow and no release", async () => {
+    const fabrik = await aFabrikCheckout();
+    const { fetched, fetchSource } = serving(await aSkillsSource({ "skills/engineering/grilling": "# grilling" }));
+
+    const output = await sessionStart({ kitDir: fabrik, productDir: fabrik, release: null, fetchSource });
+
+    expect(fetched).toEqual([{ repository: "mattpocock/skills", sha: LOCKED_SHA }]);
+    expect(await installedFolders(fabrik)).toEqual(["fabrik-live-design", "fabrik-pair", "fabrik-visual-evidence", "grilling"]);
+    expect(await readFile(join(fabrik, ".claude/skills/fabrik-pair/SKILL.md"), "utf8")).toContain("# Pair");
+    expect(output.systemMessage).toBeUndefined();
+    expect(output.hookSpecificOutput.reloadSkills).toBe(true);
+  });
+
+  it("says in its first line of context that the skills came from this checkout, and gives the same lines on Fabrik's own skills as a Product repo's", async () => {
+    const fabrik = await aFabrikCheckout();
+
+    const output = await sessionStart({
+      kitDir: fabrik,
+      productDir: fabrik,
+      release: null,
+      fetchSource: serving(await aSkillsSource()).fetchSource,
+    });
+
+    expect(output.hookSpecificOutput.additionalContext).toBe(
+      `This checkout is Fabrik itself. The skills its skills.lock.json pins (mattpocock/skills at ${LOCKED_SHA}) and its own skills/ are in .claude/skills/, as this branch held them when the session started, installed by the SessionStart hook; they're gitignored, so never commit or edit them there: a skill of Fabrik's own is edited under skills/.\n` +
+        "To take an issue's Design session live, the Operator runs /fabrik-live-design <issue number>.\n" +
+        "To work through a ready-for-human or weekly-limit issue with an agent beside them (a Pairing session), the Operator runs /fabrik-pair <issue number>.\n" +
+        "To turn Visual evidence on, or change its answers, the Operator runs /fabrik-visual-evidence.",
+    );
+  });
+
+  it("warns rather than throwing when the Base skills can't be fetched from github.com", async () => {
+    const fabrik = await aFabrikCheckout();
+
+    const output = await sessionStart({ kitDir: fabrik, productDir: fabrik, release: null, fetchSource: servingEach({}).fetchSource });
+
+    expect(output.hookSpecificOutput.reloadSkills).toBe(false);
+    expect(output.systemMessage).toBe(
+      `Fabrik didn't install its skills: mattpocock/skills at 4ae2317 could not be fetched from github.com: fatal: remote error: upload-pack: not our ref ${LOCKED_SHA}`,
+    );
+  });
+});
+
 const OPERATOR_SKILLS = "jrey8343/skills";
 const OPERATOR_SHA = "1111111111111111111111111111111111111111";
 const OTHER_SKILLS = "someone/skills";

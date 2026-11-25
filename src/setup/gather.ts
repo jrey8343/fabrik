@@ -4,7 +4,8 @@
 // with its default branch and its own fabrik environment.
 // With git it reads the caller workflow the default branch holds.
 // For Setup's report it reads production's environment too, when the Kit
-// config names one, and the checkout's workflows. It only reads.
+// config names one, the checkout's workflows, and each environment a job of
+// them that asks for id-token: write names. It only reads.
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
@@ -25,6 +26,7 @@ import {
   type ProductionEnvironment,
   productionEnvironmentIn,
   type ProductState,
+  roleJobs,
   type RunStoreState,
 } from "./plan.ts";
 import { CALLER_PATH, DEPENDABOT_PATH, STORE_CALLER_PATH } from "./shims.ts";
@@ -61,7 +63,21 @@ export async function gatherState(
   const readyForAgent = await gatherReadyForAgent(run, cwd, labels);
   const production = await gatherProduction(run, cwd, `${repo.owner}/${repo.name}`, files[KIT_CONFIG_PATH] ?? null);
   const workflows = await gatherWorkflows(productDir);
-  return { repo, files, defaultBranchCaller, labels, secrets, environment, production, vaults, fabrikItems, protection, mergeGate, store, readyForAgent, workflows };
+  const roleEnvironments = await gatherRoleEnvironments(run, cwd, `${repo.owner}/${repo.name}`, workflows);
+  return { repo, files, defaultBranchCaller, labels, secrets, environment, production, vaults, fabrikItems, protection, mergeGate, store, readyForAgent, workflows, roleEnvironments };
+}
+
+/**
+ * Each environment a job of `roleJobs` names, for Setup's report, read once
+ * each: which refs it lets through, never its secrets' names. One the repo
+ * doesn't have is null, and so is one whose read GitHub refused, as Setup never
+ * blocks on its report: either way it isn't held to the default branch alone.
+ * The repo is `owner/name`.
+ */
+async function gatherRoleEnvironments(run: Run, cwd: string, repo: string, workflows: Readonly<Record<string, string>>): Promise<Record<string, EnvironmentPolicy | null>> {
+  const names = [...new Set(roleJobs(workflows).flatMap(({ environment }) => (environment === null ? [] : [environment])))];
+  const read = await Promise.all(names.map(async (name) => [name, await readEnvironmentPolicy(run, cwd, repo, name).catch(() => null)] as const));
+  return Object.fromEntries(read);
 }
 
 /**

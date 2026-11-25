@@ -373,6 +373,61 @@ describe("Reading the checkout's workflows for Setup's report", () => {
   });
 });
 
+describe("Reading the environments a job that asks for id-token: write names, for Setup's report", () => {
+  const ENV = (name: string) => `gh api repos/acme/clinic/environments/${name}`;
+  const RULES = (name: string) => `${ENV(name)}/deployment-branch-policies?per_page=100`;
+  const roleJob = (name: string, environment: string) => [`  ${name}:`, "    permissions:", "      id-token: write", `    environment: ${environment}`];
+  const workflow = (...jobs: readonly string[]) => ["on: push", "jobs:", ...jobs, ""].join("\n");
+
+  /** What Setup gathers of acme/clinic from a checkout holding these workflows, and the environments it asked GitHub for. */
+  async function gathered(workflows: Record<string, string>, script: Record<string, Answer> = {}) {
+    const dir = await tempDir("setup-gather");
+    await mkdir(join(dir, ".github/workflows"), { recursive: true });
+    for (const [name, text] of Object.entries(workflows)) await writeFile(join(dir, ".github/workflows", name), text);
+    const commands = fakeCommands({ ...aReadyOperator(dir), ...script });
+    const state = await gatherState(commands.run, dir, REPO, [], HEAD_SHA);
+    return { roleEnvironments: state.roleEnvironments, asked: commands.calls.map((call) => call.line).filter((line) => /environments\/|--env/.test(line)).slice(1) };
+  }
+
+  it("reads each one once, which refs it lets through and never its secrets, and none a job names without id-token: write, nor the caller's", async () => {
+    const { roleEnvironments, asked } = await gathered(
+      {
+        "deploy.yml": workflow(...roleJob("deploy", "production"), ...roleJob("again", "production"), "  preview:", "    environment: preview"),
+        "apply.yml": workflow(...roleJob("apply", "staging"), ...roleJob("dns", "dns")),
+        "fabrik.yml": workflow(...roleJob("agent", "agent-only")),
+      },
+      {
+        [ENV("production")]: json({ deployment_branch_policy: { protected_branches: false, custom_branch_policies: true } }),
+        [RULES("production")]: json({ branch_policies: [{ id: 41, name: "main", type: "branch" }] }),
+        [ENV("staging")]: json({ deployment_branch_policy: null }),
+        [ENV("dns")]: { code: 1, stderr: "gh: Not Found (HTTP 404)\n" },
+      },
+    );
+
+    expect(roleEnvironments).toEqual({
+      staging: { branches: "all", rules: [] },
+      dns: null,
+      production: { branches: "selected", rules: [{ id: 41, name: "main", type: "branch" }] },
+    });
+    expect(asked).toEqual([ENV("staging"), ENV("dns"), ENV("production"), RULES("production")]);
+  });
+
+  it("counts one GitHub refuses the read of as not on the repo, and stops nothing", async () => {
+    const { roleEnvironments } = await gathered({ "deploy.yml": workflow(...roleJob("deploy", "production")) }, {
+      [ENV("production")]: { code: 1, stderr: "gh: Resource not accessible by personal access token (HTTP 403)\n" },
+    });
+
+    expect(roleEnvironments).toEqual({ production: null });
+  });
+
+  it("reads none for a checkout with no job that asks for id-token: write and names an environment", async () => {
+    const { roleEnvironments, asked } = await gathered({ "plan.yml": workflow("  plan:", "    permissions:", "      id-token: write") });
+
+    expect(roleEnvironments).toEqual({});
+    expect(asked).toEqual([]);
+  });
+});
+
 describe("Reading the fabrik-runs store, which Setup has no checkout of", () => {
   const STORE = "jrey8343/fabrik-runs";
   const VIEW = `gh repo view ${STORE} --json visibility`;

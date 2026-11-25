@@ -2507,9 +2507,11 @@ describe("Setup's report on each workflow a session can start that holds a role"
     "      name: production",
     "      url: https://clinic.example.com",
   ]);
+  /** The report's lines but those on a job that can take a role off the default branch, which have their own tests below. */
+  const held = (report: readonly string[]) => report.filter((line) => !line.startsWith(".github/workflows/"));
   /** The report's lines after the one on the repo-level secrets, for a repo holding these workflows and this Kit config, or none. */
   const onWorkflows = (workflows: Readonly<Record<string, string>>, config: string | null = null) =>
-    planSetup(aCleanProduct({ workflows, files: config === null ? {} : { ".fabrik/config.json": config } }), kit).report.slice(1);
+    held(planSetup(aCleanProduct({ workflows, files: config === null ? {} : { ".fabrik/config.json": config } }), kit).report.slice(1));
   const LISTED = (file: string, asks: string) =>
     `\`${file}\` can be started by dispatch, and a job of it ${asks}. Kit config lists it in console.held_workflows, so the Console offers a tap for it.`;
   const NOT_LISTED = (file: string, asks: string) =>
@@ -2615,7 +2617,7 @@ describe("Setup's report on each workflow a session can start that holds a role"
     const { report, ...planned } = planSetup(loud, kit);
 
     const { report: credentials, ...plannedQuiet } = planSetup(quiet, kit);
-    expect(report).toEqual([
+    expect(held(report)).toEqual([
       ...credentials,
       NOT_LISTED("deploy.yml", "asks for id-token: write and names the environment `production`"),
       NOT_LISTED("promote.yml", "names the environment `production`"),
@@ -2632,5 +2634,175 @@ describe("Setup's report on each workflow a session can start that holds a role"
 
     expect(planSetup(settled, kit).actions).toEqual([]);
     expect(planSetup(settled, kit).report).toEqual([NONE_OF_ITS_OWN, NOT_LISTED("promote.yml", "names the environment `production`")]);
+  });
+});
+
+describe("Setup's report on what an Operator session could reach", () => {
+  /** A workflow with these lines for its `on:`, then these lines under `jobs:`. */
+  const workflow = (on: readonly string[], jobs: readonly string[], top: readonly string[] = []) =>
+    ["name: Some workflow", ...on, ...top, "jobs:", ...jobs, ""].join("\n");
+  /** One job of this name asking for id-token: write by its own permissions:, with these lines more. */
+  const roleJob = (name: string, ...more: readonly string[]) => [`  ${name}:`, "    runs-on: ubuntu-latest", "    permissions:", "      id-token: write", ...more];
+  const pushed = (...jobs: readonly string[]) => workflow(["on: push"], jobs);
+  /** The report's lines after the one on the repo-level secrets, for a repo holding these workflows and these environments. */
+  const onRoles = (workflows: Readonly<Record<string, string>>, roleEnvironments: ProductState["roleEnvironments"] = {}) =>
+    planSetup(aCleanProduct({ workflows, roleEnvironments }), kit).report.slice(1);
+  const NO_ENVIRONMENT = (file: string, job: string) =>
+    `.github/workflows/${file}: its job \`${job}\` asks for id-token: write and names no environment, so a run on any branch can take a role this repo's trust allows.`;
+  const NOT_HELD = (file: string, job: string, environment: string) =>
+    `.github/workflows/${file}: its job \`${job}\` asks for id-token: write and names the environment \`${environment}\`, which isn't held to the default branch alone, so a run on another branch can take its role.`;
+
+  it("names a job that asks for id-token: write and names no environment, word for word", () => {
+    expect(onRoles({ "plan.yml": pushed(...roleJob("plan")) })).toEqual([
+      ".github/workflows/plan.yml: its job `plan` asks for id-token: write and names no environment, so a run on any branch can take a role this repo's trust allows.",
+    ]);
+  });
+
+  it("names a job whose environment isn't held to the default branch alone, word for word, and none whose environment is", () => {
+    const text = pushed(...roleJob("deploy", "    environment: production"));
+    const held: EnvironmentPolicy = { branches: "selected", rules: [{ id: 1, name: "main", type: "branch" }] };
+
+    expect(onRoles({ "deploy.yml": text }, { production: { branches: "all", rules: [] } })).toEqual([
+      ".github/workflows/deploy.yml: its job `deploy` asks for id-token: write and names the environment `production`, which isn't held to the default branch alone, so a run on another branch can take its role.",
+    ]);
+    expect(onRoles({ "deploy.yml": text }, { production: { branches: "selected", rules: [{ id: 1, name: "main", type: "tag" }] } })).toEqual([
+      NOT_HELD("deploy.yml", "deploy", "production"),
+    ]);
+    expect(onRoles({ "deploy.yml": text }, { production: held })).toEqual([]);
+  });
+
+  it("counts an environment the repo doesn't have as not held, whether read as missing or never read", () => {
+    const text = pushed(...roleJob("deploy", "    environment:", "      name: production", "      url: https://clinic.example.com"));
+
+    expect(onRoles({ "deploy.yml": text }, { production: null })).toEqual([NOT_HELD("deploy.yml", "deploy", "production")]);
+    expect(onRoles({ "deploy.yml": text })).toEqual([NOT_HELD("deploy.yml", "deploy", "production")]);
+    expect(onRoles({ "deploy.yml": pushed(...roleJob("deploy", "    environment: constructor")) })).toEqual([NOT_HELD("deploy.yml", "deploy", "constructor")]);
+  });
+
+  it("judges an environment by the repo's default branch, whatever that is called", () => {
+    const clean = aCleanProduct({
+      workflows: { "deploy.yml": pushed(...roleJob("deploy", "    environment: production")) },
+      roleEnvironments: { production: { branches: "selected", rules: [{ id: 1, name: "main", type: "branch" }] } },
+    });
+
+    expect(planSetup({ ...clean, repo: { ...clean.repo, defaultBranch: "trunk" } }, kit).report.slice(1)).toEqual([NOT_HELD("deploy.yml", "deploy", "production")]);
+  });
+
+  it("reads id-token: write from the workflow's own permissions:, or write-all, and none from a job whose own permissions: grants none", () => {
+    const job = ["  plan:", "    runs-on: ubuntu-latest"];
+    const own = ["  plan:", "    runs-on: ubuntu-latest", "    permissions:", "      contents: read"];
+
+    expect(onRoles({ "plan.yml": workflow(["on: push"], job, ["permissions:", "  id-token: write"]) })).toEqual([NO_ENVIRONMENT("plan.yml", "plan")]);
+    expect(onRoles({ "plan.yml": workflow(["on: push"], job, ["permissions: write-all"]) })).toEqual([NO_ENVIRONMENT("plan.yml", "plan")]);
+    expect(onRoles({ "plan.yml": workflow(["on: push"], own, ["permissions:", "  id-token: write"]) })).toEqual([]);
+    expect(onRoles({ "plan.yml": workflow(["on: push"], ["  plan:", "    permissions: {}"], ["permissions: write-all"]) })).toEqual([]);
+  });
+
+  it("gives a workflow that can't be dispatched its lines all the same, beside a dispatchable one's own line", () => {
+    const dispatched = workflow(["on: workflow_dispatch"], roleJob("apply"));
+
+    expect(onRoles({ "on-merge.yml": pushed(...roleJob("deploy")), "apply.yml": dispatched })).toEqual([
+      expect.stringMatching(/^`apply\.yml` can be started by dispatch/),
+      NO_ENVIRONMENT("apply.yml", "apply"),
+      NO_ENVIRONMENT("on-merge.yml", "deploy"),
+    ]);
+  });
+
+  it("goes in the order of the files' names, then of the jobs in each, whatever order they're read in", () => {
+    const two = pushed(...roleJob("zeta"), ...roleJob("alpha", "    environment: staging"), "  test:", "    runs-on: ubuntu-latest");
+
+    expect(onRoles({ "b.yml": two, "a.yaml": pushed(...roleJob("only")) })).toEqual([
+      NO_ENVIRONMENT("a.yaml", "only"),
+      NO_ENVIRONMENT("b.yml", "zeta"),
+      NOT_HELD("b.yml", "alpha", "staging"),
+    ]);
+  });
+
+  it("gives no line to the Kit's own caller workflow, fabrik.yml, as the plan writes it or whatever it asks for", () => {
+    expect(onRoles({ "fabrik.yml": written(planSetup(aCleanProduct(), kit).actions, ".github/workflows/fabrik.yml") ?? "" })).toEqual([]);
+    expect(onRoles({ "fabrik.yml": pushed(...roleJob("deploy")) })).toEqual([]);
+  });
+
+  it("drops control characters from a file's and an environment's name, since the report is printed to the terminal", () => {
+    const text = pushed(...roleJob("deploy", "    environment: prod\u001b]52;c;ZXZpbA==\u0007uction"));
+
+    expect(onRoles({ "dep\u001b[2Jloy.yml": text })).toEqual([NOT_HELD("dep[2Jloy.yml", "deploy", "prod]52;c;ZXZpbA==uction")]);
+  });
+
+  describe("on a Session environment Kit config names", () => {
+    const NAMING = (name: string) => JSON.stringify({ console: { session_environment: name } });
+    /** The report's lines after the one on the repo-level secrets, for a checkout holding these files. */
+    const onFiles = (files: ProductState["files"], workflows: Readonly<Record<string, string>> = {}) => planSetup(aCleanProduct({ files, workflows }), kit).report.slice(1);
+
+    it("says its sessions take it to attach nothing when the repo has no .fabrik/operator-session.md, word for word", () => {
+      expect(onFiles({ ".fabrik/config.json": NAMING("clinic-sessions") })).toEqual([
+        "Kit config names the Session environment `clinic-sessions`, and the repo has no .fabrik/operator-session.md, so its Operator sessions take it to attach nothing.",
+      ]);
+    });
+
+    it("says nothing when the repo has .fabrik/operator-session.md, and nothing when Kit config names none", () => {
+      expect(onFiles({ ".fabrik/config.json": NAMING("clinic-sessions"), ".fabrik/operator-session.md": "# What sessions can reach\n" })).toEqual([]);
+      expect(onFiles({ ".fabrik/config.json": '{ "max_in_flight": 1 }\n' })).toEqual([]);
+      expect(onFiles({ ".fabrik/config.json": JSON.stringify({ console: { app_id: 1234567 } }) })).toEqual([]);
+      expect(onFiles({})).toEqual([]);
+    });
+
+    it("says nothing for an invalid Kit config, whose errors are a note of their own", () => {
+      for (const config of ["{ not json\n", JSON.stringify({ console: { session_environment: "clinic-sessions", held_workflows: ["promote.yml"] } })]) {
+        const { report, notes } = planSetup(aCleanProduct({ files: { ".fabrik/config.json": config } }), kit);
+
+        expect(report.slice(1)).toEqual([]);
+        expect(notes).toContainEqual(expect.stringMatching(/^\.fabrik\/config\.json is invalid/));
+      }
+    });
+
+    it("comes after the lines on jobs that can take a role off the default branch", () => {
+      expect(onFiles({ ".fabrik/config.json": NAMING("clinic-sessions") }, { "plan.yml": pushed(...roleJob("plan")) })).toEqual([
+        NO_ENVIRONMENT("plan.yml", "plan"),
+        expect.stringMatching(/^Kit config names the Session environment `clinic-sessions`/),
+      ]);
+    });
+
+    it("drops control characters from the name, since the report is printed to the terminal", () => {
+      expect(onFiles({ ".fabrik/config.json": NAMING("clinic\u001b[2J-sessions") })).toEqual([
+        "Kit config names the Session environment `clinic[2J-sessions`, and the repo has no .fabrik/operator-session.md, so its Operator sessions take it to attach nothing.",
+      ]);
+    });
+
+    it("reads .fabrik/operator-session.md from the checkout, with the other files Setup reads", () => {
+      expect(setupPaths(kit)).toContain(".fabrik/operator-session.md");
+    });
+  });
+
+  it("puts its lines last in the report, and none in the plan's notes, its steps or the setup PR, on every run", () => {
+    const files = { ".fabrik/config.json": JSON.stringify({ console: { session_environment: "clinic-sessions" } }) };
+    const quiet = aCleanProduct({ secrets: ["STRIPE_KEY"], files, workflows: { "promote.yml": workflow(["on: workflow_dispatch"], ["  promote:", "    environment: production"]) } });
+    const loud = { ...quiet, workflows: { ...quiet.workflows, "deploy.yml": pushed(...roleJob("deploy", "    environment: production")), "plan.yml": pushed(...roleJob("plan")) } };
+
+    const { report, ...planned } = planSetup(loud, kit);
+
+    const { report: before, ...plannedQuiet } = planSetup({ ...quiet, files: { ...files, ".fabrik/operator-session.md": "Nothing.\n" } }, kit);
+    const ours = [
+      NOT_HELD("deploy.yml", "deploy", "production"),
+      NO_ENVIRONMENT("plan.yml", "plan"),
+      "Kit config names the Session environment `clinic-sessions`, and the repo has no .fabrik/operator-session.md, so its Operator sessions take it to attach nothing.",
+    ];
+    expect(report).toEqual([...before, ...ours]);
+    expect(planned).toEqual(plannedQuiet);
+    const body = prBody({ release: "v1.4.2", defaultBranch: "main", summary: { done: [], notes: planned.notes, blockers: [], report } });
+    for (const line of ours) expect(body).not.toContain(line);
+    expect(body).not.toContain("id-token");
+    expect(body).not.toContain("operator-session.md");
+    const settled = afterApplying(loud, planSetup(loud, kit));
+    expect(planSetup(settled, kit).report).toEqual(report);
+  });
+
+  it("is said in the README's list of what Setup does, straight after the Setup's report bullet", () => {
+    const BULLET =
+      "- **What an Operator session could reach,** also in Setup's report, on every run: each job that asks for `id-token: write` and names no environment, or names one that isn't held to the default branch alone, by file and job; and, when Kit config names a Session environment (`console.session_environment`) and the repo has no `.fabrik/operator-session.md`, that its sessions take it to attach nothing. Beside them is the line on each workflow a session can start by dispatch (see [Held workflows](#held-workflows)). The Kit's own caller workflow is in none of them. Setup never blocks on any of these, changes nothing of the repo's, and never looks inside a cloud account's trust policy: which workflows do a short-list act is your judgement (see [Operator sessions](#operator-sessions)).";
+    const lines = readFileSync(resolve(KIT_DIR, "README.md"), "utf8").split("\n");
+
+    expect(lines).toContain(BULLET);
+    expect(lines[lines.indexOf(BULLET) - 1]).toMatch(/^- \*\*Setup's report\*\*, /);
   });
 });
