@@ -474,11 +474,13 @@ const KIT_TOKENS: Readonly<Record<KitRole, string>> = {
 const KIT_SECRETS: readonly string[] = KIT_ROLES.map((role) => KIT_TOKENS[role]);
 
 /**
- * Setup's report, each part's lines in the order it says them. Its first part
- * is the Product repo's own credentials (Spec #915): a repo-level Actions
- * secret is one a run on any branch can spend, so each of the repo's own is
- * named, never judged by its name, with the Kit's rule for a credential that
- * can reach production. A later part adds its lines after these.
+ * Setup's report, each part's lines in the order it says them. Both of its
+ * parts are on the Product repo's own credentials (Spec #915). The first is
+ * its repo-level Actions secrets: one is a secret a run on any branch can
+ * spend, so each of the repo's own is named, never judged by its name, with
+ * the Kit's rule for a credential that can reach production. The second is
+ * production's environment, when the Kit config names one. The two later
+ * Specs, #917 and #918, add their parts' lines after these.
  */
 function setupReport(state: ProductState): string[] {
   return [...ownSecrets(state), ...productionHeld(state)];
