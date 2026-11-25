@@ -24,7 +24,7 @@ import { runSetup } from "./program.ts";
 import type { Prompt } from "./prompt.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
-/** The usage line, as the Operator runs setup: through the bootstrap command, which fills in the checkout and takes the release either way. */
+/** The usage line, as the Operator runs setup: through the bootstrap command, which fills in the checkout, fetched at the release it names after the `--`. */
 const BOOTSTRAP_USAGE =
   "Usage: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/<release>/setup.sh | bash -s -- <release> [--account=<1Password account>]" +
   " [--time-zone=<IANA zone> | --no-time-zone] [--second-subscription | --no-second-subscription] [--paused | --no-paused]" +
