@@ -22,7 +22,7 @@ import { type Env, ok, type Run } from "./exec.ts";
 import { appliedLines, closingLines, setupCommand } from "./finish.ts";
 import { gatherDeployments, gatherState, vaultItems } from "./gather.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
-import { type DoneSources, type OneRunSteps, readinessOf, runOnce, stepsDone, wizardGaps } from "./oneRun.ts";
+import { type DoneSources, mergesFromConsole, type OneRunSteps, readinessOf, runOnce, stepsDone, wizardGaps } from "./oneRun.ts";
 import {
   FABRIK_APP_VAULT,
   listedSubscriptions,
@@ -308,6 +308,7 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
       const merged = {
         ...summary,
         pausesDispatch: kitConfig !== null && pausesDispatch(kitConfig),
+        mergesFromConsole: mergesFromConsole({ kitConfig, skillsLock }),
         // So the closing lines leave out the notes for steps the setup branch's Kit config and the Product repo already show done.
         alreadyDone: stepsDone({ kitConfig, skillsLock, ...readAfter }),
       };

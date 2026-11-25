@@ -102,6 +102,12 @@ export function stepsDone({ kitConfig, skillsLock, protection, appItems }: DoneS
   };
 }
 
+/** Whether the Kit config the setup PR merges names the Console's App (console.app_id). A Kit config that's missing, invalid or unreadable doesn't. */
+export function mergesFromConsole({ kitConfig, skillsLock }: Pick<DoneSources, "kitConfig" | "skillsLock">): boolean {
+  const read = resolveKitConfig({ config: kitConfig, skillsLock });
+  return read.ok && read.config.console.appId !== null;
+}
+
 export interface AfterWizard {
   /** The Product repo, as owner/name. */
   readonly repo: string;
@@ -143,6 +149,8 @@ export interface RunSummary {
   readonly appInstalledOn?: string;
   /** Whether the Kit config the setup PR merges, the setup branch's, pauses Dispatch. */
   readonly pausesDispatch?: boolean;
+  /** Whether the Kit config the setup PR merges, the setup branch's, names the Console's App (console.app_id), so the merge is asked for from the Console. Absent counts as false. */
+  readonly mergesFromConsole?: boolean;
   /** Which finishing steps the Kit config the setup PR merges, and the repo, already show done, so the closing lines leave out their notes. Absent counts as not done. */
   readonly alreadyDone?: StepsDone;
 }
