@@ -109,6 +109,20 @@ describe("The SessionStart hook in a cloud or local session", () => {
     );
   });
 
+  it("installs the release's text for cloud sessions with the Kit's other skills, as any Kit skill", async () => {
+    const kit = resolve(import.meta.dirname, "..", "..");
+    const product = await aProduct(callerAt("v1.2.3"));
+
+    await sessionStart({ kitDir: kit, productDir: product, release: "v1.2.3", fetchSource: serving(await aSkillsSource()).fetchSource });
+
+    expect(await readFile(join(product, ".claude/skills/fabrik-operator-session/SKILL.md"), "utf8")).toBe(
+      await readFile(join(kit, "skills/fabrik-operator-session/SKILL.md"), "utf8"),
+    );
+    expect(await readdir(join(product, ".claude/skills"))).toEqual(
+      expect.arrayContaining(["fabrik-live-design", "fabrik-operator-session", "fabrik-pair", "fabrik-trial", "fabrik-visual-evidence"]),
+    );
+  });
+
   it("doesn't mention the Trial session skill when the release has none", async () => {
     const output = await sessionStart({
       kitDir: await aKitCheckout(LOCKED_SHA, { "skills/fabrik-pair/SKILL.md": "---\nname: fabrik-pair\n---\n# Pair" }),
