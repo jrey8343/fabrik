@@ -79,6 +79,13 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Console check release notes, whi
   const notes = read(NOTES);
   const changed = section(notes, "What changed");
 
+  it("are listed among the drafted notes in the releasing guide, in the entry for the major the four Specs after it add their own links to", () => {
+    const drafted = read("docs/releasing.md")
+      .split("\n")
+      .find((line) => line.includes("Notes drafted ahead of a release are in `docs/release-notes/`"));
+    expect(drafted).toContain("the Operator sessions major's are [the Console check](release-notes/console-check.md)");
+  });
+
   it("open with their title and the paste line, and name each of the six Tickets by its link", () => {
     expect(notes.split("\n")[0]).toBe("# Release notes: the Console check");
     expect(notes).toMatch(/^These are the notes of the Console check's part of the major that carries the Kit's Operator sessions \(\[Spec: The Console check: `console\.app_id`, Setup's part, and the Kit's read leaving it out\]\(https:\/\/github\.com\/jrey8343\/fabrik\/issues\/914\)\)/m);
