@@ -241,8 +241,16 @@ export function worldScript(world: World, origin?: Origin): Record<string, Answe
     },
     // The ready Operator's script answers this one line too, so the world answers it by name.
     [`gh api repos/${PRODUCT_REPO}/environments/${KIT_ENVIRONMENT}`]: (call) => environmentAnswer(world, call) ?? {},
-    "gh secret set": ({ args }) => {
-      world.secrets.add(args[2]!);
+    // With --env the secret is that environment's, of the checkout's repo or with --repo another's, and never a repo-level one.
+    "gh secret set": ({ args, line }) => {
+      if (!args.includes("--env")) {
+        world.secrets.add(args[2]!);
+        return {};
+      }
+      world.environmentCalls.push(line);
+      const environment = environmentOf(world, valueOf(args, "--env"), args.includes("--repo") ? valueOf(args, "--repo") : PRODUCT_REPO);
+      if (environment === undefined) return { code: 1, stderr: "failed to fetch public key: HTTP 404: Not Found" };
+      environment.secrets.add(args[2]!);
       return {};
     },
     "op vault list --format json": () => names(world.vaults),
