@@ -25,6 +25,9 @@ let origin: string;
 let checkout: string;
 let env: Env;
 
+/** The Kit's three Actions secrets, by name, in the order Setup makes their accounts. */
+const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
+
 const git = (...args: string[]) => execFileSync("git", args, { cwd: checkout, encoding: "utf8", env: env as NodeJS.ProcessEnv });
 const originGit = (...args: string[]) => execFileSync("git", args, { cwd: origin, encoding: "utf8", env: env as NodeJS.ProcessEnv });
 
@@ -1403,10 +1406,10 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(environmentOf(world)?.policy).toEqual({ protected_branches: false, custom_branch_policies: true });
       expect(rulesOf(world)).toEqual([{ name: "main", type: "branch" }]);
       // Its own secret stays, beside the three tokens the run's later steps store in it.
-      expect([...environmentOf(world)!.secrets]).toEqual(["STRIPE_KEY", "FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"]);
+      expect([...environmentOf(world)!.secrets]).toEqual(["STRIPE_KEY", ...TOKENS]);
     });
 
-    it("adds the rule naming the default branch before it deletes any other, then reads the rules back", async () => {
+    it("adds the rule naming the default branch before it deletes any other, then reads the environment back, its setting and its rules", async () => {
       const world = aWorld();
       const found = anEnvironment(world, { rules: ["release", { name: "main", type: "tag" }] });
       const [release, tag] = found.rules.map((rule) => rule.id);
@@ -1415,12 +1418,13 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
 
       const RULES = `${ENVIRONMENT}/deployment-branch-policies`;
       const applying = world.environmentCalls.slice(world.environmentCalls.indexOf(`gh api --method PUT ${ENVIRONMENT} --input -`));
-      expect(applying.slice(0, 6)).toEqual([
+      expect(applying.slice(0, 7)).toEqual([
         `gh api --method PUT ${ENVIRONMENT} --input -`,
         `gh api ${RULES}?per_page=100`,
         `gh api --method POST ${RULES} -f name=main -f type=branch`,
         `gh api --method DELETE ${RULES}/${release}`,
         `gh api --method DELETE ${RULES}/${tag}`,
+        `gh api ${ENVIRONMENT}`,
         `gh api ${RULES}?per_page=100`,
       ]);
     });
@@ -1507,6 +1511,27 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect(changedElsewhere(world, log)).toEqual(NOTHING);
     });
 
+    it.each<[string, WorldEnvironment["policy"]]>([
+      ["every branch", null],
+      ["protected branches only", { protected_branches: true, custom_branch_policies: false }],
+    ])("stops when the setting reads back as %s though the one rule is listed, saying so, and runs no later step", async (setting, policy) => {
+      const world = aWorld();
+      anEnvironment(world, { rules: ["release"] });
+      // Someone changes the setting on github.com once Setup has set it, before Setup reads the environment back.
+      const during = (line: string) => {
+        if (line.startsWith(`gh api --method POST ${ENVIRONMENT}/deployment-branch-policies `)) environmentOf(world)!.policy = policy;
+      };
+
+      const { code, complaints, log } = await setupOnce(world, { during });
+
+      expect(rulesOf(world)).toEqual([{ name: "main", type: "branch" }]);
+      expect(code).toBe(1);
+      expect(complaints).toEqual([
+        `The fabrik environment on acme/clinic reads back as ${setting}, not held to main alone, so Setup stored no token in it. Run setup again.`,
+      ]);
+      expect(changedElsewhere(world, log)).toEqual(NOTHING);
+    });
+
     it("stops when GitHub refuses the environment, naming its answer and the plans that have environments, and applies no other step of the plan", async () => {
       const world = aWorld();
       world.environmentRefusal = "gh: Not Found (HTTP 404)\n";
@@ -1524,7 +1549,6 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
 
   describe("the three tokens, stored in the fabrik environment under new service accounts (ADR-0004)", () => {
     const ENVIRONMENT = "repos/acme/clinic/environments/fabrik";
-    const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
     /** Each service account the run made, as op was asked for it. */
     const made = (log: string[]) => log.filter((line) => line.startsWith("op service-account create "));
 
@@ -1561,26 +1585,28 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect([...said, ...complaints, world.prs[0]!.body].join("\n")).not.toContain("ops_token");
     });
 
-    it("reads the environment's rules before it makes each account, and makes none before the rule the run added reads back", async () => {
+    it("reads the environment, its setting and its rules, before it makes each account, and makes none before the environment the run held reads back", async () => {
       const world = aWorld();
 
       const { log } = await setupOnce(world);
 
       const PUT = `gh api --method PUT ${ENVIRONMENT} --input -`;
       const RULES = `gh api ${ENVIRONMENT}/deployment-branch-policies?per_page=100`;
+      /** The environment read whole: its setting, then its rules. */
+      const READ = [`gh api ${ENVIRONMENT}`, RULES];
       const steps = log.filter((line) => line.includes(ENVIRONMENT) || /^op service-account create |^gh secret set /.test(line));
-      expect(steps.slice(steps.indexOf(PUT), steps.indexOf(PUT) + 13)).toEqual([
+      expect(steps.slice(steps.indexOf(PUT), steps.indexOf(PUT) + 17)).toEqual([
         PUT,
         RULES,
         `gh api --method POST ${ENVIRONMENT}/deployment-branch-policies -f name=main -f type=branch`,
-        RULES,
-        RULES,
+        ...READ,
+        ...READ,
         "op service-account create fabrik-acme-clinic-agent-env --vault Fabrik:read_items --raw",
         "gh secret set FABRIK_OP_AGENT_TOKEN --env fabrik",
-        RULES,
+        ...READ,
         "op service-account create fabrik-acme-clinic-implement-env --vault Fabrik:read_items --vault Fabrik Sandbox · clinic:read_items --raw",
         "gh secret set FABRIK_OP_IMPLEMENT_TOKEN --env fabrik",
-        RULES,
+        ...READ,
         "op service-account create fabrik-acme-clinic-push-env --vault Fabrik App:read_items --raw",
         "gh secret set FABRIK_OP_PUSH_TOKEN --env fabrik",
       ]);
@@ -1597,6 +1623,12 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       ["a rule naming another branch", (environment) => void (environment.rules = [{ id: 201, name: "release", type: "branch" }])],
       ["a tag rule named main", (environment) => void (environment.rules = [{ id: 201, name: "main", type: "tag" }])],
       ["another rule beside its one", (environment) => void environment.rules.push({ id: 201, name: "release/*", type: "branch" })],
+      // GitHub keeps an environment's rules, and lists them, under a setting that doesn't use them.
+      ["its one rule, under a setting changed to every branch", (environment) => void (environment.policy = null)],
+      [
+        "its one rule, under a setting changed to protected branches only",
+        (environment) => void (environment.policy = { protected_branches: true, custom_branch_policies: false }),
+      ],
     ])("in a run that found the environment held and planned no step for it, stops before it makes an account when its rules read as %s", async (_, change) => {
       const world = aWorld();
       const environment = anEnvironment(world, { rules: ["main"] });
@@ -1612,12 +1644,13 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       expect([...world.secrets]).toEqual([]);
     });
 
-    it("stops before it makes an account when the read of the environment's rules fails, as for one deleted since Setup read it", async () => {
+    it("stops before it makes an account when the environment is gone, as one deleted since Setup read it", async () => {
       const world = aWorld();
       anEnvironment(world, { rules: ["main"] });
 
-      const { code, log } = await setupOnce(world, { during: afterTheYes(() => world.environments.clear()) });
+      const { code, complaints, log } = await setupOnce(world, { during: afterTheYes(() => world.environments.clear()) });
 
+      expect(complaints).toEqual([STORED_NONE]);
       expect(code).toBe(1);
       expect(made(log)).toEqual([]);
       expect(log.filter((line) => line.startsWith("gh secret set "))).toEqual([]);
@@ -1669,7 +1702,6 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
   });
 
   describe("the repo-level tokens, deleted once the default branch's Kit names the fabrik environment (ADR-0004)", () => {
-    const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
     const DELETES = TOKENS.map((name) => `- delete the repo-level Actions secret ${name}: the Kit main pins reads the fabrik environment's`);
     /** Each service account the run made, and each repo-level secret it deleted, as op and gh were asked. */
     const made = (log: string[]) => log.filter((line) => line.startsWith("op service-account create "));
@@ -1940,7 +1972,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
         `gh secret list --env fabrik --repo ${STORE} --json name`,
       ]);
       expect([...world.secrets]).toEqual([]);
-      expect([...environmentOf(world)!.secrets]).toEqual(["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"]);
+      expect([...environmentOf(world)!.secrets]).toEqual(TOKENS);
     });
 
     it("for a store the run makes, writes its files, then holds its environment to the default branch their first commit made, then stores its token there, and never a repo-level secret", async () => {
@@ -1960,6 +1992,8 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
         '- create the read-only service account "fabrik-jrey8343-fabrik-runs-push-env" (reads "Fabrik App") and store it as FABRIK_OP_PUSH_TOKEN in the fabrik environment in jrey8343/fabrik-runs',
       ]);
       const RULES = `gh api ${STORE_ENVIRONMENT}/deployment-branch-policies?per_page=100`;
+      /** The environment read whole: its setting, then its rules. */
+      const READ = [`gh api ${STORE_ENVIRONMENT}`, RULES];
       const BRANCH_NOW = `gh repo view ${STORE} --json defaultBranchRef`;
       const steps = log.slice(index(log, /^gh repo create /));
       expect(steps.slice(0, steps.indexOf(`gh secret set ${TOKEN} --env fabrik --repo ${STORE}`) + 1).filter((line) => line.includes(STORE) || line.startsWith("op service-account"))).toEqual([
@@ -1972,9 +2006,9 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
         `gh api --method PUT ${STORE_ENVIRONMENT} --input -`,
         RULES,
         `gh api --method POST ${STORE_ENVIRONMENT}/deployment-branch-policies -f name=trunk -f type=branch`,
-        RULES,
+        ...READ,
         BRANCH_NOW,
-        RULES,
+        ...READ,
         NEW_ACCOUNT,
         `gh secret set ${TOKEN} --env fabrik --repo ${STORE}`,
       ]);
@@ -1992,7 +2026,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       const world = aWorld();
       await aStoreOnTheKitAt(world, "v0.9.1");
       // The Product repo's own environment is held and holds its tokens, so the store's is the plan's first step.
-      anEnvironment(world, { rules: ["main"], secrets: ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"] });
+      anEnvironment(world, { rules: ["main"], secrets: TOKENS });
       world.environmentRefusal = "gh: Not Found (HTTP 404)\n";
 
       const { code, said, complaints, log } = await setupOnce(world, { args: WITH_THE_STORE });
@@ -2509,7 +2543,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     it("is said under the plan and again in the closing lines, after For the Operator, never in the setup PR, and on a merged install with nothing to apply however Setup is run", async () => {
       // A repo already on the Kit, whose three tokens sit at repo level beside a secret of its own: the Kit's get no line.
       const world = aWorld();
-      for (const name of ["STRIPE_KEY", "FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"]) world.secrets.add(name);
+      for (const name of ["STRIPE_KEY", ...TOKENS]) world.secrets.add(name);
 
       const first = await setupOnce(world);
 
@@ -2527,7 +2561,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       mergeTheSetupPr(world);
 
       // The run made, changed and deleted no repo-level secret.
-      expect([...world.secrets].sort()).toEqual(["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN", "STRIPE_KEY"]);
+      expect([...world.secrets].sort()).toEqual([...TOKENS, "STRIPE_KEY"]);
       // The next run finds the new caller workflow on the default branch and deletes the Kit's three (#931), never the repo's own, which the report still names.
       const deleting = await setupOnce(world);
       expect(deleting.said.slice(deleting.said.lastIndexOf(HEADING))).toEqual([...OWN_SECRET, "", expect.stringMatching(/^Every file setup writes is already on main/)]);
@@ -2598,6 +2632,42 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
       const onProduction = world.environmentCalls.filter((line) => line.includes("environments/production") || line.includes("--env production"));
       expect(onProduction.length).toBeGreaterThan(0);
       expect(onProduction.filter((line) => !/^gh api repos\/acme\/clinic\/environments\/production(\/deployment-branch-policies\?per_page=100)?$/.test(line))).toEqual([]);
+    });
+
+    it("carries on when GitHub refuses the read of production's environment, after the wizard and before the plan, and says it couldn't be read", async () => {
+      const world = aWorld();
+      anEnvironment(world, { rules: ["main"] }, "production").refusesRead = "gh: Resource not accessible by personal access token (HTTP 403)\n";
+      const flags = ["--no-time-zone", "--no-second-subscription", "--no-paused", "--no-staging", "--production-url=https://clinic.example.com", "--production-environment=production"];
+      const UNREAD =
+        "- Production's environment, production, couldn't be read (gh: Resource not accessible by personal access token (HTTP 403)), so Setup can't say whether it is held to main alone.";
+
+      // The first read of it is the one after the wizard, from the setup branch's Kit config.
+      const first = await setupOnce(world, { args: flags });
+
+      expect(first.complaints).toEqual([]);
+      expect(first.code).toBe(0);
+      expect(first.said.slice(first.said.lastIndexOf(HEADING), first.said.lastIndexOf(HEADING) + 4)).toEqual([HEADING, NONE_OF_ITS_OWN, UNREAD, ""]);
+      expect(world.prs).toHaveLength(1);
+      mergeTheSetupPr(world);
+
+      // On the next run the checkout's Kit config names it, so it is read before the plan.
+      const second = await setupOnce(world, { args: flags, answers: [] });
+
+      expect(second.complaints).toEqual([]);
+      expect(second.code).toBe(0);
+      expect(second.said.slice(second.said.indexOf(HEADING))).toEqual([HEADING, NONE_OF_ITS_OWN, UNREAD]);
+      expect(second.said).toContain(COMPLETE);
+    });
+
+    it("still stops when GitHub refuses the read of the fabrik environment with anything but a 404, naming its answer", async () => {
+      const world = aWorld();
+      anEnvironment(world, { rules: ["main"] }).refusesRead = "gh: Bad Gateway (HTTP 502)\n";
+
+      const { code, complaints, log } = await setupOnce(world);
+
+      expect(code).toBe(1);
+      expect(complaints.join("\n")).toContain("Reading the fabrik environment on acme/clinic failed: gh: Bad Gateway (HTTP 502)");
+      expect(log.filter((line) => /--method|^op service-account create |^gh secret set /.test(line))).toEqual([]);
     });
   });
 });

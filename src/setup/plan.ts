@@ -107,8 +107,10 @@ export interface EnvironmentState extends EnvironmentPolicy {
 export interface ProductionEnvironment {
   /** Its name, as the Kit config gives it. */
   readonly name: string;
-  /** Which refs it lets through, or null when the repo has no environment of that name. */
+  /** Which refs it lets through, or null when the repo has no environment of that name, or when GitHub refused the read. */
   readonly policy: EnvironmentPolicy | null;
+  /** GitHub's answer when it refused the read. The report says so in place of whether it is held, and Setup carries on. */
+  readonly refused?: string;
 }
 
 /** What setup reads about the fabrik-runs store (ADR-0009). */
@@ -457,15 +459,28 @@ export function namedRules(rules: readonly EnvironmentRule[]): string {
   return rules.length === 0 ? "none" : rules.map((rule) => (rule.type === "tag" ? `tag ${rule.name}` : rule.name)).join(", ");
 }
 
+/** The Kit's three job roles, in the order Setup makes their service accounts. */
+const KIT_ROLES = ["agent", "implement", "push"] as const;
+type KitRole = (typeof KIT_ROLES)[number];
+
+/** The Actions secret that holds each role's service-account token (ADR-0004). The names are written here and nowhere else in Setup's plan. */
+const KIT_TOKENS: Readonly<Record<KitRole, string>> = {
+  agent: "FABRIK_OP_AGENT_TOKEN",
+  implement: "FABRIK_OP_IMPLEMENT_TOKEN",
+  push: "FABRIK_OP_PUSH_TOKEN",
+};
+
 /** The Kit's own three Actions secrets, which Setup's report never counts among the repo's own. */
-const KIT_SECRETS: readonly string[] = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
+const KIT_SECRETS: readonly string[] = KIT_ROLES.map((role) => KIT_TOKENS[role]);
 
 /**
- * Setup's report, each part's lines in the order it says them. Its first part
- * is the Product repo's own credentials (Spec #915): a repo-level Actions
- * secret is one a run on any branch can spend, so each of the repo's own is
- * named, never judged by its name, with the Kit's rule for a credential that
- * can reach production. A later part adds its lines after these.
+ * Setup's report, each part's lines in the order it says them. Both of its
+ * parts are on the Product repo's own credentials (Spec #915). The first is
+ * its repo-level Actions secrets: one is a secret a run on any branch can
+ * spend, so each of the repo's own is named, never judged by its name, with
+ * the Kit's rule for a credential that can reach production. The second is
+ * production's environment, when the Kit config names one. The two later
+ * Specs, #917 and #918, add their parts' lines after these.
  */
 function setupReport(state: ProductState): string[] {
   return [...ownSecrets(state), ...productionHeld(state)];
@@ -489,14 +504,21 @@ function ownSecrets(state: ProductState): string[] {
  * The report's line on production's environment, when the Kit config names
  * one: whether it is held to the default branch alone, by the test the
  * `fabrik` environment is held to (environmentHeld), with its rules as the
- * plan writes them when it isn't, or that the repo has none of that name.
- * Whoever can write the Kit config wrote the name, so it keeps no control
- * characters, such as a terminal escape, for the Operator's terminal to print.
+ * plan writes them when it isn't, or that the repo has none of that name, or,
+ * when GitHub refused the read, that it couldn't be read, with the first line
+ * of GitHub's answer. Whoever can write the Kit config wrote the name, so it
+ * keeps no control characters, such as a terminal escape, for the Operator's
+ * terminal to print, and nor does GitHub's answer.
  */
 function productionHeld({ production, repo: { defaultBranch } }: ProductState): string[] {
   if (production === null) return [];
-  const { name, policy } = production;
-  const named = `Production's environment, ${name.replace(/[\u0000-\u001f\u007f-\u009f]/g, "")},`;
+  const { name, policy, refused } = production;
+  const printable = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+  const named = `Production's environment, ${printable(name)},`;
+  if (refused !== undefined) {
+    const answer = printable(refused.trim().split("\n")[0]!.trim());
+    return [`${named} couldn't be read (${answer}), so Setup can't say whether it is held to ${defaultBranch} alone.`];
+  }
   if (policy === null) return [`${named} isn't on this repo.`];
   if (environmentHeld(policy, defaultBranch)) return [`${named} is held to ${defaultBranch} alone.`];
   return [`${named} isn't held to ${defaultBranch} alone (${namedPolicy(policy)}), so a run on another ref that names it is given its secrets.`];
@@ -840,7 +862,7 @@ export function takesSecondSubscription(listed: readonly string[]): boolean {
 }
 
 /** The store's one token, the push account's, which its caller workflow passes to the Weekly summary and the Tick check. */
-const STORE_SECRET = "FABRIK_OP_PUSH_TOKEN";
+const STORE_SECRET = KIT_TOKENS.push;
 /** The name Setup gave the store's service account while its token sat at repo level: the new one's with no `-env`. */
 const STORE_OLD_ACCOUNT = `fabrik-${RUN_STORE.owner}-${RUN_STORE.name}-push`;
 
@@ -912,16 +934,12 @@ function runStore(store: RunStoreState, kit: SetupKit, answers: SetupAnswers, no
   // on a run that found the store's caller pinning a Kit that names the environment, never on the run that writes that caller.
   const atRepoLevel = store.secrets.includes(STORE_SECRET) ? [{ secret: STORE_SECRET, account: STORE_OLD_ACCOUNT }] : [];
   const callerAsFirstRead = context.storeCallerAtStart !== undefined ? context.storeCallerAtStart : (store.files[STORE_CALLER_PATH] ?? null);
-  if (store.defaultBranch !== null && kitNamesEnvironment(callerAsFirstRead, kit.release)) {
-    const deletions = deleteRepoSecrets(atRepoLevel, KIT_ENVIRONMENT, store.defaultBranch, RUN_STORE_REPO);
-    actions.push(...deletions);
-    notes.push(...oldAccountsNotes(deletions));
-  } else if (atRepoLevel.length > 0) {
-    notes.push(
-      `${RUN_STORE_REPO}: The repo-level Actions secret ${STORE_SECRET} stays for now, since the caller workflow setup found there pins no Kit that names the ${KIT_ENVIRONMENT} environment. ` +
-        `Once setup has written the one that does, run setup again and it deletes it: ${setupCommand(kit.release)}`,
-    );
-  }
+  const stays = () =>
+    `${RUN_STORE_REPO}: The repo-level Actions secret ${STORE_SECRET} stays for now, since the caller workflow setup found there pins no Kit that names the ${KIT_ENVIRONMENT} environment. ` +
+    `Once setup has written the one that does, run setup again and it deletes it: ${setupCommand(kit.release)}`;
+  const repoLevel = repoLevelTokens(atRepoLevel, { caller: callerAsFirstRead, branch: store.defaultBranch, release: kit.release, repo: RUN_STORE_REPO, stays });
+  actions.push(...repoLevel.actions);
+  notes.push(...repoLevel.notes);
   return { first, actions };
 }
 
@@ -1072,11 +1090,8 @@ export function sandboxVault(repo: ProductState["repo"]): string {
  */
 function secrets(state: ProductState, kit: SetupKit, notes: string[]): SetupAction[] {
   const sandbox = sandboxVault(state.repo);
-  const roles = [
-    { role: "agent", vaults: [FABRIK_VAULT], secret: "FABRIK_OP_AGENT_TOKEN" },
-    { role: "implement", vaults: [FABRIK_VAULT, sandbox], secret: "FABRIK_OP_IMPLEMENT_TOKEN" },
-    { role: "push", vaults: [FABRIK_APP_VAULT], secret: "FABRIK_OP_PUSH_TOKEN" },
-  ];
+  const reads: Readonly<Record<KitRole, string[]>> = { agent: [FABRIK_VAULT], implement: [FABRIK_VAULT, sandbox], push: [FABRIK_APP_VAULT] };
+  const roles = KIT_ROLES.map((role) => ({ role, vaults: reads[role], secret: KIT_TOKENS[role] }));
   const actions: SetupAction[] = [];
   for (const vault of [FABRIK_VAULT, FABRIK_APP_VAULT, sandbox]) {
     if (!state.vaults.includes(vault)) actions.push({ kind: "create-vault", name: vault });
@@ -1090,20 +1105,39 @@ function secrets(state: ProductState, kit: SetupKit, notes: string[]): SetupActi
   const atRepoLevel = roles
     .filter(({ secret }) => state.secrets.includes(secret))
     .map(({ role, secret }) => ({ secret, account: `fabrik-${state.repo.owner}-${state.repo.name}-${role}` }));
-  if (kitNamesEnvironment(state.defaultBranchCaller, kit.release)) {
-    const deletions = deleteRepoSecrets(atRepoLevel, KIT_ENVIRONMENT, state.repo.defaultBranch);
-    actions.push(...deletions);
-    notes.push(...oldAccountsNotes(deletions));
-  } else if (atRepoLevel.length > 0) {
-    // The Kit the default branch pins names no environment, so its jobs are given the repo-level values, on every ref (#846).
+  // The Kit the default branch pins names no environment, so its jobs are given the repo-level values, on every ref (#846).
+  const stays = () => {
     const one = atRepoLevel.length === 1;
     const them = one ? "it" : "them";
-    notes.push(
+    return (
       `The repo-level Actions ${one ? "secret" : "secrets"} ${listed(atRepoLevel.map(({ secret }) => secret))} ${one ? "stays" : "stay"} for now, since the Kit ${state.repo.defaultBranch} pins names no environment and reads ${them}. ` +
-        `Once the setup PR is merged, run setup again and it deletes ${them}: ${setupCommand(kit.release)}`,
+      `Once the setup PR is merged, run setup again and it deletes ${them}: ${setupCommand(kit.release)}`
     );
-  }
+  };
+  const repoLevel = repoLevelTokens(atRepoLevel, { caller: state.defaultBranchCaller, branch: state.repo.defaultBranch, release: kit.release, stays });
+  actions.push(...repoLevel.actions);
+  notes.push(...repoLevel.notes);
   return actions;
+}
+
+/**
+ * What Setup does with the Kit's tokens a repo still holds at repo level.
+ * Once the caller workflow its default branch holds pins a Kit that names the
+ * environment, it deletes each, and names the old accounts. Until then, or in
+ * a repo with no default branch yet, it deletes none, and when there is one
+ * to keep it gives the note that they stay, which each repo words its own
+ * way. The Product repo's own unless `repo` names another, as `owner/name`.
+ */
+function repoLevelTokens(
+  tokens: readonly RepoLevelToken[],
+  where: { readonly caller: string | null; readonly branch: string | null; readonly release: string; readonly repo?: string; readonly stays: () => string },
+): { readonly actions: readonly SetupAction[]; readonly notes: readonly string[] } {
+  const { caller, branch, release, repo, stays } = where;
+  if (branch !== null && kitNamesEnvironment(caller, release)) {
+    const actions = deleteRepoSecrets(tokens, KIT_ENVIRONMENT, branch, repo);
+    return { actions, notes: oldAccountsNotes(actions) };
+  }
+  return { actions: [], notes: tokens.length > 0 ? [stays()] : [] };
 }
 
 /**

@@ -67,11 +67,28 @@ export async function gatherState(
  * Production's environment, for Setup's report: the one the checkout's Kit
  * config's `production` block names, and which refs it lets through, never its
  * secrets' names. Null, with no environment read, when the Kit config names
- * none. The repo is `owner/name`.
+ * none. The repo is `owner/name`. A refused read is given with GitHub's
+ * answer, never thrown: Setup never blocks on its report.
  */
 async function gatherProduction(run: Run, cwd: string, repo: string, kitConfig: string | null): Promise<ProductionEnvironment | null> {
   const name = productionEnvironmentIn(kitConfig);
-  return name === null ? null : { name, policy: await readEnvironmentPolicy(run, cwd, repo, name) };
+  if (name === null) return null;
+  try {
+    return { name, policy: await readEnvironmentPolicy(run, cwd, repo, name) };
+  } catch (error) {
+    return { name, policy: null, refused: error instanceof RefusedRead ? error.answer : error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** A read GitHub refused. Its message names the read and GitHub's answer, and the answer is kept apart for a line that gives it alone. */
+class RefusedRead extends Error {
+  readonly answer: string;
+
+  constructor(reading: string, { code, stderr }: { readonly code: number; readonly stderr: string }) {
+    const answer = stderr.trim() || `exit ${code}`;
+    super(`${reading} failed: ${answer}`);
+    this.answer = answer;
+  }
 }
 
 /**
@@ -98,14 +115,16 @@ export async function gatherEnvironment(
  * Which refs a repo's environment lets through: its setting, and its rules
  * when it is set to "Selected branches and tags". Null when GitHub answers 404
  * for it, as for a repo that has none of that name. Any other refusal throws,
- * naming GitHub's answer.
+ * naming GitHub's answer. The plan reads with it, and so does each step that
+ * must find the environment held as GitHub has it now: the one that holds it,
+ * once it has, and the one that stores a token in it, before it makes one.
  */
 export async function readEnvironmentPolicy(run: Run, cwd: string, repo: string, name: string): Promise<EnvironmentPolicy | null> {
   // The name is one segment of the path: a Product repo's own may hold a space or a slash.
   const read = await run("gh", ["api", `repos/${repo}/environments/${encodeURIComponent(name)}`], { cwd });
   if (read.code !== 0) {
     if (/HTTP 404/.test(read.stderr + read.stdout)) return null;
-    throw new Error(`Reading the ${name} environment on ${repo} failed: ${read.stderr.trim() || `exit ${read.code}`}`);
+    throw new RefusedRead(`Reading the ${name} environment on ${repo}`, read);
   }
   const policy = (JSON.parse(read.stdout) as EnvironmentResponse).deployment_branch_policy ?? null;
   if (policy === null) return { branches: "all", rules: [] };
@@ -121,11 +140,14 @@ interface EnvironmentResponse {
 /**
  * The rules of a repo's environment set to "Selected branches and tags", as
  * GitHub has them now: the step that holds one reads them before it adds its
- * rule and again once it has.
+ * rule. GitHub lists them under any setting, so they alone never say an
+ * environment is held.
  */
 export async function readEnvironmentRules(run: Run, cwd: string, repo: string, name: string): Promise<EnvironmentRule[]> {
   const path = `repos/${repo}/environments/${encodeURIComponent(name)}/deployment-branch-policies?per_page=100`;
-  const listed = JSON.parse(await ok(run, "gh", ["api", path], { cwd })) as { branch_policies?: { id: number; name: string; type?: string }[] };
+  const read = await run("gh", ["api", path], { cwd });
+  if (read.code !== 0) throw new RefusedRead(`gh api ${path}`, read);
+  const listed = JSON.parse(read.stdout) as { branch_policies?: { id: number; name: string; type?: string }[] };
   // A rule made before GitHub's rules had a type is a branch rule.
   return (listed.branch_policies ?? []).map(({ id, name: ruleName, type }) => ({ id, name: ruleName, type: type === "tag" ? "tag" : "branch" }));
 }

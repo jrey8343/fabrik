@@ -269,6 +269,27 @@ describe("Reading production's environment for Setup's report, when the checkout
     expect(production).toEqual({ name: "live", policy: null });
   });
 
+  it.each<[string, Record<string, Answer>]>([
+    ["the environment", { [LIVE]: { code: 1, stderr: "gh: Resource not accessible by personal access token (HTTP 403)\n" } }],
+    [
+      "its rules",
+      {
+        [LIVE]: json({ id: 9, name: "live", deployment_branch_policy: { protected_branches: false, custom_branch_policies: true } }),
+        [RULES]: { code: 1, stderr: "gh: Resource not accessible by personal access token (HTTP 403)\n" },
+      },
+    ],
+  ])("gives it with GitHub's answer, and stops nothing, when GitHub refuses the read of %s with anything but a 404", async (_, script) => {
+    const { production } = await gathered(naming("live"), script);
+
+    expect(production).toEqual({ name: "live", policy: null, refused: "gh: Resource not accessible by personal access token (HTTP 403)" });
+  });
+
+  it("still stops on a refused read of the fabrik environment, which the plan is made from, naming GitHub's answer", async () => {
+    const refused = gathered(naming("live"), { "gh api repos/acme/clinic/environments/fabrik": { code: 1, stderr: "gh: Bad Gateway (HTTP 502)\n" } });
+
+    await expect(refused).rejects.toThrow("Reading the fabrik environment on acme/clinic failed: gh: Bad Gateway (HTTP 502)");
+  });
+
   it("asks GitHub for a name that holds a space or a slash as one segment of the path, and keeps the name as the Kit config gives it", async () => {
     const ENCODED = "gh api repos/acme/clinic/environments/Live%20%2F%20clinic";
     const { production, asked } = await gathered(naming("Live / clinic"), {

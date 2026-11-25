@@ -3,7 +3,7 @@
 // one run of the program, in oneRunProgram.test.ts.
 import { describe, expect, it } from "vitest";
 import { fakeCommands } from "../__fixtures__/setupCommands.ts";
-import { anEnvironment, aWorld, environmentOf, worldScript } from "../__fixtures__/setupWorld.ts";
+import { anEnvironment, aWorld, environmentOf, type WorldEnvironment, worldScript } from "../__fixtures__/setupWorld.ts";
 import { apply, describeAction } from "./apply.ts";
 import type { SetupAction } from "./plan.ts";
 
@@ -20,7 +20,8 @@ describe("A service account whose token is the secret of the environment of a re
     repo: STORE,
   };
   const DEFAULT_BRANCH = "gh repo view jrey8343/fabrik-runs --json defaultBranchRef";
-  const RULES = "gh api repos/jrey8343/fabrik-runs/environments/fabrik/deployment-branch-policies?per_page=100";
+  const ENVIRONMENT = "gh api repos/jrey8343/fabrik-runs/environments/fabrik";
+  const RULES = `${ENVIRONMENT}/deployment-branch-policies?per_page=100`;
 
   /** A world whose store has commits on `trunk`, and this fabrik environment. */
   function aStoreOnTrunk(environment: Parameters<typeof anEnvironment>[1]) {
@@ -36,7 +37,7 @@ describe("A service account whose token is the secret of the environment of a re
     );
   });
 
-  it("reads that repo's own default branch and its environment's rules, then stores the token in that environment, naming the repo to gh secret, and never at repo level", async () => {
+  it("reads that repo's own default branch and its environment's setting and rules, then stores the token in that environment, naming the repo to gh secret, and never at repo level", async () => {
     const world = aStoreOnTrunk({ rules: ["trunk"] });
     const commands = fakeCommands(worldScript(world));
 
@@ -44,6 +45,7 @@ describe("A service account whose token is the secret of the environment of a re
 
     expect(commands.calls.map(({ line, input }) => [line, input])).toEqual([
       [DEFAULT_BRANCH, undefined],
+      [ENVIRONMENT, undefined],
       [RULES, undefined],
       ["op service-account create fabrik-jrey8343-fabrik-runs-push-env --vault Fabrik App:read_items --raw", undefined],
       ["gh secret set FABRIK_OP_PUSH_TOKEN --env fabrik --repo jrey8343/fabrik-runs", "ops_token"],
@@ -59,7 +61,22 @@ describe("A service account whose token is the secret of the environment of a re
     await expect(apply(commands.run, step, "/clinic", PRODUCT)).rejects.toThrow(
       "The fabrik environment on jrey8343/fabrik-runs isn't held to trunk alone, so Setup stored no token in it. Run setup again.",
     );
-    expect(commands.calls.map(({ line }) => line)).toEqual([DEFAULT_BRANCH, RULES]);
+    expect(commands.calls.map(({ line }) => line)).toEqual([DEFAULT_BRANCH, ENVIRONMENT, RULES]);
+  });
+
+  it.each<[string, (environment: WorldEnvironment) => void]>([
+    ["every branch", (environment) => void (environment.policy = null)],
+    ["protected branches only", (environment) => void (environment.policy = { protected_branches: true, custom_branch_policies: false })],
+  ])("stores no token, and makes no account, when the environment's setting is %s, though its one rule names that repo's default branch", async (_, change) => {
+    const world = aStoreOnTrunk({ rules: ["trunk"] });
+    change(environmentOf(world, "fabrik", STORE)!);
+    const commands = fakeCommands(worldScript(world));
+
+    await expect(apply(commands.run, step, "/clinic", PRODUCT)).rejects.toThrow(
+      "The fabrik environment on jrey8343/fabrik-runs isn't held to trunk alone, so Setup stored no token in it. Run setup again.",
+    );
+    expect(commands.calls.map(({ line }) => line).filter((line) => /^op |^gh secret /.test(line))).toEqual([]);
+    expect([...environmentOf(world, "fabrik", STORE)!.secrets]).toEqual([]);
   });
 
   it("stores no token, and makes no account, in a repo that has no default branch yet", async () => {

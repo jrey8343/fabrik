@@ -34,7 +34,7 @@ On a throwaway repo protected exactly as Setup protects a default branch, a clou
 
 ## Why a major
 
-The release is one major with the four other parts of the Kit's Operator sessions ([How are the Specs cut, and who builds them?](https://github.com/jrey8343/fabrik/issues/874)), so each Product repo runs Setup once for all five. By the releasing guide's [Choosing the version](../releasing.md#choosing-the-version), this part's new Kit config field and new exports alone would be a minor: the field has a default, and a new export is not a major. `required` and every head's list leaving out a check the branch requires is a change in what an export gives, which the guide counts as a major, whatever it asks of a Product repo.
+The release is one major with the four other parts of the Kit's Operator sessions ([How are the Specs cut, and who builds them?](https://github.com/jrey8343/fabrik/issues/874)), so each Product repo takes all five by the same two runs of Setup. By the releasing guide's [Choosing the version](../releasing.md#choosing-the-version), this part's new Kit config field and new exports alone would be a minor: the field has a default, and a new export is not a major. `required` and every head's list leaving out a check the branch requires is a change in what an export gives, which the guide counts as a major, whatever it asks of a Product repo.
 
 ## Upgrading
 

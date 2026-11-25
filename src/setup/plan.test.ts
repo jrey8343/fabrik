@@ -28,6 +28,8 @@ import {
 import { pinCaller, scheduleIn } from "./shims.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
+/** The Kit's three Actions secrets, by name, in the order Setup makes their accounts. */
+const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
 let kit: SetupKit;
 
 beforeAll(async () => {
@@ -569,7 +571,7 @@ describe("The fabrik environment, held to the default branch (ADR-0004)", () => 
     expect(after.environment).toEqual({
       branches: "selected",
       rules: [expect.objectContaining({ name: "main", type: "branch" })],
-      secrets: ["STRIPE_KEY", "FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"],
+      secrets: ["STRIPE_KEY", ...TOKENS],
     });
     expect(planSetup(after, kit).actions).toEqual([]);
   });
@@ -624,7 +626,6 @@ describe("Service accounts, their tokens the secrets of the fabrik environment (
     expect(lastVault).toBeLessThan(firstAccount);
   });
 
-  const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
   /** A fabrik environment held to main, with these secrets. */
   const held = (secrets: readonly string[]): EnvironmentState => ({ branches: "selected", rules: [{ id: 1, name: "main", type: "branch" }], secrets });
 
@@ -677,7 +678,6 @@ describe("Service accounts, their tokens the secrets of the fabrik environment (
 });
 
 describe("The repo-level tokens, deleted once the default branch's Kit names the fabrik environment (ADR-0004)", () => {
-  const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
   /** A fabrik environment held to main, with these secrets. */
   const held = (secrets: readonly string[]): EnvironmentState => ({ branches: "selected", rules: [{ id: 1, name: "main", type: "branch" }], secrets });
   /** The caller workflow as Setup writes it at a release. */
@@ -2352,7 +2352,7 @@ describe("Setup's report on a Product repo's own credentials", () => {
     const NONE = ["This repo holds no repo-level Actions secret of its own."];
 
     expect(planSetup(aCleanProduct({ secrets: [] }), kit).report).toEqual(NONE);
-    expect(planSetup(aCleanProduct({ secrets: ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"] }), kit).report).toEqual(NONE);
+    expect(planSetup(aCleanProduct({ secrets: TOKENS }), kit).report).toEqual(NONE);
   });
 
   it("names the repo's default branch in the rule's line", () => {
@@ -2399,6 +2399,26 @@ describe("Setup's report on a Product repo's own credentials", () => {
 
     it("says it isn't on the repo when GitHub has none of that name", () => {
       expect(onProduction(null, "Production – clinic")).toEqual(["Production's environment, Production – clinic, isn't on this repo."]);
+    });
+
+    it("says it couldn't be read, with GitHub's answer, when GitHub refused the read, in place of whether it is held, and plans what it would have", () => {
+      const refused = { name: "production", policy: null, refused: "gh: Resource not accessible by personal access token (HTTP 403)" };
+
+      const { report, ...planned } = planSetup(aCleanProduct({ production: refused }), kit);
+
+      expect(report.slice(1)).toEqual([
+        "Production's environment, production, couldn't be read (gh: Resource not accessible by personal access token (HTTP 403)), so Setup can't say whether it is held to main alone.",
+      ]);
+      const { report: _unnamed, ...plannedWithNone } = planSetup(aCleanProduct({ production: null }), kit);
+      expect(planned).toEqual(plannedWithNone);
+    });
+
+    it("keeps GitHub's answer to its first line, and drops its control characters as it drops the name's", () => {
+      const clean = aCleanProduct({ production: { name: "live", policy: null, refused: "\n  gh: Bad \u001b[31mGateway\u0007 (HTTP 502)  \nRequest ID: 1\n" } });
+
+      const { report } = planSetup({ ...clean, repo: { ...clean.repo, defaultBranch: "trunk" } }, kit);
+
+      expect(report.slice(1)).toEqual(["Production's environment, live, couldn't be read (gh: Bad [31mGateway (HTTP 502)), so Setup can't say whether it is held to trunk alone."]);
     });
 
     it("judges it by the repo's default branch, whatever that is called", () => {

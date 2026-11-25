@@ -81,12 +81,12 @@ const HELD_IN: Readonly<Record<string, readonly [file: string, text: string]>> =
   operator: ["src/kit/config.ts", `file.nullableString("operator"`],
   production: ["src/kit/config.ts", `file.nullableObject("production")`],
   "fabrik-<owner>-<repo>-agent-env": ["src/setup/plan.ts", "const name = `fabrik-${state.repo.owner}-${state.repo.name}-${role}-env`;"],
-  "-implement-env": ["src/setup/plan.ts", `{ role: "implement", vaults: [FABRIK_VAULT, sandbox], secret: "FABRIK_OP_IMPLEMENT_TOKEN" }`],
-  "-push-env": ["src/setup/plan.ts", `{ role: "push", vaults: [FABRIK_APP_VAULT], secret: "FABRIK_OP_PUSH_TOKEN" }`],
+  "-implement-env": ["src/setup/plan.ts", `  implement: "FABRIK_OP_IMPLEMENT_TOKEN",\n`],
+  "-push-env": ["src/setup/plan.ts", `  push: "FABRIK_OP_PUSH_TOKEN",\n`],
   "-env": ["src/setup/plan.ts", "-${role}-env`"],
   "fabrik-<owner>-<repo>-agent": ["src/setup/plan.ts", "account: `fabrik-${state.repo.owner}-${state.repo.name}-${role}` }"],
-  "-implement": ["src/setup/plan.ts", `{ role: "implement", vaults: [FABRIK_VAULT, sandbox], secret: "FABRIK_OP_IMPLEMENT_TOKEN" }`],
-  "-push": ["src/setup/plan.ts", `{ role: "push", vaults: [FABRIK_APP_VAULT], secret: "FABRIK_OP_PUSH_TOKEN" }`],
+  "-implement": ["src/setup/plan.ts", `  implement: "FABRIK_OP_IMPLEMENT_TOKEN",\n`],
+  "-push": ["src/setup/plan.ts", `  push: "FABRIK_OP_PUSH_TOKEN",\n`],
   "fabrik-<owner>-fabrik-runs-push-env": ["src/setup/plan.ts", "name: `${STORE_OLD_ACCOUNT}-env`,"],
   "fabrik-<owner>-fabrik-runs-push": ["src/setup/plan.ts", "const STORE_OLD_ACCOUNT = `fabrik-${RUN_STORE.owner}-${RUN_STORE.name}-push`;"],
   "fabrik-runs": ["src/kit/runStore.ts", `name: "fabrik-runs"`],
@@ -277,8 +277,8 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The fabrik environment release notes
       const hold = bullet(changed, "Setup makes the `fabrik` environment and holds it to the default branch");
       expect(hold).toContain("plans one step, first among the plan's steps");
       expect(hold).toContain('An environment is held when it is set to "Selected branches and tags" and its rules are exactly one, a branch rule naming the default branch');
-      expect(hold).toContain("a PUT of the environment that sends only its branch policy; the rule naming the default branch added, if it isn't there; only then every other rule deleted; and the rules read back");
-      expect(hold).toContain("Unless they read back as exactly the one rule, Setup stops and stores no token");
+      expect(hold).toContain("a PUT of the environment that sends only its branch policy; the rule naming the default branch added, if it isn't there; only then every other rule deleted; and the environment read back, its setting and its rules");
+      expect(hold).toContain("Unless it reads back as held, Setup stops and stores no token");
 
       expect(planSetup(aCleanProduct(), kit).actions[0]).toEqual({ kind: "hold-environment", environment: KIT_ENVIRONMENT, branch: "main", found: null });
       expect(planSetup(aCleanProduct({ environment: heldTo("main") }), kit).actions.map((action) => action.kind)).not.toContain("hold-environment");
@@ -301,8 +301,11 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The fabrik environment release notes
       await apply(fakeCommands(worldScript(world)).run, step!, "/clinic", PRODUCT);
       const changing = world.environmentCalls.flatMap((line) => /--method (PUT|POST|DELETE)/.exec(line)?.[1] ?? []);
       expect(changing).toEqual(["PUT", "POST", "DELETE"]);
-      expect(world.environmentCalls.at(-1)).toMatch(/deployment-branch-policies/);
-      expect(world.environmentCalls.at(-1)).not.toMatch(/--method/);
+      // The last two calls read it back: its setting, then its rules.
+      expect(world.environmentCalls.slice(-2)).toEqual([
+        "gh api repos/acme/clinic/environments/fabrik",
+        "gh api repos/acme/clinic/environments/fabrik/deployment-branch-policies?per_page=100",
+      ]);
       expect(environmentOf(world)?.rules.map(({ name, type }) => ({ name, type }))).toEqual([{ name: "main", type: "branch" }]);
     });
 
@@ -330,12 +333,12 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The fabrik environment release notes
       expect(await readEnvironmentPolicy(missing, "/clinic", "acme/clinic", KIT_ENVIRONMENT)).toBeNull();
     });
 
-    it("name the three new accounts as Setup names them, each one's token a secret of the environment, stored on gh's stdin after a read of the rules", async () => {
+    it("name the three new accounts as Setup names them, each one's token a secret of the environment, stored on gh's stdin after a read of the environment", async () => {
       const tokens = bullet(changed, "The three tokens are in the `fabrik` environment, under new service accounts");
       expect(tokens).toContain("A token is missing when the `fabrik` environment lacks it, wherever else it sits");
       expect(tokens).toContain("`FABRIK_OP_AGENT_TOKEN`, `FABRIK_OP_IMPLEMENT_TOKEN` or `FABRIK_OP_PUSH_TOKEN`");
       expect(tokens).toContain("with `gh secret set --env`, on its stdin");
-      expect(tokens).toContain("the step reads the environment's rules itself, whether or not this run changed the environment, and stops with no account made unless they are the one rule");
+      expect(tokens).toContain("the step reads the environment itself, its setting and its rules, whether or not this run changed the environment, and stops with no account made unless it is held");
 
       // A repo on the Kit before the move: its three tokens at repo level, and no environment.
       const onTheKit = aCleanProduct({ secrets: [...TOKENS] });
@@ -353,7 +356,11 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The fabrik environment release notes
       const stored = commands.calls.find(({ line }) => line.startsWith("gh secret set"));
       expect(stored?.line).toBe("gh secret set FABRIK_OP_AGENT_TOKEN --env fabrik");
       expect(stored?.input).toEqual(expect.stringMatching(/\S/));
-      expect(commands.calls.findIndex(({ line }) => line.includes("deployment-branch-policies"))).toBeLessThan(commands.calls.findIndex(({ line }) => line.startsWith("op service-account create")));
+      const lines = commands.calls.map(({ line }) => line);
+      expect(lines.slice(0, lines.findIndex((line) => line.startsWith("op service-account create")))).toEqual([
+        "gh api repos/acme/clinic/environments/fabrik",
+        "gh api repos/acme/clinic/environments/fabrik/deployment-branch-policies?per_page=100",
+      ]);
       expect([...(environmentOf(world)?.secrets ?? [])]).toEqual(["FABRIK_OP_AGENT_TOKEN"]);
       expect(world.secrets.has("FABRIK_OP_AGENT_TOKEN")).toBe(false);
 
@@ -474,6 +481,11 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The fabrik environment release notes
         "Production's environment, production, isn't held to main alone (every branch), so a run on another ref that names it is given its secrets.",
       ]);
       expect(planSetup(aCleanProduct({ secrets: [...TOKENS] }), kit).report).toEqual(["This repo holds no repo-level Actions secret of its own."]);
+      expect(report).toContain("When GitHub refuses that read, Setup carries on, and the line says that one couldn't be read, with GitHub's answer");
+      const unread = { name: "production", policy: null, refused: "gh: Bad Gateway (HTTP 502)" };
+      expect(planSetup(aCleanProduct({ secrets: [...TOKENS], production: unread }), kit).report.at(-1)).toBe(
+        "Production's environment, production, couldn't be read (gh: Bad Gateway (HTTP 502)), so Setup can't say whether it is held to main alone.",
+      );
       // The report changes no step and no note.
       const { report: _, ...planned } = own;
       const { report: __, ...unreported } = planSetup(aCleanProduct({ secrets: [...TOKENS] }), kit);

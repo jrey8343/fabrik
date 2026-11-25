@@ -1,28 +1,13 @@
 // A review's hand-off, read over a client that answers from canned reviews:
 // what the run it started acts on is GitHub's copy of the review, or nothing.
 import { describe, expect, it } from "vitest";
+import { aReview } from "../__fixtures__/handOffReview.ts";
 import { GitHubError, type ReadClient } from "./client.ts";
 import { loopEventFrom } from "./events.ts";
 import { nothingToDoFor, readHandOff, runEventFrom, whyNothingFor } from "./handOff.ts";
 
 const repo = { owner: "acme", name: "shop" };
 const HAND_OFF = { pullRequest: 45, review: 123 };
-
-/** A review as GitHub's REST API answers it: the Operator's Request changes on PR #45, unless a test says otherwise. */
-function aReview(over: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    id: 123,
-    node_id: "PRR_kwDO123",
-    user: { login: "operator", type: "User" },
-    body: "Use the parking copy.",
-    state: "CHANGES_REQUESTED",
-    html_url: "https://github.com/acme/shop/pull/45#pullrequestreview-123",
-    pull_request_url: "https://api.github.com/repos/acme/shop/pulls/45",
-    submitted_at: "2026-11-25T03:00:00Z",
-    commit_id: "a".repeat(40),
-    ...over,
-  };
-}
 
 /** A read-only GitHub holding these reviews, each under the pull request it is asked for on, which answers 404 for any other and records what it was asked. */
 function gitHubWith(reviews: Readonly<Record<string, Record<string, unknown>>>): { client: ReadClient; asked: string[] } {
