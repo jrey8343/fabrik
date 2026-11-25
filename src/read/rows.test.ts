@@ -963,6 +963,54 @@ describe("a Product repo's rows", () => {
     });
   });
 
+  describe("the Operator session on the row (#951)", () => {
+    const ADDRESS = "https://claude.ai/code/session_01GcsNdk1yVNhd1T31USEtv1";
+    const report = (author = "operator") =>
+      aComment(`<!-- fabrik:operator-session ${ADDRESS} -->\nAn Operator session is working this issue: [open it](${ADDRESS}).`, "2026-11-08T19:00:00Z", { author, byBot: false });
+    const sessionsOf = (facts: Facts) => rowsOf(facts, null, null, null, NOW).map(({ standing, operatorSession }) => ({ issue: standing.issue, pullRequest: standing.pullRequest, operatorSession }));
+
+    it("is the address of the Operator's marker on the open issue the row's Standing names", () => {
+      const facts = homeFactsOf({ github: factsOf({ openIssues: [{ ...TICKET, comments: [report()] }] }) });
+
+      expect(sessionsOf(facts)).toEqual([{ issue: 7, pullRequest: null, operatorSession: ADDRESS }]);
+    });
+
+    it("is on a ready-for-human issue's row, whatever its Standing", () => {
+      const pairing = anOpenIssue({ number: 30, title: "Pair on the checkout", labels: ["ready-for-human"], comments: [report()] });
+      const facts = homeFactsOf({ github: factsOf({ openIssues: [pairing] }) });
+
+      expect(sessionsOf(facts)).toEqual([expect.objectContaining({ issue: 30, operatorSession: ADDRESS })]);
+    });
+
+    it("is read with the gather's operator", () => {
+      const facts = homeFactsOf({ operator: "kate", github: factsOf({ openIssues: [{ ...TICKET, comments: [report("kate")] }] }) });
+
+      expect(sessionsOf(facts)).toEqual([expect.objectContaining({ issue: 7, operatorSession: ADDRESS })]);
+      expect(sessionsOf({ ...facts, operator: "operator" })).toEqual([expect.objectContaining({ issue: 7, operatorSession: null })]);
+    });
+
+    it("is null on an issue's row with no marker, and with only a stranger's", () => {
+      expect(sessionsOf(homeFactsOf({ github: factsOf({ openIssues: [TICKET] }) }))).toEqual([expect.objectContaining({ issue: 7, operatorSession: null })]);
+      expect(sessionsOf(homeFactsOf({ github: factsOf({ openIssues: [{ ...TICKET, comments: [report("stranger")] }] }) }))).toEqual([
+        expect.objectContaining({ issue: 7, operatorSession: null }),
+      ]);
+    });
+
+    it("is null on a pull request's row that names no issue, a marker in its own comments or not", () => {
+      const facts = homeFactsOf({
+        github: factsOf({ openPullRequests: [anOpenPullRequest({ number: 51, ticket: null, draft: false, comments: [report(), aVerdictComment("pass", HEAD, "2026-11-07T20:00:00Z")] })] }),
+      });
+
+      expect(sessionsOf(facts)).toEqual([{ issue: null, pullRequest: 51, operatorSession: null }]);
+    });
+
+    it("is null on a bare row, as every row of the store is", () => {
+      const [row] = rowsOf(homeFactsOf({ github: factsOf({ openIssues: [{ ...TICKET, comments: [report()] }] }) }), null, null, null, NOW);
+
+      expect(bareRowOf(row!.standing, row!.title, null).operatorSession).toBeNull();
+    });
+  });
+
   describe("whether an open agent pull request's Ticket is closed", () => {
     const atTheMergeGate = anOpenPullRequest({ number: 50, ticket: 7, draft: false, comments: [aVerdictComment("pass", HEAD, "2026-11-07T20:00:00Z")] });
     const inDraft = anOpenPullRequest({ number: 50, ticket: 7, draft: true });
