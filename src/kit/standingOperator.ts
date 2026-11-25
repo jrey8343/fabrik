@@ -44,7 +44,7 @@ export function operatorStandingsOf(facts: StandingFacts, now: string): Standing
     ...openIssues.flatMap((issue) => questionStandingsOf(issue, repo, operator, appLogin)),
     ...openIssues.flatMap((issue) => failedResearchStandingsOf(issue, openIssues, repo, appLogin)),
     ...subscriptionStandingsOf(github, kit),
-    // A Subscription's issue carries ready-for-human too, but stands as above.
+    // A token-rotation or usage-credits issue carries ready-for-human too, but stands as above; a weekly-limit issue carries fabrik:weekly-limit alone.
     ...openIssues.flatMap((issue) => (issue.labels.includes(READY_FOR_HUMAN) && !makesUnusable(issue.labels) ? [readyForHumanStandingOf(issue, repo, now)] : [])),
     ...openPullRequests.flatMap((pullRequest) => pullRequestStandingsOf(pullRequest, facts)),
     // Last, so work that stops on the Operator is read so before it is read as reading matter.
