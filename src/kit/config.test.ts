@@ -53,7 +53,7 @@ const DEFAULTS = {
   production: null,
   staging: null,
   timeZone: null,
-  console: { appId: null, heldWorkflows: [] },
+  console: { appId: null, heldWorkflows: [], sessionEnvironment: null },
 };
 
 describe("Kit config", () => {
@@ -1172,8 +1172,18 @@ describe("The Kit config template", () => {
     expect(bullet).toContain("Kit config is a Trust-root file, so no agent can change the list.");
     expect(resolveKitConfig({ config: example })).toEqual({
       ok: true,
-      config: { ...DEFAULTS, console: { appId: 1234567, heldWorkflows: ["promote.yml"] } },
+      config: { ...DEFAULTS, console: { appId: 1234567, heldWorkflows: ["promote.yml"], sessionEnvironment: null } },
     });
+  });
+
+  it("documents console.session_environment in the README's Kit config section, as written, directly after console.held_workflows", () => {
+    const lines = readme.slice(readme.indexOf("## Kit config"), readme.indexOf("### Extra skills")).split("\n");
+    const heldWorkflows = lines.findIndex((line) => line.startsWith("- `console.held_workflows` (default `[]`)"));
+
+    expect(heldWorkflows).toBeGreaterThan(-1);
+    expect(lines[heldWorkflows + 1]).toBe(
+      "- `console.session_environment` (absent by default) names this repo's own Session environment, which a repo that attaches a credential to its Operator sessions makes on each Subscription sessions open from (see [Operator sessions](#operator-sessions)). The Console's link names it, and the `SessionStart` hook checks a cloud session is in it. Left out, the link and the check name the bare one, `operator-sessions`, as for a repo with no Kit config. Any value but a non-empty string is a Kit config error naming the field. Kit config is a Trust-root file, so which Session environment a repo's link names changes only through a pull request the Operator merges.",
+    );
   });
 
   it("documents the Fable opt-in in the README's Kit config section, with its guards and ADR-0034", () => {
@@ -2169,7 +2179,7 @@ describe("The console block, whose app_id says the Console covers a Product repo
   it("reads the Console's App's id from console.app_id, every other field at its default", () => {
     const result = resolveKitConfig({ config: `{ "console": { "app_id": 1234567 } }` });
 
-    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, console: { appId: 1234567, heldWorkflows: [] } } });
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, console: { appId: 1234567, heldWorkflows: [], sessionEnvironment: null } } });
   });
 
   it.each([null, "1234567", 1.5, 0, -1])("refuses an app_id of %j, which isn't a whole number of at least 1", (appId) => {
@@ -2203,7 +2213,7 @@ describe("console.held_workflows, the Product repo's Held workflows by their wor
 
     expect(result).toEqual({
       ok: true,
-      config: { ...DEFAULTS, console: { appId: 1234567, heldWorkflows: ["promote.yml", "dns-apply.yaml"] } },
+      config: { ...DEFAULTS, console: { appId: 1234567, heldWorkflows: ["promote.yml", "dns-apply.yaml"], sessionEnvironment: null } },
     });
   });
 
@@ -2241,7 +2251,7 @@ describe("console.held_workflows, the Product repo's Held workflows by their wor
   it("takes two names that differ only in case as two workflows, as GitHub's file names are case-sensitive", () => {
     const result = resolveKitConfig({ config: JSON.stringify({ console: { app_id: 1234567, held_workflows: ["promote.yml", "Promote.yml"] } }) });
 
-    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, console: { appId: 1234567, heldWorkflows: ["promote.yml", "Promote.yml"] } } });
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, console: { appId: 1234567, heldWorkflows: ["promote.yml", "Promote.yml"], sessionEnvironment: null } } });
   });
 
   it.each([[["promote.yml"]], [[]]])("refuses a held_workflows of %j with no app_id, naming both, since the step reads its check by that App's id", (heldWorkflows) => {
@@ -2257,6 +2267,42 @@ describe("console.held_workflows, the Product repo's Held workflows by their wor
     const result = resolveKitConfig({ config: JSON.stringify({ console: { app_id: 0, held_workflows: ["promote.yml"] } }) });
 
     expect(result).toEqual({ ok: false, errors: ["console.app_id must be a whole number of at least 1"] });
+  });
+});
+
+describe("console.session_environment, the name of this repo's own Session environment", () => {
+  it.each([`{}`, `{ "console": {} }`, `{ "console": { "app_id": 1234567 } }`])("reads as null when left out, for %s", (text) => {
+    const result = resolveKitConfig({ config: text });
+
+    expect(result.ok && result.config.console.sessionEnvironment).toBeNull();
+  });
+
+  it("reads a name as itself beside console.app_id", () => {
+    const result = resolveKitConfig({ config: `{ "console": { "app_id": 1234567, "session_environment": "shop-sessions" } }` });
+
+    expect(result).toEqual({
+      ok: true,
+      config: { ...DEFAULTS, console: { appId: 1234567, heldWorkflows: [], sessionEnvironment: "shop-sessions" } },
+    });
+  });
+
+  it("reads a name as itself alone, since it needs no console.app_id", () => {
+    const result = resolveKitConfig({ config: `{ "console": { "session_environment": "shop-sessions" } }` });
+
+    expect(result).toEqual({
+      ok: true,
+      config: { ...DEFAULTS, console: { appId: null, heldWorkflows: [], sessionEnvironment: "shop-sessions" } },
+    });
+  });
+
+  it.each([
+    ["", `console.session_environment is "": a Session environment's name can't be empty`],
+    [42, "console.session_environment must be a string"],
+    [null, "console.session_environment must be a string"],
+  ])("refuses a session_environment of %j, naming the field", (sessionEnvironment, error) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ console: { session_environment: sessionEnvironment } }) });
+
+    expect(result).toEqual({ ok: false, errors: [error] });
   });
 });
 
