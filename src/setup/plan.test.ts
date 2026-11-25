@@ -1909,4 +1909,29 @@ describe("Setup's report on a Product repo's own credentials", () => {
       expect(planSetup(aCleanProduct({ production: null }), kit).report).toEqual([NONE_OF_ITS_OWN]);
     });
   });
+
+  it("changes no step and no note of the plan, whatever it says", () => {
+    const quiet = aCleanProduct({ secrets: ["FABRIK_OP_AGENT_TOKEN"] });
+    const loud = aCleanProduct({
+      secrets: ["FABRIK_OP_AGENT_TOKEN", "STRIPE_KEY", "AWS_SECRET_ACCESS_KEY"],
+      production: { name: "production", policy: { branches: "all", rules: [] } },
+    });
+    const { report: _quiet, ...planned } = planSetup(quiet, kit);
+    const { report, ...plannedLoud } = planSetup(loud, kit);
+
+    expect(report).toHaveLength(4);
+    expect(plannedLoud).toEqual(planned);
+    const settled = afterApplying(loud, planSetup(loud, kit));
+    expect(planSetup(settled, kit).actions).toEqual([]);
+    expect(planSetup(settled, kit).report).toEqual(report);
+  });
+
+  it("is said in the README's list of what Setup does, straight after the fabrik environment's bullet", () => {
+    const BULLET =
+      "- **Setup's report**, said on every run under the plan and again in its last lines, never in the setup PR: each repo-level Actions secret that isn't one of the Kit's three, by name, and that a workflow run on any branch can read it; and, when the Kit config's `production` block names an environment, whether that environment is held to the default branch alone. The Kit's rule for a Product repo's own credentials is that one that can reach production is the secret of an environment held to the default branch, or no stored secret at all: a role taken by OIDC whose trust names that environment and not the whole repo. Only test and preview credentials sit at repo level. Setup reports and never blocks: it makes and changes none of the repo's own environments, judges no secret by its name, and doesn't look inside a cloud account's trust policy, which is yours to check in each repo.";
+    const lines = readFileSync(resolve(KIT_DIR, "README.md"), "utf8").split("\n");
+
+    expect(lines).toContain(BULLET);
+    expect(lines[lines.indexOf(BULLET) - 1]).toMatch(/^- \*\*The `fabrik` environment\*\* \(ADR-0004\): /);
+  });
 });
