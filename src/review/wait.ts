@@ -7,7 +7,9 @@
 // GitHub starts no `pull_request` workflow on a PR it can't merge, so that
 // check never will (#704). It waits on
 // the Required checks: those the Kit config lists plus any the default branch
-// requires, the branch's list read once before it starts (#565). Giving up, or
+// requires, the branch's list read once before it starts (#565). It skips the
+// Console check in the checks it reads on the head, which is never a Required
+// check (ADR-0019), so nothing it writes names it. Giving up, or
 // any error, fails the job and leaves a failure report for the push job's
 // notice: a Required check that never reported is named, as no re-run fixes it,
 // with the head it waited on, for how long, and whether the PR merged cleanly.
@@ -100,7 +102,7 @@ async function pullRequestState(repo: string, number: string): Promise<PullReque
   return JSON.parse(stdout) as PullRequestState;
 }
 
-/** Every check on the PR's head; which of them gate it is the Required checks' to say. */
+/** Every check on the PR's head but the Console check; which of them gate it is the Required checks' to say. */
 async function checksOf(repo: string, number: string): Promise<CheckDetail[]> {
   return checksFromGh(await gh("pr", "checks", number, "--repo", repo, "--json", "name,bucket,link,workflow,startedAt")) as CheckDetail[];
 }

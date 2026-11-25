@@ -15,8 +15,10 @@ import {
   UI_VIEWPORTS,
   withRouteOn,
 } from "./config.ts";
+import { CONSOLE_CHECK } from "./consoleCheck.ts";
 
 const root = new URL("../../", import.meta.url);
+const consoleCheckSource = readFileSync(new URL("consoleCheck.ts", import.meta.url), "utf8");
 const template = readFileSync(new URL("templates/fabrik-config.json", root), "utf8");
 const readme = readFileSync(new URL("README.md", root), "utf8");
 
@@ -51,6 +53,7 @@ const DEFAULTS = {
   production: null,
   staging: null,
   timeZone: null,
+  console: { appId: null },
 };
 
 describe("Kit config", () => {
@@ -1136,6 +1139,27 @@ describe("The Kit config template", () => {
     expect(template).not.toContain("allow_fable");
   });
 
+  it("sets no console block, in the template or the README's defaults block, so a first setup is covered by no Console", () => {
+    const section = readme.slice(readme.indexOf("## Kit config"));
+    const block = /```json\n([\s\S]*?)```/.exec(section)?.[1] ?? "";
+
+    expect(JSON.parse(template)).not.toHaveProperty("console");
+    expect(JSON.parse(block)).not.toHaveProperty("console");
+    expect(resolveKitConfig({ config: block })).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  it("documents console.app_id in the README's Kit config section, after staging and before operator", () => {
+    const section = readme.slice(readme.indexOf("## Kit config"), readme.indexOf("### Extra skills"));
+    const opening = "- `console.app_id` (default unset)";
+    const bullet = section.split("\n").find((line) => line.startsWith(opening)) ?? "";
+
+    expect(section.indexOf(opening)).toBeGreaterThan(section.indexOf("- `staging` (default `null`)"));
+    expect(section.indexOf(opening)).toBeLessThan(section.indexOf("- `operator` is"));
+    expect(bullet).toContain("a check run named `Merge from the Console` expected from that App");
+    expect(bullet).toContain("ADR-0019");
+    expect(bullet).toContain("the starter Kit config never sets it");
+  });
+
   it("documents the Fable opt-in in the README's Kit config section, with its guards and ADR-0034", () => {
     const section = readme.slice(readme.indexOf("## Kit config"), readme.indexOf("### Extra skills"));
 
@@ -2118,6 +2142,58 @@ describe("The staging block, which says where a Product repo's staging environme
 
     expect(result.ok && result.config.production).toBeNull();
     expect(result.ok && result.config.staging).toEqual({ url: "https://staging.shop.example", environment: "staging" });
+  });
+});
+
+describe("The console block, whose app_id says the Console covers a Product repo", () => {
+  it.each([`{}`, `{ "console": {} }`])("covers nothing for %s, and is valid", (text) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: true, config: DEFAULTS });
+  });
+
+  it("reads the Console's App's id from console.app_id, every other field at its default", () => {
+    const result = resolveKitConfig({ config: `{ "console": { "app_id": 1234567 } }` });
+
+    expect(result).toEqual({ ok: true, config: { ...DEFAULTS, console: { appId: 1234567 } } });
+  });
+
+  it.each([null, "1234567", 1.5, 0, -1])("refuses an app_id of %j, which isn't a whole number of at least 1", (appId) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ console: { app_id: appId } }) });
+
+    expect(result).toEqual({ ok: false, errors: ["console.app_id must be a whole number of at least 1"] });
+  });
+
+  it.each([`{ "console": null }`, `{ "console": [] }`])("refuses a console block that isn't an object: %s", (text) => {
+    expect(resolveKitConfig({ config: text })).toEqual({ ok: false, errors: ["console must be an object"] });
+  });
+
+  it("refuses a field the console block doesn't know, naming it", () => {
+    const result = resolveKitConfig({ config: `{ "console": { "app_id": 1, "slug": "x" } }` });
+
+    expect(result).toEqual({ ok: false, errors: ["console.slug is not a Kit config field"] });
+  });
+
+  it("names its problem after time_zone's place, as the Kit config's own order has it", () => {
+    const result = resolveKitConfig({ config: JSON.stringify({ console: { app_id: 0 }, staging: { environment: "staging" } }) });
+
+    expect(result).toEqual({ ok: false, errors: ["staging.url is missing", "console.app_id must be a whole number of at least 1"] });
+  });
+});
+
+describe("The Console check, which is never a Required check", () => {
+  it("is the check run named Merge from the Console, in a module that imports nothing", () => {
+    expect(CONSOLE_CHECK).toBe("Merge from the Console");
+    expect(consoleCheckSource).not.toMatch(/^\s*import\b/m);
+  });
+
+  it.each([{}, { console: { app_id: 1234567 } }])("is refused in sandbox.checks, by its index, with %j", (rest) => {
+    const result = resolveKitConfig({ config: JSON.stringify({ sandbox: { checks: ["test", "Merge from the Console"] }, ...rest }) });
+
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        `sandbox.checks[1] is "Merge from the Console": that is the Console check, which is never a Required check; Setup requires it from the Console's App where console.app_id names it`,
+      ],
+    });
   });
 });
 

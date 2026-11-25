@@ -347,7 +347,7 @@ A Product repo's written rules for how its code should look, which the Implement
 _Avoid_: style guide, conventions, review instructions
 
 **Merge gate**:
-The rule that only the Operator merges a pull request into a Product repo's main branch, and only at a head whose Required checks have passed. Nothing reaches that branch any other way: neither agents nor the Operator push to it.
+The rule that only the Operator merges a pull request into a Product repo's main branch, and only at a head whose Required checks have passed; where the Console covers the repo, only from the Console. Nothing reaches that branch any other way: neither agents nor the Operator push to it.
 _Avoid_: approval, sign-off
 
 **On its way to the Merge gate**:
@@ -359,8 +359,12 @@ What `caps.merge_gate` weighs: the open agent PRs out of draft, at the Merge gat
 _Avoid_: review queue, backlog
 
 **Required check**:
-A check the Merge gate needs passed on a pull request's head: those the Kit config lists, plus any GitHub already requires on the main branch, through its protection or a ruleset. It has passed when it succeeded, was skipped or reported neutral, as GitHub judges a merge; cancelled or any other result is failing.
+A check the Merge gate needs passed on a pull request's head: those the Kit config lists, plus any GitHub already requires on the main branch, through its protection or a ruleset, the Console check aside. It has passed when it succeeded, was skipped or reported neutral, as GitHub judges a merge; cancelled or any other result is failing.
 _Avoid_: gating check, status check
+
+**Console check**:
+The check only the Console can report, made on the one head it is about to merge, which GitHub requires before any merge into a covered Product repo's main branch. It is not a Required check: nothing waits on it, re-runs it or names it as in the way.
+_Avoid_: the Console's pass, merge check, gating check
 
 **Main check**:
 A check a Product repo names for the Monitor to read on the default branch that is not a Required check, such as a deploy or the smoke check after it. No pull request waits on one, and each is red or green by itself.

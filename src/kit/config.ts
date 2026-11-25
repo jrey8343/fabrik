@@ -3,6 +3,7 @@
 import { knownTimeZone, spelled } from "../loop/readable.ts";
 import { AGENT_ROLES, type AgentRole as AgentRoleName } from "../loop/types.ts";
 import { FULL_SHA, REPOSITORY } from "../skills/lock.ts";
+import { CONSOLE_CHECK } from "./consoleCheck.ts";
 
 export interface AgentRole {
   readonly model: string;
@@ -131,6 +132,15 @@ export interface KitConfig {
    * zone the runtime knows (timeZoneNote), writes them in UTC.
    */
   readonly timeZone: string | null;
+  /** The `console` block: what the Console does for this repo. */
+  readonly console: {
+    /**
+     * The numeric id of the Console's own GitHub App, whose presence says the
+     * Console covers this repo, so Setup requires the Console check from that
+     * App (ADR-0019); null, when the key is left out, covers nothing.
+     */
+    readonly appId: number | null;
+  };
 }
 
 /** The `ui` block: which changed files make a pull request UI, and how the Sandbox serves the branch to capture it. */
@@ -585,6 +595,8 @@ export const DEFAULT_KIT_CONFIG: KitConfig = {
   staging: null,
   // UTC until the Operator gives their time zone, as Setup writes it.
   timeZone: null,
+  // The Console covers a repo only once the Operator gives its App's id; the starter never does.
+  console: { appId: null },
 };
 
 /** Where the Kit config lives in a Product repo (ADR-0005). */
@@ -772,7 +784,7 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
     effort: reviewAsSet.effort ?? defaults.roles.digest.effort,
     timeoutMinutes: defaults.roles.digest.timeoutMinutes,
   };
-  const requiredChecks = sandbox.stringList("checks") ?? defaults.sandbox.checks;
+  const requiredChecks = sandbox.stringList("checks", notTheConsoleCheck) ?? defaults.sandbox.checks;
   const upToPreview = {
     ...defaults,
     sandbox: {
@@ -816,6 +828,8 @@ function readConfig(file: Reader, picks: Picks): Omit<KitConfig, keyof Skills> {
     staging: readStaging(file.nullableObject("staging"), production),
     // A time_zone the runtime doesn't know falls back to UTC, and never fails the Kit config (ADR-0023).
     timeZone: knownTimeZone(file.unchecked("time_zone")),
+    // Read after time_zone, so each problem is still named in the Kit config's own order.
+    console: { appId: file.object("console").wholeNumber("app_id", 1) ?? defaults.console.appId },
   };
 }
 
@@ -835,6 +849,13 @@ export function timeZoneNote(configText: string | null): string | null {
   const value = (raw as Record<string, unknown>)["time_zone"];
   if (value === undefined || value === null || knownTimeZone(value) !== null) return null;
   return `\`time_zone\` in ${KIT_CONFIG_PATH} is ${JSON.stringify(value)}, which isn't an IANA time zone, such as Europe/London, so the Kit writes its times in UTC.`;
+}
+
+/** Why a check `sandbox.checks` lists can't be a Required check, or null when it can: the Console check never is (ADR-0019). */
+function notTheConsoleCheck(name: string): string | null {
+  return name === CONSOLE_CHECK
+    ? "that is the Console check, which is never a Required check; Setup requires it from the Console's App where console.app_id names it"
+    : null;
 }
 
 /** A field left out (undefined) takes its default; an explicit null is kept. */

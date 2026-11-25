@@ -2,6 +2,7 @@
 // how the plan names each step.
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { CONSOLE_CHECK } from "../kit/consoleCheck.ts";
 import { ok, type Run } from "./exec.ts";
 import { storeFile } from "./gather.ts";
 import {
@@ -10,7 +11,6 @@ import {
   bypassAllowances,
   MERGE_GATE_RULESET,
   type ProductState,
-  requiredChecks,
   type SetupAction,
   UNPROTECTED,
 } from "./plan.ts";
@@ -112,7 +112,7 @@ function protectionChanges(found: BranchProtection, protection: BranchProtection
   const list = (items: readonly string[]) => (items.length === 0 ? "none" : items.join(", "));
   const changes: string[] = [];
   if (found.required_pull_request_reviews === null) changes.push("a pull request: not required → required");
-  const [checksBefore, checksAfter] = [requiredChecks(found), requiredChecks(protection)];
+  const [checksBefore, checksAfter] = [namedChecks(found), namedChecks(protection)];
   if (list(checksBefore) !== list(checksAfter)) changes.push(`required checks: ${list(checksBefore)} → ${list(checksAfter)}`);
   const [reviewsBefore, reviewsAfter] = [found, protection].map((p) => p.required_pull_request_reviews?.required_approving_review_count ?? 0);
   if (reviewsBefore !== reviewsAfter) changes.push(`approving reviews: ${reviewsBefore} → ${reviewsAfter}`);
@@ -121,6 +121,17 @@ function protectionChanges(found: BranchProtection, protection: BranchProtection
   const held = (on: boolean) => (on ? "yes" : "no");
   if (found.enforce_admins !== protection.enforce_admins) changes.push(`admins held to the rules: ${held(found.enforce_admins)} → ${held(protection.enforce_admins)}`);
   return changes;
+}
+
+/**
+ * The checks a branch requires, as the plan names them: the Console check with
+ * the App beside it, since Setup owns that App and a change of it alone is a
+ * change, and every other check by its name.
+ */
+function namedChecks(protection: BranchProtection): string[] {
+  return (protection.required_status_checks?.checks ?? []).map(({ context, app_id }) =>
+    context === CONSOLE_CHECK && app_id !== undefined ? `${context} (App ${app_id})` : context,
+  );
 }
 
 /** The files in the Product checkout these steps wrote, as describeAction words them. A step of any other kind names none. */

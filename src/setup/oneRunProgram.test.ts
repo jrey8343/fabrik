@@ -336,6 +336,26 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(said).toContain("- protect main: a pull request: not required → required; every other setting stays as it is");
   });
 
+  it("with the checkout's Kit config naming the Console's App, requires the Console check from that App, and says so in the plan it shows before the Operator's yes", async () => {
+    await mkdir(join(checkout, ".fabrik"));
+    await writeFile(join(checkout, ".fabrik", "config.json"), `${JSON.stringify({ sandbox: { checks: ["test"] }, console: { app_id: 42 } }, null, 2)}\n`);
+    git("add", ".fabrik");
+    git("commit", "-q", "-m", "Our Kit config");
+    git("push", "-q", "origin", "main");
+    const world = aWorld();
+
+    const { code, calls, said } = await setupOnce(world);
+
+    expect(code).toBe(0);
+    const puts = calls.filter((call) => call.line.startsWith("gh api --method PUT repos/acme/clinic/branches/main/protection "));
+    expect(puts.map((call) => JSON.parse(call.input ?? "").required_status_checks)).toEqual([
+      { strict: false, checks: [{ context: "test" }, { context: "Merge from the Console", app_id: 42 }] },
+    ]);
+    const note = said.findIndex((line) => line.startsWith("- The Kit config names the Console's App (console.app_id is 42), so from this run on main merges only from the Console"));
+    expect(note).toBeGreaterThan(-1);
+    expect(note).toBeLessThan(said.indexOf("What setup did:"));
+  });
+
   it("asks the Operator's yes to the plan, naming the branch, before it changes anything", async () => {
     const { questions, log } = await setupOnce(aWorld());
 
@@ -452,6 +472,50 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     const body = world.prs[0]?.body ?? "";
     expect(body).toContain("Merge this PR yourself once its Required checks pass.");
     expect(body).not.toContain("Don't merge this yet.");
+  });
+
+  describe("the merge ask, from the Kit config the setup PR merges", () => {
+    const ownKitConfig = async (config: string) => {
+      await mkdir(join(checkout, ".fabrik"));
+      await writeFile(join(checkout, ".fabrik", "config.json"), config);
+      git("add", ".fabrik/config.json");
+      git("commit", "-q", "-m", "Our Kit config");
+      git("push", "-q", "origin", "main");
+    };
+
+    it("where the setup branch's Kit config holds console.app_id, says to merge from the Console in the setup PR and the closing lines", async () => {
+      await ownKitConfig('{\n  "console": { "app_id": 2471093 }\n}\n');
+      const world = aWorld();
+
+      const { code, said } = await setupOnce(world);
+
+      expect(code).toBe(0);
+      const body = world.prs[0]?.body ?? "";
+      expect(body).toContain("Merge this PR from the Console once its Required checks pass. This repo's Kit config names the Console's App (console.app_id)");
+      expect(body).not.toContain("Merge this PR yourself");
+      expect(said.some((line) => line.startsWith("Merge it from the Console once its Required checks pass."))).toBe(true);
+      expect(said.some((line) => line.startsWith("Merge it yourself"))).toBe(false);
+    });
+
+    it("on a first setup, whose starter Kit config holds no console.app_id, says to merge it yourself", async () => {
+      const world = aWorld();
+
+      await setupOnce(world);
+
+      expect(world.prs[0]?.body).toContain("Merge this PR yourself once its Required checks pass.");
+      expect(world.prs[0]?.body).not.toContain("from the Console");
+    });
+
+    it("where the setup branch's Kit config is invalid, says to merge it yourself, though it holds console.app_id", async () => {
+      await ownKitConfig('{\n  "console": { "app_id": 2471093 },\n  "ui": false\n}\n');
+      const world = aWorld();
+
+      const { said } = await setupOnce(world);
+
+      expect(world.prs[0]?.body).toContain("Merge this PR yourself once its Required checks pass.");
+      expect(world.prs[0]?.body).not.toContain("from the Console");
+      expect(said.some((line) => line.startsWith("Merge it yourself once its Required checks pass."))).toBe(true);
+    });
   });
 
   it("with a second Subscription, the setup PR lists it in the Kit config once the wizard's stage has stored its token", async () => {

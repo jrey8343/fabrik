@@ -164,7 +164,7 @@ async function toldTo(config: KitConfig): Promise<string> {
 const outputWith = (trial?: unknown) => parseImplementOutput(JSON.stringify({ title: "Book a visit", summary: "Adds booking.", ...(trial === undefined ? {} : { trial }) }));
 
 describe.skipIf(RELEASED_NOTES.has(NOTES))("The Trial steps release notes, while drafted", () => {
-  it("open with what they are the notes for, and the releasing guide lists them last among the drafted notes", () => {
+  it("open with what they are the notes for, and the releasing guide lists them among the drafted notes", () => {
     expect(notes.split("\n")[0]).toBe("# Release notes: Trial steps and the Trial session");
     expect(notes).toMatch(/^The notes for the minor release that ships Trial steps and the Trial session \(\[#962\]\(https:\/\/github\.com\/jrey8343\/fabrik\/issues\/962\), \[ADR-0040\]/m);
     expect(notes).toContain(`[ADR-0040](../adr/${ADR})`);
@@ -173,7 +173,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Trial steps release notes, while
     const drafted = read("docs/releasing.md")
       .split("\n")
       .find((line) => line.includes("Notes drafted ahead of a release are in `docs/release-notes/`"));
-    expect(drafted).toContain(`(release-notes/cheaper-reads.md), and the Trial steps minor's (${issue(962)}) are [Trial steps and the Trial session](release-notes/trial-steps.md).`);
+    expect(drafted).toContain(`(release-notes/cheaper-reads.md), the Trial steps minor's (${issue(962)}) are [Trial steps and the Trial session](release-notes/trial-steps.md)`);
   });
 
   it("name every Ticket of the Spec, each by its link, and say every one has its part", () => {
