@@ -91,3 +91,43 @@ describe("ADR-0019 on the Console check (#924)", () => {
     expect(COVERED_REPO).toContain("`console.app_id`");
   });
 });
+
+const MERGE_GATE = [
+  "**Merge gate**:",
+  "The rule that only the Operator merges a pull request into a Product repo's main branch, and only at a head whose Required checks have passed; where the Console covers the repo, only from the Console. Nothing reaches that branch any other way: neither agents nor the Operator push to it.",
+  "_Avoid_: approval, sign-off",
+].join("\n");
+
+const REQUIRED_CHECK = [
+  "**Required check**:",
+  "A check the Merge gate needs passed on a pull request's head: those the Kit config lists, plus any GitHub already requires on the main branch, through its protection or a ruleset, the Console check aside. It has passed when it succeeded, was skipped or reported neutral, as GitHub judges a merge; cancelled or any other result is failing.",
+  "_Avoid_: gating check, status check",
+].join("\n");
+
+const CONSOLE_CHECK_TERM = [
+  "**Console check**:",
+  "The check only the Console can report, made on the one head it is about to merge, which GitHub requires before any merge into a covered Product repo's main branch. It is not a Required check: nothing waits on it, re-runs it or names it as in the way.",
+  "_Avoid_: the Console's pass, merge check, gating check",
+].join("\n");
+
+describe("The glossary on the Console check (#924)", () => {
+  const glossary = read("GLOSSARY.md");
+
+  it("has the Merge gate hold a covered repo's merges to the Console", () => {
+    expect(glossary).toContain(`\n${MERGE_GATE}\n`);
+  });
+
+  it("has a Required check leave the Console check aside", () => {
+    expect(glossary).toContain(`\n${REQUIRED_CHECK}\n`);
+  });
+
+  it("has the Console check as a term of its own, between Required check and Main check", () => {
+    expect(glossary).toContain(`\n${REQUIRED_CHECK}\n\n${CONSOLE_CHECK_TERM}\n\n**Main check**:\n`);
+  });
+
+  it("has each term once", () => {
+    for (const term of ["**Merge gate**:", "**Required check**:", "**Console check**:"]) {
+      expect(glossary.split(`\n${term}\n`)).toHaveLength(2);
+    }
+  });
+});
