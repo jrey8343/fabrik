@@ -1,0 +1,3 @@
+# Release notes: the Kit's tokens in the `fabrik` environment
+
+These are the notes of this part of the major that carries the Kit's Operator sessions ([Spec: The Kit's tokens in the `fabrik` environment, which only the default branch may use](https://github.com/jrey8343/fabrik/issues/915)): the Kit's three service-account tokens stop being repo-level Actions secrets, which GitHub gives to a workflow run on any ref, a workflow pushed on a branch included, and become the secrets of one GitHub environment that only the default branch may use. Each of the major's five parts has its own notes, and this is this part's. Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.
