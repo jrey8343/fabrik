@@ -3,14 +3,15 @@
 // git told by the environment to read `https://github.com/` from a local folder
 // that holds a stand-in Fabrik.
 import { execFile } from "node:child_process";
-import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { aRepository, aSkillsSource, git, gitHubFrom, tempDir } from "../__fixtures__/skillsArchive.ts";
 
 const run = promisify(execFile);
-const TEMPLATE = resolve(import.meta.dirname, "..", "..", "templates", "claude-settings.json");
+const FABRIK = resolve(import.meta.dirname, "..", "..");
+const TEMPLATE = join(FABRIK, "templates", "claude-settings.json");
 
 interface HookSettings {
   hooks: { SessionStart: { hooks: { type: string; command: string; timeout: number }[] }[] };
@@ -60,11 +61,30 @@ const callerAt = (release: string) => `jobs:
     uses: "jrey8343/fabrik/.github/workflows/schedule.yml@${release}" # pinned
 `;
 
-async function runHook(product: string, github: string): Promise<string> {
+async function runHook(product: string, github: string, env: Record<string, string> = {}): Promise<string> {
   const { stdout } = await run("sh", ["-c", await hookCommand()], {
-    env: { ...process.env, CLAUDE_PROJECT_DIR: product, ...gitHubFrom(github) },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: product, ...gitHubFrom(github), ...env },
   });
   return stdout.trim();
+}
+
+/**
+ * A folder standing in for github.com, where jrey8343/fabrik's tag v2.0.0
+ * holds this checkout's src/ (its tests left out), a skills.lock.json pinning
+ * a mattpocock/skills the folder also holds, and the text for cloud sessions.
+ */
+async function aGitHubWithThisFabrik(): Promise<string> {
+  const github = await tempDir("github");
+  const { sha } = await aSkillsSource({ "skills/engineering/grilling": "# grilling" }, { at: join(github, "mattpocock/skills") });
+  const fabrik = join(github, "jrey8343/fabrik");
+  await cp(join(FABRIK, "src"), join(fabrik, "src"), { recursive: true, filter: (path) => !path.endsWith(".test.ts") });
+  await aRepository(fabrik, {
+    "package.json": JSON.stringify({ type: "module" }),
+    "skills.lock.json": JSON.stringify({ repository: "mattpocock/skills", sha }),
+    "skills/fabrik-operator-session/SKILL.md": "---\nname: fabrik-operator-session\n---\n# Operator session",
+  });
+  git(fabrik, "tag", "-a", "v2.0.0", "-m", "Fabrik v2.0.0");
+  return github;
 }
 
 describe("The SessionStart hook entry", () => {
@@ -96,6 +116,20 @@ describe("The SessionStart hook entry", () => {
     });
   });
 
+  it("in a cloud session (CLAUDE_CODE_REMOTE=true), gives the line saying where the session is, with the repo from its origin remote", async () => {
+    const product = await aProduct(callerAt("v2.0.0"));
+    await aRepository(product, {});
+    git(product, "remote", "add", "origin", "https://github.com/acme/widgets.git");
+
+    const stdout = await runHook(product, await aGitHubWithThisFabrik(), { CLAUDE_CODE_REMOTE: "true", HOME: await tempDir("home"), CLAUDE_CONFIG_DIR: "" });
+    const output = JSON.parse(stdout) as { hookSpecificOutput: { additionalContext: string }; systemMessage?: string };
+
+    expect(output.systemMessage).toBeUndefined();
+    expect(output.hookSpecificOutput.additionalContext.split("\n")).toContain(
+      "This is a Claude Code cloud session on acme/widgets. `gh issue` and `gh pr` are refused here: every tracker operation goes over REST, by the forms in .claude/skills/fabrik-operator-session/SKILL.md. Read that skill before any work.",
+    );
+  });
+
   it("downloads no archive, and keeps the Kit's name, by which Setup finds its entry in a Product repo's settings", async () => {
     const command = await hookCommand();
 
@@ -104,13 +138,13 @@ describe("The SessionStart hook entry", () => {
     expect(command).toContain('git -C "$d" fetch -q --depth 1 https://github.com/jrey8343/fabrik "refs/tags/$v"');
   });
 
-  it("is described in the README's Layout as fetching Fabrik and each Skills source by git's own shallow fetch from github.com", async () => {
+  it("is described in the README's Layout as fetching Fabrik and each Skills source by git's own shallow fetch from github.com, and as saying what a cloud session needs", async () => {
     const readme = await readFile(resolve(import.meta.dirname, "..", "..", "README.md"), "utf8");
     const layout = readme.split("\n## Layout\n")[1]?.split("\n## ")[0] ?? "";
     const bullet = layout.split("\n").find((line) => line.startsWith("- `templates/claude-settings.json`"));
 
     expect(bullet).toBe(
-      "- `templates/claude-settings.json` holds the `SessionStart` hook entry a Product repo merges into `.claude/settings.json`, and disables the `mattpocock-skills` plugin there. The entry reads the release from `fabrik.yml`, fetches Fabrik at that tag by git's own shallow fetch from `github.com` (public, no credentials, and served to a cloud session for a repo that isn't attached), and runs `src/session/start.ts`, which installs the skills that release's `skills.lock.json` pins, the same commit the Kit step installs in Actions, plus Fabrik's own `skills/` (`fabrik-live-design`, `fabrik-operator-session`, `fabrik-pair`, `fabrik-trial` and `fabrik-visual-evidence`). The skills are fetched the same way, each Skills source at its pinned commit, in a cloud session, at a terminal and in an AFK run alike. It also removes the `fabrik-setup` skill earlier releases installed there, and warns the Operator while their personal skills hold an old copy of it.",
+      "- `templates/claude-settings.json` holds the `SessionStart` hook entry a Product repo merges into `.claude/settings.json`, and disables the `mattpocock-skills` plugin there. The entry reads the release from `fabrik.yml`, fetches Fabrik at that tag by git's own shallow fetch from `github.com` (public, no credentials, and served to a cloud session for a repo that isn't attached), and runs `src/session/start.ts`, which installs the skills that release's `skills.lock.json` pins, the same commit the Kit step installs in Actions, plus Fabrik's own `skills/` (`fabrik-live-design`, `fabrik-operator-session`, `fabrik-pair`, `fabrik-trial` and `fabrik-visual-evidence`). The skills are fetched the same way, each Skills source at its pinned commit, in a cloud session, at a terminal and in an AFK run alike. It also removes the `fabrik-setup` skill earlier releases installed there, and warns the Operator while their personal skills hold an old copy of it. In a cloud session (`CLAUDE_CODE_REMOTE` is `true`) its context says so too, with what an Operator session needs before any work: that `gh issue` and `gh pr` are refused there and the REST forms are in `fabrik-operator-session`, which the session reads first; the repo and the Operator's login; whether the repo has a Researcher; whether the session is in the Session environment the repo expects, read from `FABRIK_SESSION_ENVIRONMENT`; the session's address, from `CLAUDE_CODE_REMOTE_SESSION_ID`, with the marker to write on its issue; and whether the default branch has `.fabrik/operator-session.md`. A session picked up again doesn't run the hook a second time, so that first report is the only one.",
     );
   });
 
@@ -121,8 +155,6 @@ describe("The SessionStart hook entry", () => {
     expect(settings.enabledPlugins).toEqual({ "mattpocock-skills@claude-plugins-official": false });
   });
 });
-
-const FABRIK = resolve(import.meta.dirname, "..", "..");
 
 describe("fabrik's own SessionStart hook entry", () => {
   /**

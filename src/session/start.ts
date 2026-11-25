@@ -11,11 +11,14 @@
 //   node src/session/start.ts --kit <fabrik checkout>
 // which installs from that checkout, the Kit, into its own .claude/skills/.
 // While the Operator's personal skills hold an old copy of the fabrik-setup
-// skill, it warns them in one line, and installs everything all the same.
+// skill, it warns them in one line, and installs everything all the same. In a
+// Claude Code cloud session its context also gives what an Operator session
+// needs before any work (./cloudSession.ts).
 import { cp, readdir, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { checkCallerWorkflow } from "../kit/caller.ts";
 import { type FetchSource, fetchSkills } from "../skills/fetch.ts";
+import { cloudSessionLines, isCloudSession, type SessionEnvironment } from "./cloudSession.ts";
 import { foundOldSetupSkill, oldSetupSkillIn, personalSkillsDir, staleOldSetupSkill } from "../skills/oldSetupSkill.ts";
 
 /** The caller workflow, the only place the Kit's version appears. */
@@ -58,15 +61,34 @@ export interface SessionStartInput {
   readonly fetchSource?: FetchSource;
   /** The Operator's personal skills folder, where an old copy of the fabrik-setup skill may be. Unset, the hook doesn't look. */
   readonly personalSkills?: string;
+  /** The session's environment, from which the hook reads whether it is a cloud session and what one needs; unset, a terminal. */
+  readonly env?: SessionEnvironment;
 }
 
-export async function sessionStart({ personalSkills, ...input }: SessionStartInput): Promise<SessionStartOutput> {
-  const output = await installSkills(input);
+export async function sessionStart({ personalSkills, env = {}, ...input }: SessionStartInput): Promise<SessionStartOutput> {
+  const installed = await installSkills(input);
+  const output = installed.hookSpecificOutput.reloadSkills && isCloudSession(env) ? await withCloudLines(installed, input, env) : installed;
   // Never in the way of the install: a folder it can't read counts as none.
   const copy = await oldSetupSkillIn(personalSkills ?? null).catch(() => null);
   if (copy === null) return output;
   const warning = `${foundOldSetupSkill(copy)} ${staleOldSetupSkill(copy)}`;
   return { ...output, systemMessage: output.systemMessage === undefined ? warning : `${output.systemMessage}. ${warning}` };
+}
+
+/**
+ * The context with a cloud session's lines after its others. Only once the
+ * skills were installed, which `reloadSkills` says: the lines point to one of
+ * them, so a session whose skills weren't installed gets the line saying so
+ * alone.
+ */
+async function withCloudLines(
+  output: SessionStartOutput,
+  { productDir, release }: Pick<SessionStartInput, "productDir" | "release">,
+  env: SessionEnvironment,
+): Promise<SessionStartOutput> {
+  const lines = await cloudSessionLines({ productDir, kit: release === null, env });
+  const { additionalContext } = output.hookSpecificOutput;
+  return { ...output, hookSpecificOutput: { ...output.hookSpecificOutput, additionalContext: [additionalContext, ...lines].join("\n") } };
 }
 
 async function installSkills({ kitDir, productDir, release, fetchSource }: Omit<SessionStartInput, "personalSkills">): Promise<SessionStartOutput> {
@@ -166,5 +188,7 @@ if (import.meta.main) {
     process.exit(2);
   }
   const personalSkills = personalSkillsDir(process.env);
-  sessionStart({ ...parsed, ...(personalSkills === null ? {} : { personalSkills }) }).then((output) => console.log(JSON.stringify(output)));
+  sessionStart({ ...parsed, env: process.env, ...(personalSkills === null ? {} : { personalSkills }) }).then((output) =>
+    console.log(JSON.stringify(output)),
+  );
 }
