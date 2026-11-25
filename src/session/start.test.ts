@@ -1,16 +1,19 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   aKitCheckout,
   aProductCheckout,
+  aRepository,
   aSkillsSource,
+  git,
   LOCKED_SHA,
   serving,
   servingEach,
   sourceAt,
   tempDir,
 } from "../__fixtures__/skillsArchive.ts";
+import { operatorSessionMarker } from "../kit/operatorSession.ts";
 import type { FetchSource } from "../skills/fetch.ts";
 import { sessionStart } from "./start.ts";
 
@@ -472,6 +475,256 @@ describe("The SessionStart hook with Extra skills picked, the Operator at the wh
       `Fabrik v1.2.3 is installed in this repo. The skills it pins (mattpocock/skills at ${LOCKED_SHA}) are in .claude/skills/, fetched by the SessionStart hook; they're gitignored, so never commit or edit them.\n` +
         "To take an issue's Design session live, the Operator runs /fabrik-live-design <issue number>.",
     );
+  });
+});
+
+/** A cloud session's environment, in the bare Session environment, with an id of the `cse_` form. */
+const CLOUD = {
+  CLAUDE_CODE_REMOTE: "true",
+  CLAUDE_CODE_REMOTE_SESSION_ID: "cse_01AbC-d_9",
+  FABRIK_SESSION_ENVIRONMENT: "operator-sessions",
+} as const;
+
+const ADDRESS = "https://claude.ai/code/session_01AbC-d_9";
+
+/**
+ * A Product checkout as a cloud session clones it: a git repository whose
+ * `origin` remote is this address, its default branch as last fetched
+ * (`refs/remotes/origin/HEAD`) the commit that holds the caller workflow, this
+ * Kit config and these files. With `originHead: false` the checkout has no
+ * `origin/HEAD`, and with `origin: null` no `origin` remote.
+ */
+async function aClonedProduct({
+  origin = "https://github.com/acme/widgets.git",
+  config,
+  files = {},
+  originHead = true,
+}: {
+  readonly origin?: string | null;
+  readonly config?: unknown;
+  readonly files?: Record<string, string>;
+  readonly originHead?: boolean;
+} = {}): Promise<string> {
+  const product = await aProduct(callerAt("v1.2.3"));
+  await aRepository(product, config === undefined ? files : { ".fabrik/config.json": JSON.stringify(config), ...files });
+  if (origin !== null) git(product, "remote", "add", "origin", origin);
+  git(product, "update-ref", "refs/remotes/origin/main", git(product, "rev-parse", "HEAD"));
+  if (originHead) git(product, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  return product;
+}
+
+/** The hook's context, line by line, for a stand-in Kit with the live Design session skill, in this checkout and environment. */
+async function contextIn(productDir: string, env: Record<string, string>, { kit = false } = {}): Promise<readonly string[]> {
+  const kitDir = kit ? productDir : await kitWithLiveSkill();
+  if (kit) await writeFile(join(productDir, "skills.lock.json"), JSON.stringify({ repository: "mattpocock/skills", sha: LOCKED_SHA }));
+  const output = await sessionStart({
+    kitDir,
+    productDir,
+    release: kit ? null : "v1.2.3",
+    fetchSource: serving(await aSkillsSource()).fetchSource,
+    env,
+  });
+  return output.hookSpecificOutput.additionalContext.split("\n");
+}
+
+/** The context's lines after the ones every session gets, for a stand-in Kit with the live Design session skill. */
+async function cloudLinesIn(productDir: string, env: Record<string, string> = CLOUD): Promise<readonly string[]> {
+  return (await contextIn(productDir, env)).slice(2);
+}
+
+const TERMINAL_CONTEXT = [
+  `Fabrik v1.2.3 is installed in this repo. The skills it pins (mattpocock/skills at ${LOCKED_SHA}) are in .claude/skills/, fetched by the SessionStart hook; they're gitignored, so never commit or edit them.`,
+  "To take an issue's Design session live, the Operator runs /fabrik-live-design <issue number>.",
+];
+
+const WHERE_IT_IS = (repo: string) =>
+  `This is a Claude Code cloud session on ${repo}. \`gh issue\` and \`gh pr\` are refused here: every tracker operation goes over REST, by the forms in .claude/skills/fabrik-operator-session/SKILL.md. Read that skill before any work.`;
+const THE_OPERATOR = (login: string) => `The Operator is ${login}: claim and assign with that login, since REST has no @me.`;
+const HAS_A_RESEARCHER =
+  "This repo has a Researcher: fire no research subagent, since the Kit's Researcher takes each unblocked research Decision.";
+const HAS_NO_RESEARCHER =
+  "This repo has no Researcher: fire a research subagent for each unblocked research Decision you file, as fabrik-operator-session says.";
+const IN_THE_EXPECTED = (name: string) => `This session is in the Session environment ${name}, the one this repo expects.`;
+const IN_ANOTHER = (expected: string, found: string) =>
+  `This repo expects the Session environment ${expected}, and this session is in ${found}. Say so as your first words, and do no work until the Operator says to go on or starts again.`;
+const IN_NONE = (expected: string) =>
+  `This repo expects the Session environment ${expected}, and this session's environment sets no FABRIK_SESSION_ENVIRONMENT, so it isn't one. Say so as your first words, and do no work until the Operator says to go on or starts again.`;
+const THE_ADDRESS = [
+  `This session's address is ${ADDRESS}. When you work an issue as a Pairing session, or a Map's Decision, write these two lines there as your first comment, after your skill's opening checks pass and before any work, unless the issue already holds a marker with this address:`,
+  `<!-- fabrik:operator-session ${ADDRESS} -->`,
+  `This issue is being worked in [an Operator session](${ADDRESS}).`,
+];
+const NO_ADDRESS =
+  "CLAUDE_CODE_REMOTE_SESSION_ID is missing or isn't of the cse_ form, so the hook can't give this session's address. Take it from the session link in your own attribution lines; with neither, write no marker, say so, and work on.";
+const NOTHING_ATTACHED = "This repo's default branch has no .fabrik/operator-session.md, so nothing is attached to its Operator sessions.";
+
+describe("The SessionStart hook in a cloud session", () => {
+  it("gives a terminal today's context and none of the cloud lines, CLAUDE_CODE_REMOTE unset or anything but true", async () => {
+    for (const env of [{}, { ...CLOUD, CLAUDE_CODE_REMOTE: "false" }, { ...CLOUD, CLAUDE_CODE_REMOTE: "TRUE" }]) {
+      expect(await contextIn(await aClonedProduct({ config: { operator: "octo-op" } }), env)).toEqual(TERMINAL_CONTEXT);
+    }
+  });
+
+  it("adds the six lines after the others, in order, with the repo from the origin remote and the Operator from Kit config", async () => {
+    const product = await aClonedProduct({ config: { operator: "octo-op" } });
+
+    expect(await contextIn(product, CLOUD)).toEqual([
+      ...TERMINAL_CONTEXT,
+      WHERE_IT_IS("acme/widgets"),
+      THE_OPERATOR("octo-op"),
+      HAS_A_RESEARCHER,
+      IN_THE_EXPECTED("operator-sessions"),
+      ...THE_ADDRESS,
+      NOTHING_ATTACHED,
+    ]);
+  });
+
+  it("takes the Operator's login from the remote's owner when Kit config names none", async () => {
+    const [, operator] = await cloudLinesIn(await aClonedProduct());
+
+    expect(operator).toBe(THE_OPERATOR("acme"));
+  });
+
+  it("reads the repo from the last two parts of the origin remote's path, any .git dropped, whatever its host", async () => {
+    for (const origin of [
+      "git@github.com:acme/widgets.git",
+      "http://local_proxy@127.0.0.1:41723/git/acme/widgets",
+      "https://ghe.example.com/team/acme/widgets/",
+    ]) {
+      const [whereItIs, operator] = await cloudLinesIn(await aClonedProduct({ origin }));
+
+      expect(whereItIs).toBe(WHERE_IT_IS("acme/widgets"));
+      expect(operator).toBe(THE_OPERATOR("acme"));
+    }
+  });
+
+  it("says the repo's name and the Operator's login aren't known when the remote can't be read and Kit config names no Operator", async () => {
+    const [whereItIs, operator] = await cloudLinesIn(await aClonedProduct({ origin: null }));
+
+    expect(whereItIs).toBe(
+      "This is a Claude Code cloud session. `gh issue` and `gh pr` are refused here: every tracker operation goes over REST, by the forms in .claude/skills/fabrik-operator-session/SKILL.md. Read that skill before any work. This repo's name isn't known here: ask the Operator for it before you write to the tracker.",
+    );
+    expect(operator).toBe("The Operator's login isn't known here: ask the Operator for it before you claim or assign.");
+  });
+
+  it("still names the Operator from Kit config when the remote can't be read", async () => {
+    const [, operator] = await cloudLinesIn(await aClonedProduct({ origin: null, config: { operator: "octo-op" } }));
+
+    expect(operator).toBe(THE_OPERATOR("octo-op"));
+  });
+
+  describe("the Session environment, compared with FABRIK_SESSION_ENVIRONMENT exactly", () => {
+    const withOwn = () => aClonedProduct({ config: { console: { session_environment: "widgets-sessions" } } });
+    const environmentLine = async (product: string, found: string | undefined) => {
+      const { FABRIK_SESSION_ENVIRONMENT: _, ...rest } = CLOUD;
+      return (await cloudLinesIn(product, found === undefined ? rest : { ...rest, FABRIK_SESSION_ENVIRONMENT: found }))[3];
+    };
+
+    it("expects the repo's own when its Kit config names one", async () => {
+      expect(await environmentLine(await withOwn(), "widgets-sessions")).toBe(IN_THE_EXPECTED("widgets-sessions"));
+      expect(await environmentLine(await withOwn(), "operator-sessions")).toBe(IN_ANOTHER("widgets-sessions", "operator-sessions"));
+      expect(await environmentLine(await withOwn(), "Widgets-Sessions")).toBe(IN_ANOTHER("widgets-sessions", "Widgets-Sessions"));
+      expect(await environmentLine(await withOwn(), undefined)).toBe(IN_NONE("widgets-sessions"));
+      expect(await environmentLine(await withOwn(), "")).toBe(IN_NONE("widgets-sessions"));
+    });
+
+    it("expects the bare one when Kit config names none", async () => {
+      expect(await environmentLine(await aClonedProduct(), "operator-sessions")).toBe(IN_THE_EXPECTED("operator-sessions"));
+      expect(await environmentLine(await aClonedProduct(), "widgets-sessions")).toBe(IN_ANOTHER("operator-sessions", "widgets-sessions"));
+      expect(await environmentLine(await aClonedProduct(), undefined)).toBe(IN_NONE("operator-sessions"));
+    });
+
+    it("expects the bare one, and takes the Operator from the remote, when Kit config is invalid", async () => {
+      const product = await aClonedProduct({ config: { operator: "octo-op", console: { session_environment: "widgets-sessions" }, roles: 7 } });
+
+      const lines = await cloudLinesIn(product, { ...CLOUD, FABRIK_SESSION_ENVIRONMENT: "widgets-sessions" });
+
+      expect(lines[1]).toBe(THE_OPERATOR("acme"));
+      expect(lines[3]).toBe(IN_ANOTHER("operator-sessions", "widgets-sessions"));
+    });
+  });
+
+  it("says the hook can't give the address when CLAUDE_CODE_REMOTE_SESSION_ID is missing or of another form", async () => {
+    const { CLAUDE_CODE_REMOTE_SESSION_ID: _, ...withNone } = CLOUD;
+    for (const env of [withNone, { ...CLOUD, CLAUDE_CODE_REMOTE_SESSION_ID: "session_01AbC" }, { ...CLOUD, CLAUDE_CODE_REMOTE_SESSION_ID: "cse_" }]) {
+      const lines = await cloudLinesIn(await aClonedProduct(), env);
+
+      expect(lines.slice(4)).toEqual([NO_ADDRESS, NOTHING_ATTACHED]);
+    }
+  });
+
+  it("gives as the marker line the one operatorSessionMarker writes for the address", async () => {
+    const lines = await cloudLinesIn(await aClonedProduct());
+
+    expect(lines[5]).toBe(operatorSessionMarker(ADDRESS));
+  });
+
+  describe("what the repo attaches, read from the default branch as the checkout last fetched it", () => {
+    const ATTACHED = (where: string) =>
+      `${where} .fabrik/operator-session.md, which says what its Operator sessions can reach: read it as the default branch has it before you sort any step.`;
+    const attachedLine = async (product: string) => (await cloudLinesIn(product)).at(-1);
+
+    it("finds the file on origin/HEAD when the working tree doesn't hold it", async () => {
+      const product = await aClonedProduct({ files: { ".fabrik/operator-session.md": "Sessions here reach staging." } });
+      await rm(join(product, ".fabrik/operator-session.md"));
+
+      expect(await attachedLine(product)).toBe(ATTACHED("This repo's default branch has"));
+    });
+
+    it("says nothing is attached when only the working tree holds it", async () => {
+      const product = await aClonedProduct();
+      await mkdir(join(product, ".fabrik"), { recursive: true });
+      await writeFile(join(product, ".fabrik/operator-session.md"), "Sessions here reach staging.");
+
+      expect(await attachedLine(product)).toBe(NOTHING_ATTACHED);
+    });
+
+    it("reads the working tree, and says so, when the checkout has no origin/HEAD", async () => {
+      const held = await aClonedProduct({ originHead: false, files: { ".fabrik/operator-session.md": "Sessions here reach staging." } });
+      const none = await aClonedProduct({ originHead: false });
+
+      expect(await attachedLine(held)).toBe(ATTACHED("This checkout has"));
+      expect(await attachedLine(none)).toBe("This checkout has no .fabrik/operator-session.md, so nothing is attached to its Operator sessions.");
+    });
+  });
+
+  it("gives fabrik (--kit) the same lines, with no Researcher and the bare Session environment expected", async () => {
+    const fabrik = await aClonedProduct({ origin: "https://github.com/jrey8343/fabrik" });
+
+    const lines = await contextIn(fabrik, { ...CLOUD, FABRIK_SESSION_ENVIRONMENT: "widgets-sessions" }, { kit: true });
+
+    expect(lines.slice(1)).toEqual([
+      WHERE_IT_IS("jrey8343/fabrik"),
+      THE_OPERATOR("jrey8343"),
+      HAS_NO_RESEARCHER,
+      IN_ANOTHER("operator-sessions", "widgets-sessions"),
+      ...THE_ADDRESS,
+      NOTHING_ATTACHED,
+    ]);
+  });
+
+  it("tells a Product repo it has a Researcher", async () => {
+    expect((await cloudLinesIn(await aClonedProduct()))[2]).toBe(HAS_A_RESEARCHER);
+  });
+
+  it("gives a cloud session whose skills weren't installed the line saying so alone, and no reload", async () => {
+    const product = await aClonedProduct();
+    await writeFile(join(product, ".github/workflows/fabrik.yml"), callerAt("v1.2.4"));
+
+    const output = await sessionStart({
+      kitDir: await kitWithLiveSkill(),
+      productDir: product,
+      release: "v1.2.3",
+      fetchSource: serving(await aSkillsSource()).fetchSource,
+      env: CLOUD,
+    });
+
+    expect(output.hookSpecificOutput).toEqual({
+      hookEventName: "SessionStart",
+      additionalContext:
+        "Fabrik didn't install its skills: the hook fetched Fabrik v1.2.3, but .github/workflows/fabrik.yml pins v1.2.4. Skills such as grilling, to-spec and to-tickets may be missing from this session.",
+      reloadSkills: false,
+    });
   });
 });
 
