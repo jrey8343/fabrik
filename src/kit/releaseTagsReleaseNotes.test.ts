@@ -64,9 +64,9 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The release tags release notes, whil
   });
 
   it("say the Console's line is a guess until the release's check of the Console, whose run replaces it", () => {
-    const console = section(notes, "What the Console needs");
+    const consoleNeeds = section(notes, "What the Console needs");
 
-    expect(console).toContain("This line is a guess until the release is checked against the Console (step 4 of [releasing.md](../releasing.md)), and that run's answer replaces it.");
+    expect(consoleNeeds).toContain("This line is a guess until the release is checked against the Console (step 4 of [releasing.md](../releasing.md)), and that run's answer replaces it.");
     expect(read("docs/releasing.md")).toContain("A line about the Console in a draft in `docs/release-notes/` was written when the part was built, so it is a guess until this run.");
   });
 

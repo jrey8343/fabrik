@@ -162,7 +162,7 @@ The Pilot is the canary. A release goes to other Product repos only after it has
       IdentitiesOnly yes
     ```
 
-    The agent's socket is there only once **Use the SSH Agent** is ticked in 1Password's Settings, Developer: opening its setup walkthrough without finishing it leaves none. With no socket, `ssh` fails with "Permission denied (publickey)", after a warning that `~/.ssh/fabrik-release.pub` is an unprotected private key, which it isn't.
+    The agent's socket is there only once **Use the SSH Agent** is ticked in 1Password's Settings, Developer: opening its setup walkthrough without finishing it leaves none. With no socket, `ssh` fails with "Permission denied (publickey)", after a warning, "UNPROTECTED PRIVATE KEY FILE", that `~/.ssh/fabrik-release.pub` is an unprotected private key, which it isn't.
 
   - **A lost key is replaced, never recovered or copied.** Make a new SSH key item (Ed25519) in 1Password and save its public half to `~/.ssh/fabrik-release.pub`. Then delete the old deploy key and add the new one, as above: two calls with your `gh` token, after the read that finds the old key's id:
 
