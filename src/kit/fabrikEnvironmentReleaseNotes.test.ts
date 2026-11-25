@@ -5,7 +5,7 @@
 // heading each as the code holds them, and every name they give one the code
 // holds under that name. Once the release ships they are a record, listed in
 // RELEASED_NOTES, and keep the words of their day.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -16,6 +16,7 @@ import { anEnvironment, aWorld, environmentOf, worldScript } from "../__fixtures
 import type { ReadClient } from "../github/client.ts";
 import { handOffFrom } from "../github/events.ts";
 import { readHandOff } from "../github/handOff.ts";
+import { EXPORT_CALLS, EXPORT_SHAPES } from "../read/exports.fixture.ts";
 import { apply } from "../setup/apply.ts";
 import type { Run } from "../setup/exec.ts";
 import { appliedLines, closingLines, prBody, reportSection } from "../setup/finish.ts";
@@ -23,7 +24,7 @@ import { readEnvironmentPolicy } from "../setup/gather.ts";
 import { loadSetupKit, type SetupKit } from "../setup/kit.ts";
 import { type OneRunSteps, runOnce } from "../setup/oneRun.ts";
 import { type EnvironmentPolicy, type EnvironmentState, environmentHeld, planSetup, type RunStoreState, type SetupAction } from "../setup/plan.ts";
-import { pinCaller, scheduleIn, STORE_CALLER_PATH } from "../setup/shims.ts";
+import { CALLER_PATH, pinCaller, scheduleIn, STORE_CALLER_PATH } from "../setup/shims.ts";
 import { KIT_ENVIRONMENT } from "./environment.ts";
 import { RUN_STORE, RUN_STORE_REPO } from "./runStore.ts";
 
@@ -45,6 +46,59 @@ const bullet = (text: string, lead: string): string => text.split("\n").find((li
 
 /** The Spec, as the notes and the releasing guide link it. */
 const SPEC = "[Spec: The Kit's tokens in the `fabrik` environment, which only the default branch may use](https://github.com/jrey8343/fabrik/issues/915)";
+
+/** Everything `notes` write as code, each once. */
+const written = (notes: string): string[] => [...new Set([...notes.matchAll(/`([^`]+)`/g)].map((match) => match[1] ?? ""))];
+
+const LOOP = ".github/workflows/loop.yml";
+const CALLER_TEMPLATE = "templates/fabrik.yml";
+
+/** What the notes write as code that is no file under `src/`: the file that holds it, and the text it holds it as. */
+const HELD_IN: Readonly<Record<string, readonly [file: string, text: string]>> = {
+  fabrik: ["src/kit/environment.ts", `export const KIT_ENVIRONMENT = "fabrik";`],
+  KIT_ENVIRONMENT: ["src/kit/environment.ts", "export const KIT_ENVIRONMENT ="],
+  "deployment: false": [LOOP, "    environment:\n      name: fabrik\n      deployment: false\n"],
+  "loop.yml": [LOOP, "\nname: "],
+  "schedule.yml": [".github/workflows/schedule.yml", "\nname: "],
+  "weekly-summary.yml": [".github/workflows/weekly-summary.yml", "\nname: "],
+  "tick-check.yml": [".github/workflows/tick-check.yml", "\nname: "],
+  kit: [".github/workflows/schedule.yml", "\n  kit:\n"],
+  "review-checks": [LOOP, "\n  review-checks:\n"],
+  "rerun-checks": [LOOP, "\n  rerun-checks:\n"],
+  "rerun-wait": [LOOP, "\n  rerun-wait:\n"],
+  "review-hand-off": [LOOP, "\n  review-hand-off:\n"],
+  "actions: write": [LOOP, "    permissions:\n      actions: write\n    steps:\n      - name: Start the caller workflow on the default branch\n"],
+  "secrets:": [CALLER_TEMPLATE, "    secrets:\n      OP_AGENT_TOKEN: ${{ secrets.FABRIK_OP_AGENT_TOKEN }}\n"],
+  FABRIK_OP_AGENT_TOKEN: [CALLER_TEMPLATE, "OP_AGENT_TOKEN: ${{ secrets.FABRIK_OP_AGENT_TOKEN }}"],
+  FABRIK_OP_IMPLEMENT_TOKEN: [CALLER_TEMPLATE, "OP_IMPLEMENT_TOKEN: ${{ secrets.FABRIK_OP_IMPLEMENT_TOKEN }}"],
+  FABRIK_OP_PUSH_TOKEN: [CALLER_TEMPLATE, "OP_PUSH_TOKEN: ${{ secrets.FABRIK_OP_PUSH_TOKEN }}"],
+  pull_request_review: [CALLER_TEMPLATE, "\n  pull_request_review:\n    types: [submitted]\n"],
+  pull_request_target: [CALLER_TEMPLATE, "\n  pull_request_target:\n"],
+  workflow_dispatch: [CALLER_TEMPLATE, "\n  workflow_dispatch:\n    inputs:\n"],
+  pull_request: [CALLER_TEMPLATE, "    inputs:\n      pull_request:\n"],
+  review: [CALLER_TEMPLATE, "\n      review:\n        description: The review's id\n"],
+  "Review on PR #<number>, handed off": [CALLER_TEMPLATE, "format('Review on PR #{0}, handed off', github.event.inputs.pull_request)"],
+  operator: ["src/kit/config.ts", `file.nullableString("operator"`],
+  production: ["src/kit/config.ts", `file.nullableObject("production")`],
+  "fabrik-<owner>-<repo>-agent-env": ["src/setup/plan.ts", "const name = `fabrik-${state.repo.owner}-${state.repo.name}-${role}-env`;"],
+  "-implement-env": ["src/setup/plan.ts", `{ role: "implement", vaults: [FABRIK_VAULT, sandbox], secret: "FABRIK_OP_IMPLEMENT_TOKEN" }`],
+  "-push-env": ["src/setup/plan.ts", `{ role: "push", vaults: [FABRIK_APP_VAULT], secret: "FABRIK_OP_PUSH_TOKEN" }`],
+  "-env": ["src/setup/plan.ts", "-${role}-env`"],
+  "fabrik-<owner>-<repo>-agent": ["src/setup/plan.ts", "account: `fabrik-${state.repo.owner}-${state.repo.name}-${role}` }"],
+  "-implement": ["src/setup/plan.ts", `{ role: "implement", vaults: [FABRIK_VAULT, sandbox], secret: "FABRIK_OP_IMPLEMENT_TOKEN" }`],
+  "-push": ["src/setup/plan.ts", `{ role: "push", vaults: [FABRIK_APP_VAULT], secret: "FABRIK_OP_PUSH_TOKEN" }`],
+  "fabrik-<owner>-fabrik-runs-push-env": ["src/setup/plan.ts", "name: `${STORE_OLD_ACCOUNT}-env`,"],
+  "fabrik-<owner>-fabrik-runs-push": ["src/setup/plan.ts", "const STORE_OLD_ACCOUNT = `fabrik-${RUN_STORE.owner}-${RUN_STORE.name}-push`;"],
+  "fabrik-runs": ["src/kit/runStore.ts", `name: "fabrik-runs"`],
+  "gh secret set --env": ["src/setup/apply.ts", `"gh", ["secret", "set", action.secret, "--env", environment, ...where]`],
+  "gh secret list --env": ["src/setup/gather.ts", `"gh", ["secret", "list", "--env", name, ...where, "--json", "name"]`],
+  "gh secret delete": ["src/setup/apply.ts", `"gh", ["secret", "delete", action.secret,`],
+  "--repo": ["src/setup/apply.ts", `["--repo", action.repo]`],
+  op: ["src/setup/apply.ts", `"op", ["service-account", "create", action.name,`],
+  origin: ["src/setup/gather.ts", "`defaultBranchTip` is the default branch's tip on origin"],
+  "--no-time-zone": ["src/setup/args.ts", `flag === "--no-time-zone"`],
+  "Setup's report:": ["src/setup/finish.ts", `"Setup's report:"`],
+};
 
 /** A job of a workflow, as much of it as these tests read. */
 interface Job {
@@ -92,7 +146,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The fabrik environment release notes
 
     expect(title).toBe("# Release notes: the Kit's tokens in the `fabrik` environment");
     expect([blank, after]).toEqual(["", ""]);
-    expect(opening).toMatch(/^These are the notes of this part of the major that carries the Kit's Operator sessions \(/);
+    expect(opening).toMatch(/^These are the notes for this part of the major that carries the Kit's Operator sessions \(/);
     expect(opening).toContain(`the major that carries the Kit's Operator sessions (${SPEC})`);
     expect(opening?.endsWith("Paste them into the release's notes file (see [releasing.md](../releasing.md)), with its version and pins.")).toBe(true);
   });
@@ -258,6 +312,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The fabrik environment release notes
       expect(hold).toContain("GitHub Pro for a personal account's repo, or GitHub Team for an organization's");
       expect(hold).toContain("A read of the environment that GitHub refuses with anything but a 404 stops Setup too, with GitHub's answer in what it says");
 
+      // What GitHub answers on a plan with no environments wasn't tried, so this answer is made up: Setup gives whatever it is.
       const world = aWorld();
       world.environmentRefusal = "gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)";
       const commands = fakeCommands(worldScript(world));
@@ -276,7 +331,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The fabrik environment release notes
     });
 
     it("name the three new accounts as Setup names them, each one's token a secret of the environment, stored on gh's stdin after a read of the rules", async () => {
-      const tokens = bullet(changed, "The three tokens are in the environment, under new service accounts");
+      const tokens = bullet(changed, "The three tokens are in the `fabrik` environment, under new service accounts");
       expect(tokens).toContain("A token is missing when the `fabrik` environment lacks it, wherever else it sits");
       expect(tokens).toContain("`FABRIK_OP_AGENT_TOKEN`, `FABRIK_OP_IMPLEMENT_TOKEN` or `FABRIK_OP_PUSH_TOKEN`");
       expect(tokens).toContain("with `gh secret set --env`, on its stdin");
@@ -311,7 +366,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The fabrik environment release notes
     });
 
     it("say when Setup deletes the repo-level tokens, name the old accounts as Setup names them, and say the note is said under the plan and again in the run's last lines", async () => {
-      const deleted = bullet(changed, "The repo-level tokens are deleted once the default branch's Kit names the environment");
+      const deleted = bullet(changed, "The repo-level tokens are deleted once the default branch's Kit names the `fabrik` environment");
       expect(deleted).toContain("Once it pins one release of Setup's own major or a later one");
       expect(deleted).toContain("after every new account");
       expect(deleted).toContain("by `gh secret delete`, and never a repo-level secret of any other name");
@@ -430,6 +485,137 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The fabrik environment release notes
         expect(appliedLines("main", summary)).toContain(`- ${line}`);
         expect(prBody({ release: "v9.0.0", defaultBranch: "main", summary })).not.toContain(line);
       }
+    });
+
+    it("give a repo's move as four steps in order, which Setup's two runs with the setup PR merged between them make", () => {
+      const upgrading = section(notes, "Upgrading");
+      const steps = upgrading.split("\n").filter((line) => /^\d\. /.test(line));
+      expect(steps.map((line) => /^\d\. \*\*[^*]+\*\*/.exec(line)?.[0])).toEqual([
+        "1. **Run Setup at the major, naming it.**",
+        "2. **Merge the setup PR.**",
+        "3. **Run Setup again.**",
+        "4. **Delete the three old service accounts on 1Password's site**",
+      ]);
+      expect(upgrading).toContain("in this order, the Pilot first");
+      expect(steps[0]).toContain("It deletes nothing, and says the repo-level tokens stay");
+      expect(steps[2]).toContain("deletes the three repo-level tokens and names the three old service accounts");
+      expect(steps[3]).toContain("the repo has six accounts against 1Password's limit of 100");
+
+      // A repo on an earlier major, its three tokens at repo level. The first run makes the environment and the accounts, writes the caller, and deletes nothing.
+      const earlier = callerAt("v8.4.1");
+      const onTheKit = aCleanProduct({ files: { [CALLER_PATH]: earlier }, defaultBranchCaller: earlier, secrets: [...TOKENS] });
+      const first = planSetup(onTheKit, kit);
+      expect(first.actions[0]?.kind).toBe("hold-environment");
+      expect(accounts(first.actions)).toHaveLength(3);
+      expect(deletions(first.actions)).toEqual([]);
+      const setupBranch = afterApplying(onTheKit, first);
+      expect(setupBranch.files[CALLER_PATH]).toBe(callerAt("v9.0.0"));
+      expect(setupBranch.files[CALLER_PATH]).toContain("\n  workflow_dispatch:\n");
+      // Run again before the merge, it still deletes nothing.
+      expect(planSetup(setupBranch, kit).actions).toEqual([]);
+
+      // The setup PR merged, the second run deletes the three and does nothing else, and a third finds nothing to do.
+      const merged = { ...setupBranch, defaultBranchCaller: callerAt("v9.0.0") };
+      const second = planSetup(merged, kit);
+      expect(second.actions.map(({ kind }) => kind)).toEqual(["delete-repo-secret", "delete-repo-secret", "delete-repo-secret"]);
+      const moved = afterApplying(merged, second);
+      expect(moved.secrets).toEqual([]);
+      expect([...(moved.environment?.secrets ?? [])].toSorted()).toEqual([...TOKENS]);
+      expect(planSetup(moved, kit).actions).toEqual([]);
+      expect(planSetup(moved, kit).notes.filter((note) => /repo-level|service account/.test(note))).toEqual([]);
+    });
+
+    it("say the plan a private repo needs, the store's included, and that the store moves on the same two runs", () => {
+      const upgrading = section(notes, "Upgrading");
+      const plan = bullet(upgrading, "A private repo needs a GitHub plan with environments, or Setup stops");
+      expect(plan).toContain("GitHub Pro for a personal account's repo, or GitHub Team for an organization's");
+      expect(plan).toContain("`fabrik-runs` is private, so the store's own `fabrik` environment needs the plan too");
+      const store = bullet(upgrading, "The store moves on the same two runs");
+      expect(store).toContain("where the Operator's time zone is answered");
+      expect(store).toContain("with no pull request to merge");
+      expect(store).toContain("its old push account, which is deleted on 1Password's site the same way");
+
+      // Setup makes the store private, and changes nothing in one that is public.
+      const made = planSetup(aCleanProduct(), kit, OPERATOR).actions.find((action) => action.kind === "create-run-store");
+      expect(made).toMatchObject({ repo: RUN_STORE_REPO, private: true });
+      const set = afterApplying(aCleanProduct(), planSetup(aCleanProduct(), kit, OPERATOR));
+      expect(planSetup({ ...set, store: aStore("v8.4.1", { private: false, secrets: ["FABRIK_OP_PUSH_TOKEN"] }) }, kit, OPERATOR).actions).toEqual([]);
+    });
+  });
+
+  it("have each section the Ticket asks for, in its order, and no section to turn it on", () => {
+    const headings = notes.split("\n").filter((line) => line.startsWith("## "));
+
+    expect(headings).toEqual(["Release-note line", "What changed", "Why a major", "Upgrading", "What the Console needs", "Not covered"].map((heading) => `## ${heading}`));
+    expect(notes).not.toContain("To turn it on");
+  });
+
+  it("say the release is a major, and why, in the releasing guide's terms, with nothing the read library exports changed", () => {
+    const why = section(notes, "Why a major");
+    expect(why).toContain(`The release is one major with the four other parts of the Kit's Operator sessions ([How are the Specs cut, and who builds them?](https://github.com/jrey8343/fabrik/issues/874))`);
+    expect(why).toContain("[Choosing the version](../releasing.md#choosing-the-version)");
+    expect(why).toContain("the caller workflow gains a trigger, `workflow_dispatch`, which is a changed shim");
+    expect(why).toContain("the tokens' new place is a new Operator setup step that the Loop can't run without");
+    expect(why).toContain("Nothing the read library exports changes");
+    // The guide's own terms, which the section answers to.
+    const guide = read("docs/releasing.md");
+    expect(guide).toContain("a changed shim (the caller workflow's shape, the session hook entry, the `.gitignore` lines or the Dependabot config)");
+    expect(guide).toContain("or a new Operator setup step, such as a new secret or App permission, that the Loop can't run without");
+    // No name the notes write as code is an export of the read library: the part adds none and renames none.
+    const exported = [...Object.keys(EXPORT_CALLS), ...Object.keys(EXPORT_SHAPES)];
+    expect(written(notes).filter((name) => exported.includes(name))).toEqual([]);
+  });
+
+  it("say the Console's line is a guess until the release's check of the Console, whose run replaces it", () => {
+    const console = section(notes, "What the Console needs");
+    expect(console).toContain("This part changes nothing the Console reads");
+    expect(console).toContain("This line is a guess until the release is checked against the Console (step 4 of [releasing.md](../releasing.md)), and that run's answer replaces it.");
+    expect(read("docs/releasing.md")).toContain("A line about the Console in a draft in `docs/release-notes/` was written when the part was built, so it is a guess until this run.");
+  });
+
+  it("name what they don't cover: #847, whose fix rides this major if it changes the caller workflow, Dependabot's runs, and a cloud account's trust policy", () => {
+    const uncovered = section(notes, "Not covered");
+    const targets = bullet(uncovered, "A public Product repo's `pull_request_target` runs from 2 December 2026");
+    expect(targets).toContain("([#847](https://github.com/jrey8343/fabrik/issues/847))");
+    expect(targets).toContain("Its fix rides this major if it changes the caller workflow");
+    expect(bullet(uncovered, "Whether Dependabot's runs are given an environment's secrets")).toContain("wasn't looked into");
+    expect(bullet(uncovered, "A cloud account's trust policy")).toContain("is the Operator's to check in each repo");
+  });
+
+  it("say what was seen on GitHub and what was tested only over fixtures, and call nothing of Setup's verified against GitHub", () => {
+    const tried = bullet(section(notes, "Not covered"), "Tried on GitHub only in part.");
+    expect(tried).toContain("([Try the Kit's tokens in an environment held to the default branch](https://github.com/jrey8343/fabrik/issues/846))");
+    expect(tried).toContain("were tested over fixtures and not run against GitHub");
+    for (const untried of ["`gh secret set --env`, `gh secret list --env` and `gh secret delete` with `--repo`", "a private repo whose GitHub plan has no environments", "an environment's reviewers and wait timer", "an environment on `fabrik-runs`", "a renamed default branch", "a fork's pull request"]) {
+      expect(tried, untried).toContain(untried);
+    }
+    expect(notes).not.toMatch(/verified/i);
+  });
+
+  describe("name only what the Spec's Tickets shipped, by the name the code holds it under", () => {
+    it("link each of the nine Tickets before this one", () => {
+      for (const ticket of [926, 927, 928, 929, 930, 931, 932, 933, 934]) expect(notes, `#${ticket}`).toContain(`[#${ticket}](https://github.com/jrey8343/fabrik/issues/${ticket})`);
+    });
+
+    it("write as code only a file that exists or a name the code holds", () => {
+      const held = (name: string) => {
+        const [file, text] = HELD_IN[name] ?? [];
+        return file !== undefined && text !== undefined && read(file).includes(text);
+      };
+      const unknown = written(notes).filter((name) => !(name.startsWith("src/") && existsSync(join(KIT, name))) && !held(name));
+
+      expect(unknown).toEqual([]);
+    });
+
+    it("say the `fabrik` environment in full, and the environment alone only in a paragraph or bullet that has already named it so", () => {
+      for (const line of notes.split("\n")) {
+        const alone = line.search(/\bthe environment\b/i);
+        if (alone !== -1) expect(line.slice(0, alone), line.slice(0, 80)).toContain("`fabrik` environment");
+      }
+    });
+
+    it("name no person and no private repo", () => {
+      expect(notes).not.toMatch(/gradually|jrey(?!8343\/fabrik)/i);
     });
   });
 });
