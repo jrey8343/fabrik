@@ -293,3 +293,31 @@ describe("Reading production's environment for Setup's report, when the checkout
     expect(asked).toEqual(["gh api repos/acme/clinic/environments/fabrik"]);
   });
 });
+
+describe("Reading the caller workflow the default branch holds", () => {
+  const CALLER = ".github/workflows/fabrik.yml";
+  const AT_THE_TIP = `git show ${HEAD_SHA}:${CALLER}`;
+
+  /** What Setup gathers of acme/clinic from a checkout whose own caller workflow is the setup branch's, with git answering for the default branch's tip. */
+  async function gathered(script: Record<string, Answer> = {}) {
+    const dir = await tempDir("setup-gather");
+    await mkdir(join(dir, ".github/workflows"), { recursive: true });
+    await writeFile(join(dir, CALLER), "# the setup branch's\n");
+    const commands = fakeCommands({ ...aReadyOperator(dir), ...script });
+    return { state: await gatherState(commands.run, dir, REPO, [CALLER], HEAD_SHA), calls: commands.calls.map((call) => call.line) };
+  }
+
+  it("reads it from the default branch's tip on origin, as the checks found it, and never from the checkout's own copy", async () => {
+    const { state, calls } = await gathered({ [AT_THE_TIP]: { stdout: "# the default branch's\n" } });
+
+    expect(state.defaultBranchCaller).toBe("# the default branch's\n");
+    expect(state.files[CALLER]).toBe("# the setup branch's\n");
+    expect(calls).toContain(AT_THE_TIP);
+  });
+
+  it("gives none when the default branch's tip has no caller workflow, though the checkout has one", async () => {
+    const { state } = await gathered();
+
+    expect(state.defaultBranchCaller).toBeNull();
+  });
+});
