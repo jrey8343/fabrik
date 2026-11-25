@@ -9,6 +9,8 @@
 # Like the Loop's push job (ADR-0002), the job runs on a fresh VM and never
 # checks out or runs Product code. It checks out only Fabrik itself, at the
 # exact commit the caller pinned, and the store's runs/.
+#
+# Each job that reads OP_PUSH_TOKEN names the caller repo's fabrik environment, as loop.yml's do (ADR-0004).
 name: Fabrik weekly summary
 
 on:

@@ -18,6 +18,13 @@
 #   pinned. When the agent job failed or was cancelled (its timeout-minutes
 #   included), it posts the failure notice instead.
 #
+# Every job that reads a service-account token names the caller repo's
+# `fabrik` environment, with `deployment: false` so GitHub records no
+# Deployment (ADR-0021), and only the default branch may use it (ADR-0004):
+# GitHub fails such a job on any other ref before its first step. A job that
+# reads no token names none. The caller still passes each token by name, and
+# it reaches the job from the environment.
+#
 # Scoring (#149) follows the same split. The push job's record step plans
 # whether the Implement run it recorded is scored. When it is, the judge job
 # (`score`) runs the judge with no tools and no write credential, and the

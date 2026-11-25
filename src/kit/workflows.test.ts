@@ -3373,6 +3373,32 @@ describe("The fabrik environment", () => {
     expect(jobs.filter((job) => job.environment === undefined).map((job) => job.name)).toEqual(none);
   });
 
+  /** A workflow's header comment, the lines above its `name:`, as its paragraphs. */
+  const headerOf = (text: string): readonly string[] => text.slice(0, text.indexOf("\nname: ")).split("\n#\n");
+
+  it("is said in loop.yml's header comment, straight after the paragraph on each AFK role", () => {
+    const header = headerOf(loop);
+
+    expect(header[header.findIndex((paragraph) => paragraph.startsWith("# Each AFK role is an agent job")) + 1]).toBe(
+      [
+        "# Every job that reads a service-account token names the caller repo's",
+        "# `fabrik` environment, with `deployment: false` so GitHub records no",
+        "# Deployment (ADR-0021), and only the default branch may use it (ADR-0004):",
+        "# GitHub fails such a job on any other ref before its first step. A job that",
+        "# reads no token names none. The caller still passes each token by name, and",
+        "# it reaches the job from the environment.",
+      ].join("\n"),
+    );
+  });
+
+  it.each(workflows.filter(({ text }) => text !== loop))("is said in one line of $path's header comment", ({ text }) => {
+    const said = headerOf(text)
+      .flatMap((paragraph) => paragraph.split("\n"))
+      .filter((line) => line.includes("environment"));
+
+    expect(said).toEqual(["# Each job that reads OP_PUSH_TOKEN names the caller repo's fabrik environment, as loop.yml's do (ADR-0004)."]);
+  });
+
   describe("in a made-up workflow", () => {
     const READS = "        env:\n          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PUSH_TOKEN }}\n";
     const NAMED = "    environment:\n      name: fabrik\n      deployment: false\n";

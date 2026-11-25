@@ -19,6 +19,8 @@
 # run on a fresh VM, load the Fabrik App key through the push service account,
 # mint an App token, and never check out or run Product code. They check out
 # only Fabrik itself, at the exact commit the caller pinned.
+#
+# Each job that reads OP_PUSH_TOKEN names the caller repo's fabrik environment, as loop.yml's do (ADR-0004).
 name: Fabrik scheduled tick
 
 on:
