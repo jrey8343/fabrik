@@ -8,6 +8,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { headingAnchor } from "../__fixtures__/headingAnchor.ts";
 import { aCleanProduct } from "../__fixtures__/productState.ts";
 import { KIT, RELEASED_NOTES, repoFiles } from "../__fixtures__/repoScan.ts";
 import { EXPORT_CALLS, EXPORT_SHAPES } from "../read/exports.fixture.ts";
@@ -195,7 +196,7 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Held workflows release notes, wh
       read("README.md")
         .split("\n")
         .filter((line) => /^#{2,} /.test(line))
-        .map((line) => slug(line.replace(/^#+ /, ""))),
+        .map((line) => headingAnchor(line.replace(/^#+ /, ""))),
     );
     const anchors = [...notes.matchAll(/\]\(\.\.\/\.\.\/README\.md#([^)]+)\)/g)].map(([, anchor = ""]) => anchor);
 
@@ -302,14 +303,6 @@ const HELD_IN: Readonly<Record<string, readonly [file: string, text: string]>> =
   fabrik: ["src/kit/environment.ts", `KIT_ENVIRONMENT = "fabrik"`],
   "setup.sh": ["setup.sh", "#!"],
 };
-
-/** A heading's anchor on GitHub: lowercased, its punctuation dropped and its spaces made hyphens. */
-function slug(heading: string): string {
-  return heading
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s_-]/gu, "")
-    .replace(/\s/g, "-");
-}
 
 /** The sections the Ticket asks for, in its order. */
 const HEADINGS = [

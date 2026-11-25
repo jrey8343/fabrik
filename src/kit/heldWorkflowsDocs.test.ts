@@ -5,6 +5,7 @@
 // Promote list; and ADR-0038's two sentences on whose word production takes.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { headingAnchor } from "../__fixtures__/headingAnchor.ts";
 import { START_CHECK_MINUTES, startCheckName } from "../read/index.ts";
 import { CALLER_FILE } from "../setup/shims.ts";
 
@@ -34,13 +35,6 @@ function under(yaml: string, key: string, indent: number): string[] {
   const end = rows.findIndex((row, i) => i > start && row.trim() !== "" && row.length - row.trimStart().length <= indent);
   return rows.slice(start + 1, end === -1 ? undefined : end);
 }
-/** GitHub's anchor for a heading: lower case, punctuation but `-` and `_` dropped, spaces as `-`. */
-function anchor(heading: string): string {
-  return heading
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s_-]/gu, "")
-    .replace(/ /g, "-");
-}
 
 const holdsARole = section("Workflows that hold a role");
 const held = part(holdsARole, "Held workflows");
@@ -69,7 +63,7 @@ describe("the README's section on workflows that hold a role", () => {
   });
 
   it("has every link in it, and every link to Held workflows in the README, resolve to a heading", () => {
-    const anchors = new Set(lines.filter((line) => /^#{2,6} /.test(line)).map((line) => anchor(line.replace(/^#+ /, ""))));
+    const anchors = new Set(lines.filter((line) => /^#{2,6} /.test(line)).map((line) => headingAnchor(line.replace(/^#+ /, ""))));
     const linked = (text: string) => [...text.matchAll(/\]\(#([^)]+)\)/g)].map((match) => match[1]);
 
     expect(linked(holdsARole)).toEqual(expect.arrayContaining(["kit-config", "merge-gate"]));
