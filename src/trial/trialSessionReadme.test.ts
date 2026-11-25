@@ -34,7 +34,8 @@ describe("the README's section for the Trial session, on the untried queue comma
   it("is a section of its own, after the Merge gate's and before the Audit's, and the Layout names the folder the command is in", () => {
     const headings = readme.split("\n").filter((line) => line.startsWith("## "));
 
-    expect(headings.indexOf("## Trial session")).toBe(headings.indexOf("## Merge gate") + 1);
+    // The section on workflows that hold a role (#942) is the one straight after the Merge gate's.
+    expect(headings.indexOf("## Trial session")).toBeGreaterThan(headings.indexOf("## Merge gate"));
     expect(headings.indexOf("## Audit")).toBe(headings.indexOf("## Trial session") + 1);
     expect(section).toContain("What there is to try comes from the untried queue command, a read-only program of the Kit");
     // Plain words, never set as a term: the glossary has no such entry.
