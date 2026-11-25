@@ -129,6 +129,8 @@ import {
   stagingMergesToRead,
   standingAt,
   standingsOf,
+  START_CHECK_MINUTES,
+  startCheckName,
   stuckBarMinutes,
   subscriptionReadingsOf,
   TICK_DEAD_MINUTES,
@@ -1643,6 +1645,14 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
     readRow(
       A_ROW_KEPT_AT_V3_4_1,
     ),
+
+  // Held workflows and the Start check
+
+  startCheckName: () =>
+    startCheckName(
+      "promote.yml",
+    ),
+  START_CHECK_MINUTES: () => START_CHECK_MINUTES,
 };
 
 /** One value of every type the entry exports, keyed by its name. */
@@ -1659,7 +1669,7 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   // Kit config and the caller's pin
 
   CallerCheck: { ok: true, release: "v1.2.3" } satisfies CallerCheck,
-  KitConfig: { ...DEFAULT_KIT_CONFIG, maxInFlight: 3 } satisfies KitConfig,
+  KitConfig: { ...DEFAULT_KIT_CONFIG, maxInFlight: 3, console: { appId: 1234567, heldWorkflows: ["promote.yml"] } } satisfies KitConfig,
   KitConfigResult: { ok: false, errors: ["maxInFlight is not a Kit config field"] } satisfies KitConfigResult,
   KitConfigSources: {
     config: '{ "max_in_flight": 3 }',
