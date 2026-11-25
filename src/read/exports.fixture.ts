@@ -50,6 +50,7 @@ import {
   factsOf,
   standingFactsOf,
   storeFactsOf,
+  BARE_SESSION_ENVIRONMENT,
   CAPTURE_RESULT_FILE,
   checkCallerWorkflow,
   commitsToCheck,
@@ -114,6 +115,7 @@ import {
   runnerTimeOf,
   runsInFlightFactOf,
   runwayOf,
+  sessionEnvironmentOf,
   SHOT_IMAGE_MAX_BYTES,
   SHOT_LIMIT,
   SHOT_NAME_MAX_LENGTH,
@@ -1653,6 +1655,14 @@ export const EXPORT_CALLS: Readonly<Record<string, () => unknown>> = {
       "promote.yml",
     ),
   START_CHECK_MINUTES: () => START_CHECK_MINUTES,
+
+  // Operator sessions
+
+  BARE_SESSION_ENVIRONMENT: () => BARE_SESSION_ENVIRONMENT,
+  sessionEnvironmentOf: () =>
+    sessionEnvironmentOf(
+      { ...DEFAULT_KIT_CONFIG, console: { ...DEFAULT_KIT_CONFIG.console, sessionEnvironment: "product-sessions" } },
+    ),
 };
 
 /** One value of every type the entry exports, keyed by its name. */
@@ -1669,7 +1679,7 @@ export const EXPORT_SHAPES: Readonly<Record<string, unknown>> = {
   // Kit config and the caller's pin
 
   CallerCheck: { ok: true, release: "v1.2.3" } satisfies CallerCheck,
-  KitConfig: { ...DEFAULT_KIT_CONFIG, maxInFlight: 3, console: { appId: 1234567, heldWorkflows: ["promote.yml"] } } satisfies KitConfig,
+  KitConfig: { ...DEFAULT_KIT_CONFIG, maxInFlight: 3, console: { appId: 1234567, heldWorkflows: ["promote.yml"], sessionEnvironment: null } } satisfies KitConfig,
   KitConfigResult: { ok: false, errors: ["maxInFlight is not a Kit config field"] } satisfies KitConfigResult,
   KitConfigSources: {
     config: '{ "max_in_flight": 3 }',

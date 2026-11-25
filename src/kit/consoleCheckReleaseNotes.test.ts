@@ -45,7 +45,7 @@ const HELD_IN: Readonly<Record<string, readonly [file: string, text: string]>> =
   app_id: ["src/setup/plan.ts", "app_id: consoleApp"],
   "console.appId": ["src/kit/config.ts", "defaults.console.appId"],
   "KitConfig.console.appId": ["src/kit/config.ts", "readonly appId: number | null;"],
-  "console: { appId: null, heldWorkflows: [] }": ["src/kit/config.ts", "console: { appId: null, heldWorkflows: [] }"],
+  "console: { appId: null, heldWorkflows: [], sessionEnvironment: null }": ["src/kit/config.ts", "console: { appId: null, heldWorkflows: [], sessionEnvironment: null }"],
   consoleCheck: ["src/read/requiredChecks.ts", "readonly consoleCheck: ConsoleCheckRead;"],
   "RequiredChecksRead.consoleCheck": ["src/read/requiredChecks.ts", "readonly consoleCheck: ConsoleCheckRead;"],
   required: ["src/read/requiredChecks.ts", `{ readonly is: "required"; readonly apps: readonly (number | null)[] }`],
@@ -111,11 +111,11 @@ describe.skipIf(RELEASED_NOTES.has(NOTES))("The Console check release notes, whi
     expect(CONSOLE_CHECK).toBe("Merge from the Console");
     expect(resolveKitConfig({ config: KIT_CONFIG_KEYS["console.app_id"] ?? "" })).toMatchObject({ ok: true, config: { console: { appId: 1234567 } } });
     expect(resolveKitConfig({ config: null })).toMatchObject({ ok: true, config: { console: { appId: null } } });
-    // The notes give the whole default, the Held workflows' list beside the key included.
+    // The notes give the whole default, the Held workflows' list and the Session environment's name beside the key included.
     expect(bullet(section(notes, "For a reader of the read library"), "`KitConfig.console.appId`.")).toContain(
-      "`DEFAULT_KIT_CONFIG` has `console: { appId: null, heldWorkflows: [] }`",
+      "`DEFAULT_KIT_CONFIG` has `console: { appId: null, heldWorkflows: [], sessionEnvironment: null }`",
     );
-    expect(DEFAULT_KIT_CONFIG.console).toEqual({ appId: null, heldWorkflows: [] });
+    expect(DEFAULT_KIT_CONFIG.console).toEqual({ appId: null, heldWorkflows: [], sessionEnvironment: null });
 
     // The read leaves it out of the branch's list and the head's, and hands back the App GitHub expects it from in each place.
     const checks = await entry.readRequiredChecks(coveredRepo, "acme/shop", ["a".repeat(40)], "2026-11-25T09:00:00Z");

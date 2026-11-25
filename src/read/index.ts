@@ -248,3 +248,7 @@ export { readRow } from "./keptRow.ts";
 // Held workflows and the Start check
 
 export { START_CHECK_MINUTES, startCheckName } from "../kit/startCheck.ts";
+
+// Operator sessions
+
+export { BARE_SESSION_ENVIRONMENT, sessionEnvironmentOf } from "../kit/operatorSession.ts";
