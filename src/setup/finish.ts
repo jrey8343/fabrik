@@ -34,7 +34,7 @@ export function prBody({ release, defaultBranch, summary }: PrBodyInputs): strin
     [
       "## Merging",
       "",
-      ...(summary.blockers.length === 0 && byHand.length === 0 ? [mergeAsk(fromConsole ? "Merge this PR from the Console" : "Merge this PR yourself", defaultBranch, fromConsole)] : []),
+      ...(summary.blockers.length === 0 && byHand.length === 0 ? [mergeAsk("Merge this PR", defaultBranch, fromConsole)] : []),
       ...(summary.blockers.length === 0
         ? []
         : [
@@ -54,7 +54,7 @@ export function prBody({ release, defaultBranch, summary }: PrBodyInputs): strin
             ...(summary.blockers.length === 0 ? [`Don't merge this yet. ${BY_HAND}`] : ["", `The Kit's first runs also need these, ${BY_HAND_WHY}`]),
             "",
             ...bullets(byHand),
-            ...(summary.blockers.length === 0 ? ["", mergeAsk(fromConsole ? "Then merge this PR from the Console" : "Then merge this PR yourself", defaultBranch, fromConsole)] : []),
+            ...(summary.blockers.length === 0 ? ["", mergeAsk("Then merge this PR", defaultBranch, fromConsole)] : []),
           ]),
       ...(summary.pausesDispatch === true ? ["", PAUSED] : []),
     ].join("\n"),
@@ -118,7 +118,7 @@ export function closingLines({ release, defaultBranch, url, summary }: ClosingIn
     ...(summary.done.length === 0 ? ["- nothing new in this run"] : bullets(summary.done)),
     ...(summary.notes.length === 0 ? [] : ["", "For the Operator:", ...bullets(summary.notes)]),
     "",
-    ...(summary.blockers.length === 0 && byHand.length === 0 ? [mergeAsk(fromConsole ? "Merge it from the Console" : "Merge it yourself", defaultBranch, fromConsole)] : []),
+    ...(summary.blockers.length === 0 && byHand.length === 0 ? [mergeAsk("Merge it", defaultBranch, fromConsole)] : []),
     ...(summary.blockers.length === 0
       ? []
       : [
@@ -131,7 +131,7 @@ export function closingLines({ release, defaultBranch, url, summary }: ClosingIn
       : [
           summary.blockers.length === 0 ? `Don't merge it yet. ${BY_HAND}` : `The Kit's first runs also need these, ${BY_HAND_WHY}`,
           ...bullets(byHand),
-          ...(summary.blockers.length === 0 ? [mergeAsk(fromConsole ? "Then merge it from the Console" : "Then merge it yourself", defaultBranch, fromConsole)] : []),
+          ...(summary.blockers.length === 0 ? [mergeAsk("Then merge it", defaultBranch, fromConsole)] : []),
         ]),
     "",
     "Then:",
@@ -158,15 +158,19 @@ export function appliedLines(defaultBranch: string, summary: RunSummary, upToDat
 }
 
 /**
- * The ask for the merge, after its opening. Where the Kit config the setup PR
- * merges names the Console's App, GitHub refuses the merge from anywhere but
- * the Console once setup requires the Console check, so it says to merge there.
+ * The ask for the merge, after the words that ask for it, such as "Merge it".
+ * Where the Kit config the setup PR merges names the Console's App, GitHub
+ * refuses the merge from anywhere but the Console once setup requires the
+ * Console check, so it says to merge there, and otherwise to merge yourself.
  */
-function mergeAsk(opening: string, defaultBranch: string, fromConsole: boolean): string {
-  const how = fromConsole
-    ? "This repo's Kit config names the Console's App (console.app_id), so GitHub refuses a merge from anywhere else, github.com and gh included. The Console already shows this PR."
-    : "It needs no approving review, and as the repo's admin you're the Merge gate ruleset's one bypass actor.";
-  return `${opening} once its Required checks pass. ${how} The Loop starts once the caller workflow is on ${defaultBranch}.`;
+function mergeAsk(merge: string, defaultBranch: string, fromConsole: boolean): string {
+  const [where, how] = fromConsole
+    ? [
+        "from the Console",
+        "This repo's Kit config names the Console's App (console.app_id), so GitHub refuses a merge from anywhere else, github.com and gh included. The Console already shows this PR.",
+      ]
+    : ["yourself", "It needs no approving review, and as the repo's admin you're the Merge gate ruleset's one bypass actor."];
+  return `${merge} ${where} once its Required checks pass. ${how} The Loop starts once the caller workflow is on ${defaultBranch}.`;
 }
 
 /** What the Operator does once setup has run, leaving out each step the Kit config and the repo already show done. */
