@@ -15,9 +15,14 @@ export const KIT = resolve(import.meta.dirname, "..", "..");
 export const RELEASED_NOTES: ReadonlySet<string> = new Set(
   [
     "auditor",
+    "console-check",
+    "fabrik-environment",
+    "held-workflows",
     "ideas-and-maps",
     "monitor",
+    "operator-session",
     "product-intent",
+    "release-tags",
     "replay",
     "retro",
     "run-records",
