@@ -1838,6 +1838,201 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     });
   });
 
+  describe("the store's one token, the push account's, in the store's own fabrik environment (ADR-0004)", () => {
+    const STORE = "jrey8343/fabrik-runs";
+    const STORE_CALLER = ".github/workflows/weekly-summary.yml";
+    const TOKEN = "FABRIK_OP_PUSH_TOKEN";
+    const STORE_ENVIRONMENT = `repos/${STORE}/environments/fabrik`;
+    /** Every question but the yes answered by a flag, the Operator's time zone among them, so Setup sets the store up. */
+    const WITH_THE_STORE = ["--no-production", "--no-staging", "--time-zone=Australia/Sydney", "--no-second-subscription", "--no-paused"];
+    const NEW_ACCOUNT = "op service-account create fabrik-jrey8343-fabrik-runs-push-env --vault Fabrik App:read_items --raw";
+    const STAYS =
+      "- jrey8343/fabrik-runs: The repo-level Actions secret FABRIK_OP_PUSH_TOKEN stays for now, since the caller workflow setup found there pins no Kit that names the fabrik environment. " +
+      "Once setup has written the one that does, run setup again and it deletes it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
+    const OLD_ACCOUNT =
+      "- jrey8343/fabrik-runs: Once the repo-level secret is deleted, delete the old service account fabrik-jrey8343-fabrik-runs-push on 1Password's site. " +
+      "Its token still works until you do, though it sits nowhere on GitHub.";
+    const DELETE = "- delete the repo-level Actions secret FABRIK_OP_PUSH_TOKEN in jrey8343/fabrik-runs: the Kit trunk pins reads the fabrik environment's";
+    /** A step or a note of the store's move. */
+    const OF_THE_MOVE = /delete the repo-level|stays for now|old service account|found more to do/;
+    const planned = (said: string[]) => said.slice(said.indexOf("Setup would:") + 1, said.indexOf("", said.indexOf("Setup would:")));
+    const underThePlan = (said: string[]) => said.slice(0, said.indexOf(`On ${BRANCH}.`));
+    const lastLines = (said: string[]) => said.slice(said.lastIndexOf("What setup did:"));
+    /** Each gh secret call of a run that names a repo, and each that changed a secret, as gh was asked. */
+    const secretCalls = (log: string[]) => log.filter((line) => /^gh secret (set|delete) /.test(line) || (line.startsWith("gh secret ") && line.includes("--repo")));
+
+    /** A store already on the Kit: private, with commits on `trunk`, its caller workflow pinned at this release, and its one token at repo level. */
+    async function aStoreOnTheKitAt(world: World, release: string): Promise<void> {
+      const template = await readFile(join(KIT_DIR, "templates/fabrik-runs-caller.yml"), "utf8");
+      Object.assign(world.store, { exists: true, private: true, defaultBranch: "trunk" });
+      world.store.files.set(STORE_CALLER, pinCaller(template, release));
+      world.store.secrets.add(TOKEN);
+    }
+
+    it("over two runs, moves the token of a store already on the Kit: the first holds the store's environment to the store's own default branch, makes the -env account in it and rewrites the store's caller, deleting nothing, and the second deletes the repo-level secret and names the old account", async () => {
+      const world = aWorld();
+      await aStoreOnTheKitAt(world, "v0.9.1");
+
+      const first = await setupOnce(world, { args: WITH_THE_STORE });
+
+      expect(first.complaints).toEqual([]);
+      expect(planned(first.said).slice(0, 2)).toEqual([
+        "- create the fabrik environment, held to main alone: only a run of main is given its secrets",
+        "- create the fabrik environment in jrey8343/fabrik-runs, held to trunk alone: only a run of trunk is given its secrets",
+      ]);
+      expect(planned(first.said)).toContain(
+        '- create the read-only service account "fabrik-jrey8343-fabrik-runs-push-env" (reads "Fabrik App") and store it as FABRIK_OP_PUSH_TOKEN in the fabrik environment in jrey8343/fabrik-runs',
+      );
+      expect(first.log).toContain(NEW_ACCOUNT);
+      expect(environmentOf(world, "fabrik", STORE)).toEqual({
+        policy: { protected_branches: false, custom_branch_policies: true },
+        rules: [{ id: expect.any(Number), name: "trunk", type: "branch" }],
+        secrets: new Set([TOKEN]),
+      });
+      expect(world.store.files.get(STORE_CALLER)).toContain("weekly-summary.yml@v1.4.2");
+      expect([...world.store.secrets]).toEqual([TOKEN]);
+      expect(first.log.filter((line) => line.startsWith("gh secret delete "))).toEqual([]);
+      // The run wrote the store's caller, and still deletes nothing and names no old account: only a run that finds it there does.
+      expect(underThePlan(first.said)).toContain(STAYS);
+      expect(lastLines(first.said).filter((line) => OF_THE_MOVE.test(line))).toEqual([STAYS]);
+
+      mergeTheSetupPr(world);
+      const second = await setupOnce(world, { args: WITH_THE_STORE });
+
+      expect(second.complaints).toEqual([]);
+      expect(planned(second.said)).toEqual([DELETE]);
+      expect(second.log).not.toContain(NEW_ACCOUNT);
+      expect([...world.store.secrets]).toEqual([]);
+      expect([...environmentOf(world, "fabrik", STORE)!.secrets]).toEqual([TOKEN]);
+      expect(underThePlan(second.said)).toContain(OLD_ACCOUNT);
+      // What it did, then the old account, named once.
+      expect(lastLines(second.said).filter((line) => OF_THE_MOVE.test(line))).toEqual([DELETE, OLD_ACCOUNT]);
+
+      const third = await setupOnce(world, { args: WITH_THE_STORE });
+
+      expect(third.said).toContain("Nothing to do: this repo's Fabrik install is complete.");
+      expect(third.said.filter((line) => OF_THE_MOVE.test(line))).toEqual([]);
+    });
+
+    it("names --repo jrey8343/fabrik-runs on every gh secret call for the store, and stores and deletes nothing of the Product repo's with them", async () => {
+      const world = aWorld();
+      await aStoreOnTheKitAt(world, "v0.9.1");
+
+      const first = await setupOnce(world, { args: WITH_THE_STORE });
+      mergeTheSetupPr(world);
+      const second = await setupOnce(world, { args: WITH_THE_STORE });
+
+      expect(secretCalls(first.log)).toEqual([
+        // What Setup reads of the store, before the plan and again after the wizard.
+        `gh secret list --repo ${STORE} --json name`,
+        "gh secret set FABRIK_OP_AGENT_TOKEN --env fabrik",
+        "gh secret set FABRIK_OP_IMPLEMENT_TOKEN --env fabrik",
+        "gh secret set FABRIK_OP_PUSH_TOKEN --env fabrik",
+        `gh secret set FABRIK_OP_PUSH_TOKEN --env fabrik --repo ${STORE}`,
+        `gh secret list --repo ${STORE} --json name`,
+        `gh secret list --env fabrik --repo ${STORE} --json name`,
+      ]);
+      expect(secretCalls(second.log)).toEqual([
+        `gh secret list --repo ${STORE} --json name`,
+        `gh secret list --env fabrik --repo ${STORE} --json name`,
+        `gh secret delete FABRIK_OP_PUSH_TOKEN --repo ${STORE}`,
+        `gh secret list --repo ${STORE} --json name`,
+        `gh secret list --env fabrik --repo ${STORE} --json name`,
+      ]);
+      expect([...world.secrets]).toEqual([]);
+      expect([...environmentOf(world)!.secrets]).toEqual(["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"]);
+    });
+
+    it("for a store the run makes, writes its files, then holds its environment to the default branch their first commit made, then stores its token there, and never a repo-level secret", async () => {
+      const world = aWorld();
+      // The owner's setting names a new repo's first branch, whatever the Product repo's default branch is.
+      world.store.firstBranch = "trunk";
+
+      const { code, said, complaints, log } = await setupOnce(world, { args: WITH_THE_STORE });
+
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(planned(said).filter((line) => line.includes(STORE))).toEqual([
+        "- create jrey8343/fabrik-runs, private, to hold Run records, their transcripts and the Weekly summary",
+        "- write .github/workflows/weekly-summary.yml in jrey8343/fabrik-runs (the Weekly summary each Monday morning, pinning one Fabrik release)",
+        "- write .github/dependabot.yml in jrey8343/fabrik-runs (Dependabot bumps the Fabrik pin)",
+        "- create the fabrik environment in jrey8343/fabrik-runs, held to its default branch alone: only a run of its default branch is given its secrets",
+        '- create the read-only service account "fabrik-jrey8343-fabrik-runs-push-env" (reads "Fabrik App") and store it as FABRIK_OP_PUSH_TOKEN in the fabrik environment in jrey8343/fabrik-runs',
+      ]);
+      const RULES = `gh api ${STORE_ENVIRONMENT}/deployment-branch-policies?per_page=100`;
+      const BRANCH_NOW = `gh repo view ${STORE} --json defaultBranchRef`;
+      const steps = log.slice(index(log, /^gh repo create /));
+      expect(steps.slice(0, steps.indexOf(`gh secret set ${TOKEN} --env fabrik --repo ${STORE}`) + 1).filter((line) => line.includes(STORE) || line.startsWith("op service-account"))).toEqual([
+        expect.stringMatching(/^gh repo create jrey8343\/fabrik-runs --private /),
+        `gh api repos/${STORE}/contents/${STORE_CALLER}`,
+        `gh api --method PUT repos/${STORE}/contents/${STORE_CALLER} --input -`,
+        `gh api repos/${STORE}/contents/.github/dependabot.yml`,
+        `gh api --method PUT repos/${STORE}/contents/.github/dependabot.yml --input -`,
+        BRANCH_NOW,
+        `gh api --method PUT ${STORE_ENVIRONMENT} --input -`,
+        RULES,
+        `gh api --method POST ${STORE_ENVIRONMENT}/deployment-branch-policies -f name=trunk -f type=branch`,
+        RULES,
+        BRANCH_NOW,
+        RULES,
+        NEW_ACCOUNT,
+        `gh secret set ${TOKEN} --env fabrik --repo ${STORE}`,
+      ]);
+      expect(world.store).toMatchObject({ exists: true, private: true, defaultBranch: "trunk" });
+      expect(environmentOf(world, "fabrik", STORE)?.rules).toEqual([{ id: expect.any(Number), name: "trunk", type: "branch" }]);
+      expect([...environmentOf(world, "fabrik", STORE)!.secrets]).toEqual([TOKEN]);
+      expect([...world.store.secrets, ...world.secrets]).toEqual([]);
+      expect(said.filter((line) => OF_THE_MOVE.test(line))).toEqual([]);
+
+      mergeTheSetupPr(world);
+      expect((await setupOnce(world, { args: WITH_THE_STORE })).said).toContain("Nothing to do: this repo's Fabrik install is complete.");
+    });
+
+    it("stops when GitHub refuses the store's environment, with the no-fallback message naming the store, before it writes the store's caller or makes its account", async () => {
+      const world = aWorld();
+      await aStoreOnTheKitAt(world, "v0.9.1");
+      // The Product repo's own environment is held and holds its tokens, so the store's is the plan's first step.
+      anEnvironment(world, { rules: ["main"], secrets: ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"] });
+      world.environmentRefusal = "gh: Not Found (HTTP 404)\n";
+
+      const { code, said, complaints, log } = await setupOnce(world, { args: WITH_THE_STORE });
+
+      expect(planned(said)[0]).toBe("- create the fabrik environment in jrey8343/fabrik-runs, held to trunk alone: only a run of trunk is given its secrets");
+      expect(code).toBe(1);
+      expect(complaints).toEqual([
+        "GitHub refused the fabrik environment on jrey8343/fabrik-runs: gh: Not Found (HTTP 404). A private repo needs a GitHub plan with environments: GitHub Pro for a personal account's repo, or GitHub Team for an organization's. The Kit keeps no fallback to repo-level secrets, so Setup stopped before changing anything else.",
+      ]);
+      expect(environmentOf(world, "fabrik", STORE)).toBeUndefined();
+      expect(world.store.files.get(STORE_CALLER)).toContain("weekly-summary.yml@v0.9.1");
+      expect(log.filter((line) => /^op service-account create |^gh secret (set|delete) |^gh api --method PUT repos\/jrey8343\/fabrik-runs\/contents\//.test(line))).toEqual([]);
+      expect([...world.store.secrets]).toEqual([TOKEN]);
+    });
+
+    it("without the Operator's time zone, reads the store's environment with the rest of the store and plans and changes nothing of it", async () => {
+      const world = aWorld();
+      await aStoreOnTheKitAt(world, "v0.9.1");
+
+      const { code, said, log } = await setupOnce(world);
+
+      expect(code).toBe(0);
+      expect(log).toEqual(expect.arrayContaining([`gh repo view ${STORE} --json defaultBranchRef`, `gh api ${STORE_ENVIRONMENT}`]));
+      expect(said.filter((line) => line.includes(STORE))).toEqual([]);
+      expect(log.filter((line) => line.includes(STORE) && /--method|secret (set|delete)|repo create/.test(line))).toEqual([]);
+      expect(environmentOf(world, "fabrik", STORE)).toBeUndefined();
+      expect([...world.store.secrets]).toEqual([TOKEN]);
+    });
+
+    it("reads no environment and no default branch of a store that doesn't exist", async () => {
+      const world = aWorld();
+
+      const { code, log } = await setupOnce(world);
+
+      expect(code).toBe(0);
+      expect(log.filter((line) => line.includes(STORE))).toEqual(expect.arrayContaining([`gh repo view ${STORE} --json visibility`]));
+      expect(log.filter((line) => line.includes(STORE) && !line.endsWith("--json visibility"))).toEqual([]);
+    });
+  });
+
   describe("holding admins to the default branch's rules", () => {
     const HELD = "- protect main: admins held to the rules: no → yes; every other setting stays as it is";
     const protectionPuts = (calls: { line: string; input?: string }[]) =>

@@ -10,32 +10,67 @@ import type { SetupAction } from "./plan.ts";
 const PRODUCT = { owner: "acme", name: "clinic", defaultBranch: "main", inOrganization: false };
 const STORE = "jrey8343/fabrik-runs";
 
-describe("A service account whose step names no environment, as the store's", () => {
+describe("A service account whose token is the secret of the environment of a repo the step names, as the store's", () => {
   const step: SetupAction = {
     kind: "create-service-account",
-    name: "fabrik-jrey8343-fabrik-runs-push",
+    name: "fabrik-jrey8343-fabrik-runs-push-env",
     vaults: ["Fabrik App"],
     secret: "FABRIK_OP_PUSH_TOKEN",
+    environment: "fabrik",
     repo: STORE,
   };
+  const DEFAULT_BRANCH = "gh repo view jrey8343/fabrik-runs --json defaultBranchRef";
+  const RULES = "gh api repos/jrey8343/fabrik-runs/environments/fabrik/deployment-branch-policies?per_page=100";
 
-  it("is named in the plan as a repo-level Actions secret on that repo", () => {
+  /** A world whose store has commits on `trunk`, and this fabrik environment. */
+  function aStoreOnTrunk(environment: Parameters<typeof anEnvironment>[1]) {
+    const world = aWorld();
+    Object.assign(world.store, { exists: true, defaultBranch: "trunk" });
+    anEnvironment(world, environment, "fabrik", STORE);
+    return world;
+  }
+
+  it("is named in the plan with its environment, in that repo", () => {
     expect(describeAction(step)).toBe(
-      'create the read-only service account "fabrik-jrey8343-fabrik-runs-push" (reads "Fabrik App") and store it as the Actions secret FABRIK_OP_PUSH_TOKEN on jrey8343/fabrik-runs',
+      'create the read-only service account "fabrik-jrey8343-fabrik-runs-push-env" (reads "Fabrik App") and store it as FABRIK_OP_PUSH_TOKEN in the fabrik environment in jrey8343/fabrik-runs',
     );
   });
 
-  it("stores its token as that repo's repo-level secret, reading no environment", async () => {
-    const world = aWorld();
+  it("reads that repo's own default branch and its environment's rules, then stores the token in that environment, naming the repo to gh secret, and never at repo level", async () => {
+    const world = aStoreOnTrunk({ rules: ["trunk"] });
     const commands = fakeCommands(worldScript(world));
 
     await apply(commands.run, step, "/clinic", PRODUCT);
 
     expect(commands.calls.map(({ line, input }) => [line, input])).toEqual([
-      ["op service-account create fabrik-jrey8343-fabrik-runs-push --vault Fabrik App:read_items --raw", undefined],
-      ["gh secret set FABRIK_OP_PUSH_TOKEN --repo jrey8343/fabrik-runs", "ops_token"],
+      [DEFAULT_BRANCH, undefined],
+      [RULES, undefined],
+      ["op service-account create fabrik-jrey8343-fabrik-runs-push-env --vault Fabrik App:read_items --raw", undefined],
+      ["gh secret set FABRIK_OP_PUSH_TOKEN --env fabrik --repo jrey8343/fabrik-runs", "ops_token"],
     ]);
-    expect(world.environmentCalls).toEqual([]);
+    expect([...environmentOf(world, "fabrik", STORE)!.secrets]).toEqual(["FABRIK_OP_PUSH_TOKEN"]);
+    expect([...world.store.secrets, ...world.secrets]).toEqual([]);
+  });
+
+  it("stores no token, and makes no account, when the environment's one rule names the Product repo's default branch and not that repo's own", async () => {
+    const world = aStoreOnTrunk({ rules: ["main"] });
+    const commands = fakeCommands(worldScript(world));
+
+    await expect(apply(commands.run, step, "/clinic", PRODUCT)).rejects.toThrow(
+      "The fabrik environment on jrey8343/fabrik-runs isn't held to trunk alone, so Setup stored no token in it. Run setup again.",
+    );
+    expect(commands.calls.map(({ line }) => line)).toEqual([DEFAULT_BRANCH, RULES]);
+  });
+
+  it("stores no token, and makes no account, in a repo that has no default branch yet", async () => {
+    const world = aWorld();
+    Object.assign(world.store, { exists: true, defaultBranch: null });
+    const commands = fakeCommands(worldScript(world));
+
+    await expect(apply(commands.run, step, "/clinic", PRODUCT)).rejects.toThrow(
+      "jrey8343/fabrik-runs has no default branch yet, so Setup couldn't hold its fabrik environment to one, and stored no token in it. Run setup again.",
+    );
+    expect(commands.calls.map(({ line }) => line)).toEqual([DEFAULT_BRANCH]);
   });
 });
 
@@ -93,6 +128,39 @@ describe("Holding the environment of a repo the step names", () => {
     expect(describeAction(step({ branches: "selected", rules: [{ id: 3, name: "main", type: "branch" }] }))).toBe(
       "hold the fabrik environment in jrey8343/fabrik-runs to trunk alone: rules main → trunk",
     );
+  });
+
+  describe("when that repo had no default branch as Setup planned, as a store the run makes", () => {
+    const unnamed: SetupAction = { kind: "hold-environment", environment: "fabrik", branch: null, found: null, repo: STORE };
+
+    it("is named in the plan as held to its default branch, whose name isn't known yet", () => {
+      expect(describeAction(unnamed)).toBe(
+        "create the fabrik environment in jrey8343/fabrik-runs, held to its default branch alone: only a run of its default branch is given its secrets",
+      );
+    });
+
+    it("reads the name of the default branch the repo has by then, before anything else, and holds the environment to it", async () => {
+      const world = aWorld();
+      Object.assign(world.store, { exists: true, defaultBranch: "trunk" });
+      const commands = fakeCommands(worldScript(world));
+
+      await apply(commands.run, unnamed, "/clinic", PRODUCT);
+
+      expect(commands.calls[0]?.line).toBe("gh repo view jrey8343/fabrik-runs --json defaultBranchRef");
+      expect(environmentOf(world, "fabrik", STORE)?.rules).toEqual([{ id: expect.any(Number), name: "trunk", type: "branch" }]);
+    });
+
+    it("stops, making no environment, when the repo still has none", async () => {
+      const world = aWorld();
+      Object.assign(world.store, { exists: true, defaultBranch: null });
+      const commands = fakeCommands(worldScript(world));
+
+      await expect(apply(commands.run, unnamed, "/clinic", PRODUCT)).rejects.toThrow(
+        "jrey8343/fabrik-runs has no default branch yet, so Setup couldn't hold its fabrik environment to one, and stored no token in it. Run setup again.",
+      );
+      expect(world.environments.size).toBe(0);
+      expect(world.environmentCalls).toEqual([]);
+    });
   });
 
   it("names that repo when GitHub refuses the environment, and when its rules don't read back as the one", async () => {

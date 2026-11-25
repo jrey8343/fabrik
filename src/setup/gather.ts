@@ -1,6 +1,7 @@
 // What setup reads before planning, with the Operator's own gh and op: the
 // Product repo's files, labels, secrets, fabrik environment, branch protection
-// and Merge gate, the 1Password account's vaults, and the fabrik-runs store.
+// and Merge gate, the 1Password account's vaults, and the fabrik-runs store,
+// with its default branch and its own fabrik environment.
 // With git it reads the caller workflow the default branch holds.
 // For Setup's report it reads production's environment too, when the Kit
 // config names one. It only reads.
@@ -203,21 +204,38 @@ async function gatherReadyForAgent(run: Run, cwd: string, labels: readonly strin
   return (JSON.parse(await ok(run, "gh", args, { cwd })) as unknown[]).length;
 }
 
-/** The fabrik-runs store, read through the API: setup has no checkout of it. */
+/**
+ * The fabrik-runs store, read through the API: setup has no checkout of it.
+ * Its default branch and its own fabrik environment are read with the rest of
+ * it, and nothing of a store that doesn't exist.
+ */
 async function gatherStore(run: Run, cwd: string): Promise<RunStoreState> {
   const view = await run("gh", ["repo", "view", RUN_STORE_REPO, "--json", "visibility"], { cwd });
   if (view.code !== 0) {
     if (/Could not resolve to a Repository|HTTP 404/.test(view.stderr + view.stdout)) {
-      return { exists: false, private: false, files: {}, secrets: [] };
+      return { exists: false, private: false, defaultBranch: null, files: {}, secrets: [], environment: null };
     }
     throw new Error(`Reading ${RUN_STORE_REPO} failed: ${view.stderr.trim()}`);
   }
   const { visibility } = JSON.parse(view.stdout) as { visibility: string };
+  const defaultBranch = await readDefaultBranch(run, cwd, RUN_STORE_REPO);
   const files = Object.fromEntries(
     await Promise.all(STORE_PATHS.map(async (path) => [path, (await storeFile(run, cwd, path))?.text ?? null] as const)),
   );
   const listed = JSON.parse(await ok(run, "gh", ["secret", "list", "--repo", RUN_STORE_REPO, "--json", "name"], { cwd })) as { name: string }[];
-  return { exists: true, private: visibility === "PRIVATE", files, secrets: listed.map((secret) => secret.name) };
+  const environment = await gatherEnvironment(run, cwd, RUN_STORE_REPO, KIT_ENVIRONMENT, { elsewhere: true });
+  return { exists: true, private: visibility === "PRIVATE", defaultBranch, files, secrets: listed.map((secret) => secret.name), environment };
+}
+
+/**
+ * The name of a repo's default branch as GitHub has it now, or null for a repo
+ * with no commit yet, which has none. The repo is `owner/name`, and needn't be
+ * the checkout's.
+ */
+export async function readDefaultBranch(run: Run, cwd: string, repo: string): Promise<string | null> {
+  const view = JSON.parse(await ok(run, "gh", ["repo", "view", repo, "--json", "defaultBranchRef"], { cwd })) as { defaultBranchRef?: { name?: string } | null };
+  // gh prints an empty name for a repo with no commit.
+  return view.defaultBranchRef?.name || null;
 }
 
 /** Every file planSetup reads from the store. */

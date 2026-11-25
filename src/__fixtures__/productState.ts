@@ -1,5 +1,5 @@
 // Product repo states for the setup planner's tests.
-import { type BranchProtection, type ProductState, type RunStoreState, type SetupPlan, UNPROTECTED } from "../setup/plan.ts";
+import { type BranchProtection, type EnvironmentState, type ProductState, type RunStoreState, type SetupPlan, UNPROTECTED } from "../setup/plan.ts";
 
 export function aCleanProduct(overrides: Partial<ProductState> = {}): ProductState {
   return {
@@ -37,7 +37,7 @@ export function aProtectedBranch(checks: readonly string[], overrides: Partial<B
 
 /** The fabrik-runs store before the Operator has opted in: it doesn't exist. */
 export function noStore(): RunStoreState {
-  return { exists: false, private: false, files: {}, secrets: [] };
+  return { exists: false, private: false, defaultBranch: null, files: {}, secrets: [], environment: null };
 }
 
 /** The state a repo is left in once every action in the plan has been applied to it. */
@@ -45,14 +45,16 @@ export function afterApplying(state: ProductState, plan: SetupPlan): ProductStat
   let next = state;
   for (const action of plan.actions) {
     switch (action.kind) {
-      case "hold-environment":
-        // The Product repo's own: its one rule names the branch, and its secrets stay as they were.
-        if (action.repo !== undefined) break;
-        next = {
-          ...next,
-          environment: { branches: "selected", rules: [{ id: 1, name: action.branch, type: "branch" }], secrets: next.environment?.secrets ?? [] },
-        };
+      case "hold-environment": {
+        // Its one rule names the branch, and its secrets stay as they were. A step that names a repo is the store's,
+        // and one that names no branch holds it to the default branch the store has by then.
+        const found = action.repo === undefined ? next.environment : next.store.environment;
+        const branch = action.branch ?? next.store.defaultBranch;
+        if (branch === null) throw new Error("The store has no default branch to hold its environment to: no file was committed to it first.");
+        const held: EnvironmentState = { branches: "selected", rules: [{ id: 1, name: branch, type: "branch" }], secrets: found?.secrets ?? [] };
+        next = action.repo === undefined ? { ...next, environment: held } : { ...next, store: { ...next.store, environment: held } };
         break;
+      }
       case "write-file":
         next = { ...next, files: { ...next.files, [action.path]: action.content } };
         break;
@@ -62,11 +64,15 @@ export function afterApplying(state: ProductState, plan: SetupPlan): ProductStat
       case "create-vault":
         next = { ...next, vaults: [...next.vaults, action.name] };
         break;
-      case "create-service-account":
-        if (action.repo !== undefined) next = { ...next, store: { ...next.store, secrets: [...next.store.secrets, action.secret] } };
-        // The Product repo's go into its environment, which the plan's first step holds, and never to repo level.
-        else if (next.environment !== null) next = { ...next, environment: { ...next.environment, secrets: [...next.environment.secrets, action.secret] } };
+      case "create-service-account": {
+        // Each goes into its repo's environment, which an earlier step of the plan holds, and never to repo level.
+        // A step that names a repo is the store's.
+        const environment = action.repo === undefined ? next.environment : next.store.environment;
+        if (environment === null) break;
+        const holding: EnvironmentState = { ...environment, secrets: [...environment.secrets, action.secret] };
+        next = action.repo === undefined ? { ...next, environment: holding } : { ...next, store: { ...next.store, environment: holding } };
         break;
+      }
       case "delete-repo-secret":
         if (action.repo !== undefined) next = { ...next, store: { ...next.store, secrets: next.store.secrets.filter((name) => name !== action.secret) } };
         else next = { ...next, secrets: next.secrets.filter((name) => name !== action.secret) };
@@ -90,7 +96,8 @@ export function afterApplying(state: ProductState, plan: SetupPlan): ProductStat
         next = { ...next, store: { ...next.store, exists: true, private: action.private } };
         break;
       case "write-store-file":
-        next = { ...next, store: { ...next.store, files: { ...next.store.files, [action.path]: action.content } } };
+        // The first commit to a store with none makes its default branch.
+        next = { ...next, store: { ...next.store, defaultBranch: next.store.defaultBranch ?? "main", files: { ...next.store.files, [action.path]: action.content } } };
         break;
     }
   }

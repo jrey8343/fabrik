@@ -20,11 +20,12 @@ import {
   kitNamesEnvironment,
   oldAccountsNotes,
   type ProductState,
+  type RunStoreState,
   type SetupAction,
   planSetup,
   setupPaths,
 } from "./plan.ts";
-import { pinCaller } from "./shims.ts";
+import { pinCaller, scheduleIn } from "./shims.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
 let kit: SetupKit;
@@ -1387,14 +1388,15 @@ describe("The fabrik-runs store, the opt-in step for Run records and the Weekly 
     expect(storeWritten(actions, ".github/dependabot.yml")).toBe(kit.templates.dependabot);
   });
 
-  it("creates a read-only service account for the Fabrik App vault, stored as an Actions secret on the store (ADR-0004)", () => {
+  it("creates a read-only service account for the Fabrik App vault, stored in the store's fabrik environment (ADR-0004)", () => {
     const { actions } = planSetup(aCleanProduct(), kit, operator);
 
     expect(actions).toContainEqual({
       kind: "create-service-account",
-      name: "fabrik-jrey8343-fabrik-runs-push",
+      name: "fabrik-jrey8343-fabrik-runs-push-env",
       vaults: ["Fabrik App"],
       secret: "FABRIK_OP_PUSH_TOKEN",
+      environment: "fabrik",
       repo: "jrey8343/fabrik-runs",
     });
   });
@@ -1431,7 +1433,7 @@ describe("The fabrik-runs store, the opt-in step for Run records and the Weekly 
   });
 
   it("never makes a public store private: it tells the Operator, and changes nothing there", () => {
-    const store = { exists: true, private: false, files: {}, secrets: [] };
+    const store = { exists: true, private: false, defaultBranch: "main", files: {}, secrets: [], environment: null };
 
     const plan = planSetup(aCleanProduct({ store }), kit, operator);
 
@@ -1442,9 +1444,11 @@ describe("The fabrik-runs store, the opt-in step for Run records and the Weekly 
   it("repairs only what a private store lacks", () => {
     const clean = aCleanProduct();
     const setUp = afterApplying(clean, planSetup(clean, kit, operator));
-    const lostSecret = { ...setUp, store: { ...setUp.store, secrets: [] } };
+    const lostSecret = { ...setUp, store: { ...setUp.store, environment: { ...setUp.store.environment!, secrets: [] } } };
+    const lostRule = { ...setUp, store: { ...setUp.store, environment: { ...setUp.store.environment!, rules: [] } } };
 
     expect(storeActions(lostSecret)).toEqual(["create-service-account"]);
+    expect(storeActions(lostRule)).toEqual(["hold-environment"]);
   });
 
   it("moves the Weekly summary's schedule and the Kit config's time_zone when the Operator gives a new time zone, and touches nothing else", () => {
@@ -1496,6 +1500,221 @@ describe("The fabrik-runs store, the opt-in step for Run records and the Weekly 
 
     expect(plan.actions.filter((a) => a.kind === "create-run-store" || a.kind === "write-store-file")).toEqual([]);
     expect(plan.notes.join("\n")).toContain("Mars/Olympus_Mons");
+  });
+});
+
+describe("The store's one token, the push account's, in the store's own fabrik environment (ADR-0004)", () => {
+  const operator = { timeZone: "Australia/Sydney" };
+  const STORE = "jrey8343/fabrik-runs";
+  const STORE_CALLER = ".github/workflows/weekly-summary.yml";
+  const TOKEN = "FABRIK_OP_PUSH_TOKEN";
+  const COMMAND = "curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
+  const STAYS = `jrey8343/fabrik-runs: The repo-level Actions secret FABRIK_OP_PUSH_TOKEN stays for now, since the caller workflow setup found there pins no Kit that names the fabrik environment. Once setup has written the one that does, run setup again and it deletes it: ${COMMAND}`;
+  const OLD_ACCOUNT =
+    "jrey8343/fabrik-runs: Once the repo-level secret is deleted, delete the old service account fabrik-jrey8343-fabrik-runs-push on 1Password's site. Its token still works until you do, though it sits nowhere on GitHub.";
+  const NEW_ACCOUNT: SetupAction = {
+    kind: "create-service-account",
+    name: "fabrik-jrey8343-fabrik-runs-push-env",
+    vaults: ["Fabrik App"],
+    secret: TOKEN,
+    environment: "fabrik",
+    repo: STORE,
+  };
+  /** The store's caller workflow as Setup writes it at a release, in the Operator's time zone. */
+  const storeCallerAt = (release: string) => pinCaller(scheduleIn(kit.templates.storeCaller, operator.timeZone), release);
+  /** A fabrik environment held to this branch, with these secrets. */
+  const heldTo = (branch: string, secrets: readonly string[] = []): EnvironmentState => ({ branches: "selected", rules: [{ id: 1, name: branch, type: "branch" }], secrets });
+  /** A private store with commits on its default branch, `trunk`, and Setup's Dependabot entry, then the overrides. */
+  const aStore = (overrides: Partial<RunStoreState> = {}): RunStoreState => ({
+    exists: true,
+    private: true,
+    defaultBranch: "trunk",
+    files: { [STORE_CALLER]: storeCallerAt("v1.4.2"), ".github/dependabot.yml": kit.templates.dependabot },
+    secrets: [],
+    environment: null,
+    ...overrides,
+  });
+  /** A Product repo that is set up, its own environment held and holding its three tokens and its Kit config the Operator's time zone, beside this store. */
+  const beside = (store: RunStoreState): ProductState => {
+    const clean = aCleanProduct();
+    return { ...afterApplying(clean, planSetup(clean, kit, operator)), store };
+  };
+  /** The steps the plan has for the store, in the plan's order. */
+  const ofTheStore = (actions: readonly SetupAction[]) => actions.filter((a) => "repo" in a && a.repo === STORE);
+  const kinds = (actions: readonly SetupAction[]) => actions.map((a) => a.kind);
+
+  it("for a store on an earlier major whose token sits at repo level, holds the store's environment to the store's own default branch, makes the -env account in it, rewrites the store's caller, deletes nothing, and says the repo-level secret stays until Setup runs again", () => {
+    const onTheKit = aStore({ files: { [STORE_CALLER]: storeCallerAt("v0.9.1"), ".github/dependabot.yml": kit.templates.dependabot }, secrets: [TOKEN] });
+
+    const { actions, notes } = planSetup(beside(onTheKit), kit, operator);
+
+    expect(ofTheStore(actions)).toEqual([
+      { kind: "hold-environment", environment: "fabrik", branch: "trunk", found: null, repo: STORE },
+      { kind: "write-store-file", repo: STORE, path: STORE_CALLER, content: storeCallerAt("v1.4.2"), why: expect.any(String) as unknown },
+      NEW_ACCOUNT,
+    ]);
+    expect(notes).toContain(STAYS);
+    expect(notes).not.toContain(OLD_ACCOUNT);
+  });
+
+  it("on the next run, which finds the store's caller at Setup's release, deletes the store's repo-level token and names the old account, and makes no new one", () => {
+    const moved = aStore({ secrets: [TOKEN, "ANOTHER"], environment: heldTo("trunk", [TOKEN]) });
+
+    const { actions, notes } = planSetup(beside(moved), kit, operator);
+
+    expect(actions).toEqual([
+      { kind: "delete-repo-secret", secret: TOKEN, account: "fabrik-jrey8343-fabrik-runs-push", environment: "fabrik", branch: "trunk", repo: STORE },
+    ]);
+    expect(notes).toContain(OLD_ACCOUNT);
+    expect(notes).not.toContain(STAYS);
+  });
+
+  it("plans the store's environment right after the Product repo's own, ahead of every other step, when both are to be held", () => {
+    const { actions } = planSetup(aCleanProduct({ store: aStore() }), kit, operator);
+
+    expect(actions.slice(0, 3).map((a) => [a.kind, "repo" in a ? a.repo : undefined])).toEqual([
+      ["hold-environment", undefined],
+      ["hold-environment", STORE],
+      ["write-file", undefined],
+    ]);
+    expect(actions[1]).toEqual({ kind: "hold-environment", environment: "fabrik", branch: "trunk", found: null, repo: STORE });
+  });
+
+  it("plans the store's environment as the plan's first step when the Product repo's own is held, naming what it lets through as found", () => {
+    const everyBranch = aStore({ environment: { branches: "all", rules: [], secrets: [TOKEN] } });
+    const namesTheProductsBranch = aStore({ environment: heldTo("main", [TOKEN]) });
+
+    expect(planSetup(beside(everyBranch), kit, operator).actions).toEqual([
+      { kind: "hold-environment", environment: "fabrik", branch: "trunk", found: { branches: "all", rules: [] }, repo: STORE },
+    ]);
+    // The store's rule names the store's default branch, whatever the Product repo's is.
+    expect(planSetup(beside(namesTheProductsBranch), kit, operator).actions.map(describeAction)).toEqual([
+      "hold the fabrik environment in jrey8343/fabrik-runs to trunk alone: rules main → trunk",
+    ]);
+  });
+
+  it("plans the deletion after the step that stores the token in the store's environment, when that environment lacks it", () => {
+    const lacking = aStore({ secrets: [TOKEN], environment: heldTo("trunk") });
+
+    const { actions, notes } = planSetup(beside(lacking), kit, operator);
+
+    expect(kinds(actions)).toEqual(["create-service-account", "delete-repo-secret"]);
+    expect(ofTheStore(actions)).toHaveLength(2);
+    expect(actions.map(describeAction)).toEqual([
+      'create the read-only service account "fabrik-jrey8343-fabrik-runs-push-env" (reads "Fabrik App") and store it as FABRIK_OP_PUSH_TOKEN in the fabrik environment in jrey8343/fabrik-runs',
+      "delete the repo-level Actions secret FABRIK_OP_PUSH_TOKEN in jrey8343/fabrik-runs: the Kit trunk pins reads the fabrik environment's",
+    ]);
+    expect(notes).toContain(OLD_ACCOUNT);
+  });
+
+  /** A store whose environment holds the token, with it at repo level too, and this caller workflow on its default branch. */
+  const withStoreCaller = (caller: string | null) =>
+    planSetup(beside(aStore({ files: { [STORE_CALLER]: caller, ".github/dependabot.yml": kit.templates.dependabot }, secrets: [TOKEN], environment: heldTo("trunk", [TOKEN]) })), kit, operator);
+  const deletions = (actions: readonly SetupAction[]) => actions.filter((a) => a.kind === "delete-repo-secret");
+
+  it.each([
+    ["Setup's own release", "v1.4.2"],
+    ["an earlier release of Setup's major", "v1.0.0"],
+    ["a later release of Setup's major, as Dependabot bumps it", "v1.6.0"],
+    ["a later major", "v2.0.0"],
+  ])("counts a store whose caller pins %s as naming the environment, and deletes", (_, release) => {
+    const { actions, notes } = withStoreCaller(storeCallerAt(release));
+
+    expect(deletions(actions)).toHaveLength(1);
+    expect(notes).toContain(OLD_ACCOUNT);
+    expect(notes).not.toContain(STAYS);
+  });
+
+  it.each<[string, () => string | null]>([
+    ["has no caller workflow", () => null],
+    ["pins an earlier major", () => storeCallerAt("v0.9.1")],
+    ["pins two releases", () => storeCallerAt("v1.4.2").replace("tick-check.yml@v1.4.2", "tick-check.yml@v1.4.3")],
+    ["names Fabrik in no uses: line", () => "on: push\njobs: {}\n"],
+  ])("doesn't count a store that %s, deletes nothing though this run writes its caller, and says the repo-level secret stays until Setup runs again", (_, caller) => {
+    const { actions, notes } = withStoreCaller(caller());
+
+    expect(kinds(actions)).toEqual(["write-store-file"]);
+    expect(notes).toContain(STAYS);
+    expect(notes).not.toContain(OLD_ACCOUNT);
+  });
+
+  it("judges by the store's caller as the run first read it, in a plan made after the run wrote it: it deletes nothing, and still says the repo-level secret stays", () => {
+    // What a run that began with the store's caller on an earlier major, or with none, reads once it has applied its plan.
+    const afterTheRun = beside(aStore({ secrets: [TOKEN], environment: heldTo("trunk", [TOKEN]) }));
+
+    for (const storeCallerAtStart of [storeCallerAt("v0.9.1"), null]) {
+      const { actions, notes } = planSetup(afterTheRun, kit, operator, { storeCallerAtStart });
+
+      expect(actions).toEqual([]);
+      expect(notes).toContain(STAYS);
+      expect(notes).not.toContain(OLD_ACCOUNT);
+    }
+    // A run that found the new caller there to begin with deletes, in whichever of its plans still finds the secret.
+    expect(kinds(planSetup(afterTheRun, kit, operator, { storeCallerAtStart: storeCallerAt("v1.4.2") }).actions)).toEqual(["delete-repo-secret"]);
+  });
+
+  it("says nothing of a repo-level secret for a store that has none, whatever its caller pins", () => {
+    for (const release of ["v1.4.2", "v0.9.1"]) {
+      const store = aStore({ files: { [STORE_CALLER]: storeCallerAt(release), ".github/dependabot.yml": kit.templates.dependabot }, secrets: ["ANOTHER"], environment: heldTo("trunk", [TOKEN]) });
+
+      const { actions, notes } = planSetup(beside(store), kit, operator);
+
+      expect(deletions(actions)).toEqual([]);
+      expect(notes.filter((note) => /repo-level|old service account/.test(note))).toEqual([]);
+    }
+  });
+
+  it.each<[string, Partial<RunStoreState>, { timeZone?: string }]>([
+    ["without the Operator's time zone", {}, {}],
+    ["for a public store", { private: false }, operator],
+  ])("plans nothing of the store %s, and says nothing of its token, though it sits at repo level in a store with no environment", (_, overrides, answers) => {
+    const clean = aCleanProduct();
+    const product = afterApplying(clean, planSetup(clean, kit, answers));
+    const store = aStore({ files: { [STORE_CALLER]: storeCallerAt("v0.9.1") }, secrets: [TOKEN], ...overrides });
+
+    const { actions, notes } = planSetup({ ...product, store }, kit, answers);
+
+    expect(actions).toEqual([]);
+    expect(notes.filter((note) => /repo-level|old service account|environment/.test(note))).toEqual([]);
+  });
+
+  it("for a store this run makes, plans its files, then its environment, held to the default branch its first commit makes, then its token in it, and never a repo-level secret", () => {
+    const { actions, notes } = planSetup(aCleanProduct(), kit, operator);
+
+    expect(kinds(actions.slice(0, 2))).toEqual(["hold-environment", "write-file"]);
+    expect(actions.filter((a) => a.kind === "create-run-store" || ofTheStore([a]).length > 0)).toEqual([
+      { kind: "create-run-store", repo: STORE, private: true },
+      expect.objectContaining({ kind: "write-store-file", path: STORE_CALLER }),
+      expect.objectContaining({ kind: "write-store-file", path: ".github/dependabot.yml" }),
+      // No branch yet: the store has none until its first file is committed, so applying the step reads its name.
+      { kind: "hold-environment", environment: "fabrik", branch: null, found: null, repo: STORE },
+      NEW_ACCOUNT,
+    ]);
+    expect(notes.filter((note) => note.startsWith(STORE))).toEqual([]);
+  });
+
+  it("is said in the README: the last sentence of the fabrik environment's bullet, and the last of the paragraph on a repo's move", () => {
+    const OF_ITS_OWN = " `fabrik-runs` gets a `fabrik` environment of its own, held to its own default branch, for its one token, the push account's.";
+    const THE_SAME_WAY =
+      " The store's one token moves the same way: on the first run that sets the store up at the major, and on the next, which finds its new caller workflow and deletes the repo-level secret, naming the old `fabrik-<owner>-fabrik-runs-push` account.";
+    const lines = readFileSync(resolve(KIT_DIR, "README.md"), "utf8").split("\n");
+
+    const bullet = lines.find((line) => line.startsWith("- **The `fabrik` environment**")) ?? "";
+    expect(bullet.slice(-OF_ITS_OWN.length)).toBe(OF_ITS_OWN);
+    // Straight after the sentences #929 wrote, which end on the stop with no fallback.
+    expect(bullet.slice(0, -OF_ITS_OWN.length)).toMatch(/there is no fallback to repo-level secrets\.$/);
+    const paragraph = lines.find((line) => line.startsWith("A repo already on the Kit moves its tokens")) ?? "";
+    expect(paragraph.slice(-THE_SAME_WAY.length)).toBe(THE_SAME_WAY);
+    // Straight after the sentences #931 wrote, which end on 1Password's limit.
+    expect(paragraph.slice(0, -THE_SAME_WAY.length)).toMatch(/against 1Password's limit of 100\.$/);
+  });
+
+  it("is held, with its token in it, once the plan for a new store is applied, so the next run plans nothing for the store", () => {
+    const clean = aCleanProduct();
+    const setUp = afterApplying(clean, planSetup(clean, kit, operator));
+
+    expect(setUp.store).toMatchObject({ exists: true, defaultBranch: "main", secrets: [], environment: heldTo("main", [TOKEN]) });
+    expect(planSetup(setUp, kit, operator).actions).toEqual([]);
   });
 });
 

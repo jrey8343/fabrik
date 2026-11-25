@@ -47,7 +47,7 @@ import {
   setupBranch,
   switchToSetupBranch,
 } from "./setupBranch.ts";
-import { pinCaller } from "./shims.ts";
+import { pinCaller, STORE_CALLER_PATH } from "./shims.ts";
 import { WIZARD_REPORT_ENV, WIZARD_SECOND_SUBSCRIPTION_ENV, type WizardRun } from "./wizard.ts";
 
 export interface SetupIo {
@@ -272,7 +272,8 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
       gapsAfter = wizardGaps(now, answers, appItems);
       readAfter = { protection: now.protection, appItems };
       return {
-        plan: planSetup(now, kit, answers, { wroteStarter }),
+        // The run has written the store's caller by now, and the store's repo-level secret goes only on a run that found the new one there.
+        plan: planSetup(now, kit, answers, { wroteStarter, storeCallerAtStart: state.store.files[STORE_CALLER_PATH] ?? null }),
         readiness: readinessOf({
           repo: repoName,
           report: wizardReport,
