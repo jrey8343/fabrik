@@ -31,7 +31,7 @@ import { runEventFrom, whyNothingFor } from "./github/handOff.ts";
 import { gatherSnapshot, readKitConfigSources } from "./github/snapshot.ts";
 import { callerWorkflowPath, checkKit } from "./kit/caller.ts";
 import { resolveKitConfig, timeZoneNote } from "./kit/config.ts";
-import { claimLanding, claimTargetOf, jobFailureReport, type Landing, type LandingFailure, landingFailedOf, landingFailureMention, landingFailureReport, pushLanding } from "./kit/landingFailure.ts";
+import { claimLanding, claimTargetOf, eventIssueOf, jobFailureReport, type Landing, type LandingFailure, landingFailedOf, landingFailureMention, landingFailureReport, pushLanding } from "./kit/landingFailure.ts";
 import { type Needs, pushJobInput, type PushJobInput } from "./kit/pushJob.ts";
 import { readEvidenceBundle, RETRO_EVIDENCE_FILE } from "./kit/retroEvidence.ts";
 import { replayResultsIn, resultsReady, withLandingFailed } from "./kit/replay.ts";
@@ -89,14 +89,9 @@ async function loopEvent(repo: Repo, config: KitConfig, github: GitHub): Promise
   const needsText = process.env["FABRIK_NEEDS"];
   if (needsText === undefined || needsText === "") return actionsEvent;
 
-  const eventIssue = (payload["issue"] as { number?: unknown } | undefined)?.number;
   // The reply that routed this run, read from the Actions event, which no agent can rewrite.
   const eventComment = actionsEvent.event?.kind === "issue-comment-created" ? actionsEvent.event.comment : null;
-  const input = pushJobInput(
-    JSON.parse(needsText) as Needs,
-    typeof eventIssue === "number" ? eventIssue : null,
-    eventComment,
-  );
+  const input = pushJobInput(JSON.parse(needsText) as Needs, eventIssueOf(payload), eventComment);
   // The agent job's artifacts, whichever it left (a result and bundle, or a failure report), as the push job downloads them.
   const agentDir = process.env["FABRIK_AGENT_DIR"] || join(required("RUNNER_TEMP"), "agent");
   switch (input.kind) {
@@ -375,10 +370,8 @@ async function thisLanding(): Promise<Landing | null> {
     const payload = JSON.parse(await readFile(required("GITHUB_EVENT_PATH"), "utf8")) as Record<string, unknown>;
     // A claim a review started is on its PR, which the event names in place of an issue, or on a hand-off's run its inputs do.
     if (claim) return claimLanding(claimTargetOf(process.env["GITHUB_EVENT_NAME"] ?? "", payload), thisRunUrl());
-    const eventIssue = (payload["issue"] as { number?: unknown } | undefined)?.number;
-    const issue = typeof eventIssue === "number" ? eventIssue : null;
     // The comment's id only tells a Design reply's run from another; it never changes where a failure is said.
-    return pushLanding(pushJobInput(JSON.parse(needsText!) as Needs, issue), thisRunUrl());
+    return pushLanding(pushJobInput(JSON.parse(needsText!) as Needs, eventIssueOf(payload)), thisRunUrl());
   } catch (error) {
     console.log(`::warning title=Landing unknown::${error instanceof Error ? error.message : String(error)}`);
     return null;

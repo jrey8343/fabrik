@@ -24,7 +24,7 @@ export async function apply(run: Run, action: SetupAction, productDir: string, r
   switch (action.kind) {
     case "hold-environment": {
       const { environment } = action;
-      const repoName = action.repo ?? `${repo.owner}/${repo.name}`;
+      const repoName = repoOf(action, repo);
       // A repo that had no default branch when Setup planned has one once its first file is committed: its name is read before anything is made.
       const branch = action.branch ?? (await defaultBranchNow(run, cwd, repoName, environment));
       const path = `repos/${repoName}/environments/${environment}`;
@@ -69,7 +69,7 @@ export async function apply(run: Run, action: SetupAction, productDir: string, r
       return;
     case "create-service-account": {
       const { environment } = action;
-      const repoName = action.repo ?? `${repo.owner}/${repo.name}`;
+      const repoName = repoOf(action, repo);
       // The rule must name the default branch of the repo that holds the environment: another repo's own, as GitHub has it now, never the Product repo's.
       const branch = action.repo === undefined ? repo.defaultBranch : await defaultBranchNow(run, cwd, action.repo, environment);
       // The environment is read first, its setting and its rules, whether or not this run changed it: one that isn't held gives its secrets to other refs (#846).
@@ -81,13 +81,13 @@ export async function apply(run: Run, action: SetupAction, productDir: string, r
       // straight into the environment's secret, on gh's stdin, and is never printed.
       const grants = action.vaults.flatMap((vault) => ["--vault", `${vault}:read_items`]);
       const token = (await ok(run, "op", ["service-account", "create", action.name, ...grants, "--raw"], { cwd })).trim();
-      const where = action.repo === undefined ? [] : ["--repo", action.repo];
+      const where = toldTheRepo(action);
       await ok(run, "gh", ["secret", "set", action.secret, "--env", environment, ...where], { cwd, input: token });
       return;
     }
     case "delete-repo-secret":
       // Named with no --env, so only ever the repo-level one: the environment's secret of the same name stays.
-      await ok(run, "gh", ["secret", "delete", action.secret, ...(action.repo === undefined ? [] : ["--repo", action.repo])], { cwd });
+      await ok(run, "gh", ["secret", "delete", action.secret, ...toldTheRepo(action)], { cwd });
       return;
     case "create-run-store":
       await ok(
@@ -134,6 +134,16 @@ export async function apply(run: Run, action: SetupAction, productDir: string, r
       return;
     }
   }
+}
+
+/** The repo a step is carried out on, as `owner/name`: the one it names, or the Product repo. */
+function repoOf(action: { readonly repo?: string }, product: ProductState["repo"]): string {
+  return action.repo ?? `${product.owner}/${product.name}`;
+}
+
+/** What tells `gh secret` the repo a step names: nothing for the Product repo, which is the checkout's own. */
+function toldTheRepo(action: { readonly repo?: string }): string[] {
+  return action.repo === undefined ? [] : ["--repo", action.repo];
 }
 
 /**

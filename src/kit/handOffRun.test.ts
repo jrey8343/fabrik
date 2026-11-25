@@ -9,6 +9,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { aReview } from "../__fixtures__/handOffReview.ts";
 import { tempDir } from "../__fixtures__/skillsArchive.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
@@ -18,17 +19,7 @@ const CALLER_PATH = ".github/workflows/fabrik.yml";
 const REVIEW_READ = "GET /repos/acme/shop/pulls/45/reviews/123";
 
 /** What GitHub's REST API answers for review 123 on PR #45: the Operator's Request changes, the repo's owner being the Operator, unless a test says otherwise. */
-function aReview(over: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    id: 123,
-    node_id: "PRR_kwDO123",
-    user: { login: "acme", type: "User" },
-    body: "Use the parking copy.",
-    state: "CHANGES_REQUESTED",
-    pull_request_url: "https://api.github.com/repos/acme/shop/pulls/45",
-    ...over,
-  };
-}
+const theOwnersReview = (over: Record<string, unknown> = {}) => aReview({ user: { login: "acme", type: "User" }, ...over });
 
 let server: Server | null = null;
 afterEach(() => {
@@ -111,10 +102,10 @@ const NOTHING = "The hand-off names review 123 on PR #45, which isn't a submitte
 describe("The Kit job on a review's hand-off", () => {
   it.each([
     ["that GitHub answers 404 for", { status: 404, body: { message: "Not Found" } }],
-    ["that the Operator dismissed", { status: 200, body: aReview({ state: "DISMISSED" }) }],
-    ["that is still pending", { status: 200, body: aReview({ state: "PENDING" }) }],
-    ["that anyone but the Operator wrote", { status: 200, body: aReview({ user: { login: "someone-else", type: "User" } }) }],
-    ["that is of another pull request", { status: 200, body: aReview({ pull_request_url: "https://api.github.com/repos/acme/shop/pulls/46" }) }],
+    ["that the Operator dismissed", { status: 200, body: theOwnersReview({ state: "DISMISSED" }) }],
+    ["that is still pending", { status: 200, body: theOwnersReview({ state: "PENDING" }) }],
+    ["that anyone but the Operator wrote", { status: 200, body: theOwnersReview({ user: { login: "someone-else", type: "User" } }) }],
+    ["that is of another pull request", { status: 200, body: theOwnersReview({ pull_request_url: "https://api.github.com/repos/acme/shop/pulls/46" }) }],
   ])("reads the review with its own read-only token, and for one %s logs that there is nothing to do and routes nowhere", async (_case, review) => {
     const github = await gitHubAnswering(review);
 
@@ -132,7 +123,7 @@ describe("The Kit job on a review's hand-off", () => {
     ["no review input", { pull_request: "45" }],
     ["no inputs, as a manual one's", null],
   ])("doesn't act on a dispatch with %s, as on any event the Loop ignores, and asks GitHub nothing", async (_case, inputs) => {
-    const github = await gitHubAnswering({ status: 200, body: aReview() });
+    const github = await gitHubAnswering({ status: 200, body: theOwnersReview() });
 
     const { status, log, outputs } = await runJob(KIT_JOB, inputs, { GH_TOKEN: "ghs_kit_job", GITHUB_API_URL: github.url });
 
@@ -155,7 +146,7 @@ describe("The claim job and the push job on a review's hand-off", () => {
     ["push", PUSH],
   ])("the %s job reads the review itself, with its own token, and plans nothing when its read gives nothing, whatever the Kit job read", async (_job, env) => {
     // Dismissed since the Kit job read it.
-    const github = await gitHubAnswering({ status: 200, body: aReview({ state: "DISMISSED" }) });
+    const github = await gitHubAnswering({ status: 200, body: theOwnersReview({ state: "DISMISSED" }) });
 
     const { status, summary } = await runJob(LOOP, HAND_OFF, { ...env, GITHUB_API_URL: github.url });
 

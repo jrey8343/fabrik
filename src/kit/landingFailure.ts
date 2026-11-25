@@ -148,11 +148,18 @@ export function pushLanding(input: PushJobInput, runUrl: string): Landing | null
  * pull request. Null when the event names none.
  */
 export function claimTargetOf(eventName: string, payload: Record<string, unknown>): number | null {
-  const numberOf = (named: unknown): number | null => {
-    const number = (named as { number?: unknown } | null | undefined)?.number;
-    return typeof number === "number" ? number : null;
-  };
-  return numberOf(payload["issue"]) ?? numberOf(payload["pull_request"]) ?? handOffFrom(eventName, payload)?.pullRequest ?? null;
+  return eventIssueOf(payload) ?? numberNamed(payload["pull_request"]) ?? handOffFrom(eventName, payload)?.pullRequest ?? null;
+}
+
+/** The issue an Actions event names, by its number, or null when it names none. */
+export function eventIssueOf(payload: Record<string, unknown>): number | null {
+  return numberNamed(payload["issue"]);
+}
+
+/** The number of what an Actions event names, an issue or a pull request, or null when it names none there. */
+function numberNamed(named: unknown): number | null {
+  const number = (named as { number?: unknown } | null | undefined)?.number;
+  return typeof number === "number" ? number : null;
 }
 
 /** What the claim job lands: the claim of the issue its run is for, when the event names one. */
