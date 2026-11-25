@@ -34,6 +34,19 @@ describe("Setting up a clean Product repo", () => {
     expect(checkCallerWorkflow(caller ?? "")).toEqual({ ok: true, release: "v1.4.2" });
   });
 
+  // #927: a review's own run starts the caller workflow on the default branch, which reads the tokens there.
+  it("writes a caller workflow that a review's hand-off can start, and that still passes the three tokens by name", () => {
+    const caller = written(planSetup(aCleanProduct(), kit).actions, ".github/workflows/fabrik.yml") ?? "";
+
+    expect(caller).toMatch(/^ {2}workflow_dispatch:\n {4}inputs:\n {6}pull_request:\n(?: {8}.*\n)+ {6}review:\n/m);
+    expect(caller).toContain(
+      "    secrets:\n" +
+        "      OP_AGENT_TOKEN: ${{ secrets.FABRIK_OP_AGENT_TOKEN }}\n" +
+        "      OP_IMPLEMENT_TOKEN: ${{ secrets.FABRIK_OP_IMPLEMENT_TOKEN }}\n" +
+        "      OP_PUSH_TOKEN: ${{ secrets.FABRIK_OP_PUSH_TOKEN }}\n",
+    );
+  });
+
   it("adds the SessionStart hook entry and switches the skills plugin off in .claude/settings.json", () => {
     const { actions } = planSetup(aCleanProduct(), kit);
 
