@@ -646,6 +646,13 @@ describe("Service accounts, their tokens the secrets of the fabrik environment (
     expect(actions.findIndex((a) => a.kind === "create-service-account")).toBeGreaterThan(0);
   });
 
+  it("is said in the README's list of what Setup does, in the 1Password bullet", () => {
+    const BULLET =
+      "- **1Password** (ADR-0004): the `Fabrik`, `Fabrik App` and `Fabrik Sandbox · <repo>` vaults when they're missing, and three read-only service accounts with no expiry, `fabrik-<owner>-<repo>-agent-env` (reads `Fabrik`), `-implement-env` (reads `Fabrik` and the Sandbox vault) and `-push-env` (reads `Fabrik App`), stored as the secrets `FABRIK_OP_AGENT_TOKEN`, `FABRIK_OP_IMPLEMENT_TOKEN` and `FABRIK_OP_PUSH_TOKEN` of the `fabrik` environment, straight from 1Password and never as repo-level Actions secrets. A token the environment lacks is missing, even when a repo-level secret carries its name.";
+
+    expect(readFileSync(resolve(KIT_DIR, "README.md"), "utf8").split("\n")).toContain(BULLET);
+  });
+
   it("names each step with its account, the vaults it reads, its secret and the fabrik environment", () => {
     expect(accounts(aCleanProduct()).map(describeAction)).toEqual([
       'create the read-only service account "fabrik-acme-clinic-agent-env" (reads "Fabrik") and store it as FABRIK_OP_AGENT_TOKEN in the fabrik environment',
