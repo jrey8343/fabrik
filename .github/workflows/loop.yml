@@ -37,6 +37,13 @@
 # replay's own push job (ADR-0009's addendum), writes both arms to fabrik-runs
 # and lands the run on the replay issue. The push job never runs on it.
 #
+# A pull request review's run is the one GitHub starts as the pull request's
+# merge ref, never as the default branch, so the `fabrik` environment refuses
+# it (ADR-0004). It runs the hand-off job alone: no Kit job and no token. That
+# job starts the caller workflow on the default branch by workflow_dispatch,
+# naming the pull request and the review, and the Kit reads the review from
+# GitHub in that run before it acts (src/github/handOff.ts).
+#
 # The steps these jobs share are composite actions in .github/actions/, used
 # from the Kit's own checkout at kit/: prepare-agent readies an agent job, and
 # run-loop runs the Loop as the Fabrik App.
@@ -60,6 +67,8 @@ permissions: {}
 jobs:
   kit:
     name: Kit
+    # Never on a review's own run, which runs the hand-off job alone: every other job needs this one.
+    if: github.event_name != 'pull_request_review'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -255,6 +264,31 @@ jobs:
       # says so by failing, with no line.
       - name: ${{ steps.route.outputs.kit-said }}
         run: "true"
+
+  review-hand-off:
+    name: Hand the review to the default branch
+    # A review's run is the one GitHub starts as the pull request's merge ref, which the
+    # `fabrik` environment refuses (ADR-0004). So it reads no token and runs no Kit job:
+    # it starts the caller workflow on the default branch, naming the pull request and
+    # the review, and that run reads the review from GitHub before it acts on it.
+    if: github.event_name == 'pull_request_review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Start the caller workflow on the default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PULL_REQUEST: ${{ github.event.pull_request.number }}
+          REVIEW: ${{ github.event.review.id }}
+        run: |
+          set -euo pipefail
+          path="${WORKFLOW_REF%%@*}"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/${path##*/}/dispatches" \
+            -f ref="$DEFAULT_BRANCH" -f "inputs[pull_request]=$PULL_REQUEST" -f "inputs[review]=$REVIEW"
 
   triage:
     name: Triage
