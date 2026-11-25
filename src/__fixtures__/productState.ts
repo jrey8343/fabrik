@@ -16,6 +16,7 @@ export function aCleanProduct(overrides: Partial<ProductState> = {}): ProductSta
     mergeGate: null,
     store: noStore(),
     readyForAgent: 0,
+    workflows: {},
     ...overrides,
   };
 }

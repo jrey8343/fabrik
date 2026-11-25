@@ -11,12 +11,12 @@
 import type { Repo } from "../github/client.ts";
 import { checkCallerWorkflow, fabrikUsesIn, KIT_REPO } from "./caller.ts";
 
-type Level = "none" | "read" | "write";
+export type Level = "none" | "read" | "write";
 
 const RANK: Readonly<Record<Level, number>> = { none: 0, read: 1, write: 2 };
 
 /** A `permissions:` value: `read-all`/`write-all` as `all`, else each scope's level, `{}` as none. */
-interface Permissions {
+export interface Permissions {
   readonly all: Level | null;
   readonly scopes: ReadonlyMap<string, Level>;
 }
@@ -35,13 +35,13 @@ interface Workflow {
 }
 
 /** One line of a workflow as the check reads it: how far it's indented, and its text with the indent and any comment dropped. */
-interface Line {
+export interface Line {
   readonly indent: number;
   readonly body: string;
 }
 
 /** A workflow text as the check reads it, with every comment and blank line dropped. */
-function linesOf(text: string): Line[] {
+export function linesOf(text: string): Line[] {
   return text.split("\n").flatMap((raw) => {
     const line = raw.replace(/\s+#.*$/, "").trimEnd();
     if (line.trim() === "" || line.trim().startsWith("#")) return [];
@@ -49,7 +49,7 @@ function linesOf(text: string): Line[] {
   });
 }
 
-function unquoted(value: string): string {
+export function unquoted(value: string): string {
   return value.trim().replace(/^(["'])(.*)\1$/, "$2");
 }
 
@@ -59,7 +59,7 @@ function levelOf(value: string): Level {
 }
 
 /** A `permissions:` value from its inline form (`{}`, `read-all`, `{ contents: read }`) or its block lines. */
-function permissionsOf(inline: string, block: readonly Line[]): Permissions {
+export function permissionsOf(inline: string, block: readonly Line[]): Permissions {
   const scopes = new Map<string, Level>();
   const value = unquoted(inline);
   if (value === "read-all" || value === "write-all") return { all: value === "read-all" ? "read" : "write", scopes };
@@ -105,7 +105,7 @@ export function workflowOf(text: string): Workflow {
 }
 
 /** The lines nested under the line at `at`: every following line indented more than it. */
-function childrenOf(lines: readonly Line[], at: number): Line[] {
+export function childrenOf(lines: readonly Line[], at: number): Line[] {
   const parent = lines[at]!;
   const children: Line[] = [];
   for (let i = at + 1; i < lines.length && lines[i]!.indent > parent.indent; i++) children.push(lines[i]!);

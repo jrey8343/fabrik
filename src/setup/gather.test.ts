@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { type Answer, aReadyOperator, fakeCommands, HEAD_SHA } from "../__fixtures__/setupCommands.ts";
 import { tempDir } from "../__fixtures__/skillsArchive.ts";
-import { gatherDeployments, gatherEnvironment, gatherState, readEnvironmentPolicy } from "./gather.ts";
+import { gatherDeployments, gatherEnvironment, gatherState, gatherWorkflows, readEnvironmentPolicy } from "./gather.ts";
 
 const REPO = { owner: "acme", name: "clinic", defaultBranch: "main", inOrganization: false };
 const page = (n: number) => `gh api repos/acme/clinic/deployments?per_page=100&page=${n}`;
@@ -340,6 +340,36 @@ describe("Reading the caller workflow the default branch holds", () => {
     const { state } = await gathered();
 
     expect(state.defaultBranchCaller).toBeNull();
+  });
+});
+
+describe("Reading the checkout's workflows for Setup's report", () => {
+  it("reads each .yml and .yaml file directly in .github/workflows/, by its file's name, and nothing else", async () => {
+    const dir = await tempDir("setup-gather");
+    const workflows = join(dir, ".github/workflows");
+    await mkdir(join(workflows, "nested"), { recursive: true });
+    await mkdir(join(workflows, "folder.yml"));
+    await writeFile(join(workflows, "promote.yml"), "on: workflow_dispatch\n");
+    await writeFile(join(workflows, "dns-apply.yaml"), "on: [workflow_dispatch]\n");
+    await writeFile(join(workflows, "README.md"), "# not a workflow\n");
+    await writeFile(join(workflows, "deploy.yml.bak"), "on: workflow_dispatch\n");
+    await writeFile(join(workflows, "nested", "deeper.yml"), "on: workflow_dispatch\n");
+    await writeFile(join(dir, ".github", "elsewhere.yml"), "on: workflow_dispatch\n");
+
+    expect(await gatherWorkflows(dir)).toEqual({ "promote.yml": "on: workflow_dispatch\n", "dns-apply.yaml": "on: [workflow_dispatch]\n" });
+  });
+
+  it("gives none for a checkout with no .github/workflows/ folder", async () => {
+    expect(await gatherWorkflows(await tempDir("setup-gather"))).toEqual({});
+  });
+
+  it("is what gatherState gives as the Product state's workflows", async () => {
+    const dir = await tempDir("setup-gather");
+    await mkdir(join(dir, ".github/workflows"), { recursive: true });
+    await writeFile(join(dir, ".github/workflows/promote.yml"), "on: workflow_dispatch\n");
+    const commands = fakeCommands(aReadyOperator(dir));
+
+    expect((await gatherState(commands.run, dir, REPO, [], HEAD_SHA)).workflows).toEqual({ "promote.yml": "on: workflow_dispatch\n" });
   });
 });
 

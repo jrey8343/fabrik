@@ -4,8 +4,8 @@
 // with its default branch and its own fabrik environment.
 // With git it reads the caller workflow the default branch holds.
 // For Setup's report it reads production's environment too, when the Kit
-// config names one. It only reads.
-import { readFile } from "node:fs/promises";
+// config names one, and the checkout's workflows. It only reads.
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import { KIT_ENVIRONMENT } from "../kit/environment.ts";
@@ -60,8 +60,28 @@ export async function gatherState(
   ]);
   const readyForAgent = await gatherReadyForAgent(run, cwd, labels);
   const production = await gatherProduction(run, cwd, `${repo.owner}/${repo.name}`, files[KIT_CONFIG_PATH] ?? null);
-  return { repo, files, defaultBranchCaller, labels, secrets, environment, production, vaults, fabrikItems, protection, mergeGate, store, readyForAgent };
+  const workflows = await gatherWorkflows(productDir);
+  return { repo, files, defaultBranchCaller, labels, secrets, environment, production, vaults, fabrikItems, protection, mergeGate, store, readyForAgent, workflows };
 }
+
+/**
+ * The checkout's workflows, for Setup's report: each `.yml` or `.yaml` file
+ * directly in `.github/workflows/`, by its file's name, to its text, and none
+ * in a folder below it, as GitHub runs none there. The checkout is the
+ * default branch, or Setup's own branch built on it, which changes no
+ * workflow but the caller. A checkout with no such folder has none, and a
+ * file that can't be read is left out, as Setup never blocks on its report.
+ */
+export async function gatherWorkflows(productDir: string): Promise<Record<string, string>> {
+  const folder = join(productDir, WORKFLOWS_DIR);
+  const entries = await readdir(folder, { withFileTypes: true }).catch(() => []);
+  const names = entries.filter((entry) => entry.isFile() && /\.ya?ml$/.test(entry.name)).map((entry) => entry.name);
+  const read = await Promise.all(names.map(async (name) => [name, await readFile(join(folder, name), "utf8").catch(() => null)] as const));
+  return Object.fromEntries(read.filter((entry): entry is readonly [string, string] => entry[1] !== null));
+}
+
+/** Where GitHub reads a repo's workflows. */
+const WORKFLOWS_DIR = ".github/workflows";
 
 /**
  * Production's environment, for Setup's report: the one the checkout's Kit

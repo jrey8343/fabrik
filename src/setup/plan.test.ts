@@ -10,6 +10,7 @@ import { DEFAULT_KIT_CONFIG, resolveKitConfig } from "../kit/config.ts";
 import { aCleanProduct, afterApplying, aProtectedBranch } from "../__fixtures__/productState.ts";
 import { TRIAL_ACCEPTED_LABEL, TRIAL_PROBLEM_LABEL } from "../loop/labels.ts";
 import { describeAction } from "./apply.ts";
+import { prBody } from "./finish.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
 import {
   deleteRepoSecrets,
@@ -2461,5 +2462,151 @@ describe("Setup's report on a Product repo's own credentials", () => {
 
     expect(lines).toContain(BULLET);
     expect(lines[lines.indexOf(BULLET) - 1]).toMatch(/^- \*\*The `fabrik` environment\*\* \(ADR-0004\): /);
+  });
+});
+
+describe("Setup's report on each workflow a session can start that holds a role", () => {
+  const NONE_OF_ITS_OWN = "This repo holds no repo-level Actions secret of its own.";
+  const LISTING = (...held: readonly string[]) => JSON.stringify({ console: { app_id: 1234567, held_workflows: held } });
+  /** A workflow with these lines for its `on:`, then these lines under `jobs:`. */
+  const workflow = (on: readonly string[], jobs: readonly string[], top: readonly string[] = []) =>
+    ["name: Some workflow", ...on, ...top, "jobs:", ...jobs, ""].join("\n");
+  const DISPATCH = ["on:", "  workflow_dispatch:", "    inputs:", "      sha:", "        type: string"];
+  const PROMOTE = workflow(DISPATCH, ["  promote:", "    runs-on: ubuntu-latest", "    environment: production", "    steps:", "      - run: ./promote"]);
+  const DEPLOY = workflow(["on: [push, workflow_dispatch]"], [
+    "  deploy:",
+    "    runs-on: ubuntu-latest",
+    "    permissions:",
+    "      id-token: write",
+    "      contents: read",
+    "    environment:",
+    "      name: production",
+    "      url: https://clinic.example.com",
+  ]);
+  /** The report's lines after the one on the repo-level secrets, for a repo holding these workflows and this Kit config, or none. */
+  const onWorkflows = (workflows: Readonly<Record<string, string>>, config: string | null = null) =>
+    planSetup(aCleanProduct({ workflows, files: config === null ? {} : { ".fabrik/config.json": config } }), kit).report.slice(1);
+  const LISTED = (file: string, asks: string) =>
+    `\`${file}\` can be started by dispatch, and a job of it ${asks}. Kit config lists it in console.held_workflows, so the Console offers a tap for it.`;
+  const NOT_LISTED = (file: string, asks: string) =>
+    `\`${file}\` can be started by dispatch, and a job of it ${asks}. Kit config doesn't list it in console.held_workflows, so a session can start it with no tap of yours: if only you may start it, make it a Held workflow (README, "Held workflows").`;
+
+  it("says a workflow console.held_workflows lists is offered a tap, word for word", () => {
+    expect(onWorkflows({ "promote.yml": PROMOTE }, LISTING("promote.yml"))).toEqual([
+      "`promote.yml` can be started by dispatch, and a job of it names the environment `production`. Kit config lists it in console.held_workflows, so the Console offers a tap for it.",
+    ]);
+  });
+
+  it("says one it doesn't list can be started with no tap, word for word, and so for a repo with no console block", () => {
+    const LINE =
+      '`deploy.yml` can be started by dispatch, and a job of it asks for id-token: write and names the environment `production`. Kit config doesn\'t list it in console.held_workflows, so a session can start it with no tap of yours: if only you may start it, make it a Held workflow (README, "Held workflows").';
+
+    expect(onWorkflows({ "deploy.yml": DEPLOY }, LISTING("promote.yml"))).toEqual([LINE]);
+    expect(onWorkflows({ "deploy.yml": DEPLOY }, '{ "max_in_flight": 1 }\n')).toEqual([LINE]);
+    expect(onWorkflows({ "deploy.yml": DEPLOY })).toEqual([LINE]);
+  });
+
+  it("gives a line for a job that asks for id-token: write through the workflow's own permissions:, or write-all, and names no environment", () => {
+    const job = ["  plan:", "    runs-on: ubuntu-latest"];
+
+    expect(onWorkflows({ "plan.yml": workflow(["on: workflow_dispatch"], job, ["permissions:", "  id-token: write"]) })).toEqual([
+      NOT_LISTED("plan.yml", "asks for id-token: write"),
+    ]);
+    expect(onWorkflows({ "plan.yml": workflow(["on: workflow_dispatch"], job, ["permissions: write-all"]) })).toEqual([NOT_LISTED("plan.yml", "asks for id-token: write")]);
+  });
+
+  it("gives none for a job whose own permissions: {} replaces the workflow's id-token: write, and which names no environment", () => {
+    const text = workflow(["on: workflow_dispatch"], ["  plan:", "    permissions: {}", "    runs-on: ubuntu-latest"], ["permissions:", "  id-token: write"]);
+
+    expect(onWorkflows({ "plan.yml": text })).toEqual([]);
+  });
+
+  it("gives none for a workflow that names an environment but can't be dispatched, nor for a dispatchable one with no job that holds a role", () => {
+    const pushed = workflow(["on: push"], ["  deploy:", "    environment: production", "    permissions:", "      id-token: write"]);
+    const tests = workflow(["on: [pull_request, workflow_dispatch]"], ["  test:", "    runs-on: ubuntu-latest", "    permissions:", "      contents: read"]);
+
+    expect(onWorkflows({ "deploy-on-merge.yml": pushed, "test.yml": tests })).toEqual([]);
+  });
+
+  it("names each environment the jobs name once, in the order the jobs give them", () => {
+    const text = workflow(
+      ["on: workflow_dispatch"],
+      [
+        "  staging:",
+        "    environment: staging",
+        "  production:",
+        "    environment: production",
+        "  again:",
+        "    environment: staging",
+        "  dns:",
+        "    environment: dns",
+        "    permissions:",
+        "      id-token: write",
+      ],
+    );
+
+    expect(onWorkflows({ "promote.yaml": text })).toEqual([
+      NOT_LISTED("promote.yaml", "asks for id-token: write and names the environments `staging`, `production` and `dns`"),
+    ]);
+    expect(onWorkflows({ "two.yml": workflow(["on: workflow_dispatch"], ["  a:", "    environment: staging", "  b:", "    environment: production"]) })).toEqual([
+      NOT_LISTED("two.yml", "names the environments `staging` and `production`"),
+    ]);
+  });
+
+  it("gives one line to each workflow, in the order of the files' names, whatever order they're read in", () => {
+    expect(onWorkflows({ "promote.yml": PROMOTE, "deploy.yml": DEPLOY, "dns-apply.yaml": PROMOTE }, LISTING("promote.yml", "dns-apply.yaml"))).toEqual([
+      NOT_LISTED("deploy.yml", "asks for id-token: write and names the environment `production`"),
+      LISTED("dns-apply.yaml", "names the environment `production`"),
+      LISTED("promote.yml", "names the environment `production`"),
+    ]);
+  });
+
+  it("gives no line to the Kit's own caller workflow, fabrik.yml, whatever it asks for", () => {
+    expect(onWorkflows({ "fabrik.yml": DEPLOY }, LISTING("fabrik.yml"))).toEqual([]);
+    expect(onWorkflows({ "fabrik.yml": written(planSetup(aCleanProduct(), kit).actions, ".github/workflows/fabrik.yml") ?? "" })).toEqual([]);
+  });
+
+  it("still gives every line when the Kit config is invalid, saying it can't say whether the list holds it", () => {
+    const INVALID = (file: string, asks: string) =>
+      `\`${file}\` can be started by dispatch, and a job of it ${asks}. Kit config is invalid, so setup can't say whether console.held_workflows lists it.`;
+
+    for (const config of ["{ not json\n", JSON.stringify({ console: { held_workflows: ["promote.yml"] } })]) {
+      expect(onWorkflows({ "promote.yml": PROMOTE, "deploy.yml": DEPLOY }, config)).toEqual([
+        INVALID("deploy.yml", "asks for id-token: write and names the environment `production`"),
+        INVALID("promote.yml", "names the environment `production`"),
+      ]);
+    }
+  });
+
+  it("drops control characters from a file's name and an environment's, since the report is printed to the terminal", () => {
+    const text = workflow(["on: workflow_dispatch"], ["  deploy:", "    environment: prod\u001b]52;c;ZXZpbA==\u0007uction"]);
+
+    expect(onWorkflows({ "dep\u001b[2Jloy.yml": text })).toEqual([NOT_LISTED("dep[2Jloy.yml", "names the environment `prod]52;c;ZXZpbA==uction`")]);
+  });
+
+  it("puts its lines in the report after those on the repo's own credentials, and none in the plan's notes, its steps or the setup PR", () => {
+    const quiet = aCleanProduct({ secrets: ["STRIPE_KEY"], production: { name: "production", policy: { branches: "all", rules: [] } } });
+    const loud = { ...quiet, workflows: { "promote.yml": PROMOTE, "deploy.yml": DEPLOY } };
+
+    const { report, ...planned } = planSetup(loud, kit);
+
+    const { report: credentials, ...plannedQuiet } = planSetup(quiet, kit);
+    expect(report).toEqual([
+      ...credentials,
+      NOT_LISTED("deploy.yml", "asks for id-token: write and names the environment `production`"),
+      NOT_LISTED("promote.yml", "names the environment `production`"),
+    ]);
+    expect(planned).toEqual(plannedQuiet);
+    const body = prBody({ release: "v1.4.2", defaultBranch: "main", summary: { done: [], notes: planned.notes, blockers: [], report } });
+    expect(body).not.toContain("can be started by dispatch");
+    expect(body).not.toContain("held_workflows");
+  });
+
+  it("is said on every run, the same once the plan is applied", () => {
+    const state = aCleanProduct({ workflows: { "promote.yml": PROMOTE } });
+    const settled = afterApplying(state, planSetup(state, kit));
+
+    expect(planSetup(settled, kit).actions).toEqual([]);
+    expect(planSetup(settled, kit).report).toEqual([NONE_OF_ITS_OWN, NOT_LISTED("promote.yml", "names the environment `production`")]);
   });
 });
