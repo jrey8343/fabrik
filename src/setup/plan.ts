@@ -980,9 +980,9 @@ function secrets(state: ProductState, kit: SetupKit, notes: string[]): SetupActi
   } else if (atRepoLevel.length > 0) {
     // The Kit the default branch pins names no environment, so its jobs are given the repo-level values, on every ref (#846).
     const one = atRepoLevel.length === 1;
-    const [them, stay] = one ? ["it", "secret"] : ["them", "secrets"];
+    const them = one ? "it" : "them";
     notes.push(
-      `The repo-level Actions ${stay} ${listed(atRepoLevel.map(({ secret }) => secret))} ${one ? "stays" : "stay"} for now, since the Kit ${state.repo.defaultBranch} pins names no environment and reads ${them}. ` +
+      `The repo-level Actions ${one ? "secret" : "secrets"} ${listed(atRepoLevel.map(({ secret }) => secret))} ${one ? "stays" : "stay"} for now, since the Kit ${state.repo.defaultBranch} pins names no environment and reads ${them}. ` +
         `Once the setup PR is merged, run setup again and it deletes ${them}: ${setupCommand(kit.release)}`,
     );
   }
