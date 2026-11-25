@@ -12,13 +12,14 @@ import type { Row } from "./rows.ts";
 /**
  * Each field `Row` has gained since the read library first shipped (v3.1.0),
  * as a row kept before it reads, with none of it: `shots` (v4.1.0), no
- * Evidence shots. `staging` (#855) is not here: it is an optional key, on a
+ * Evidence shots, and `operatorSession` (#951), no Operator session that
+ * reported itself on the issue. `staging` (#855) is not here: it is an optional key, on a
  * row only in a repo that declares `staging`, so a row kept before it is
  * already a row with none of it and reads as it was kept. Nor is its `trial`
  * (#965), a field of what the key holds and not of the row: keptStagingOf reads
  * a `staging` kept before it.
  */
-const NOT_ON_AN_EARLIER_ROW = { shots: null } as const satisfies Partial<Row>;
+const NOT_ON_AN_EARLIER_ROW = { shots: null, operatorSession: null } as const satisfies Partial<Row>;
 
 /** A Follow-up as a row kept it: with no kind on a row kept before a Follow-up had one (#885). */
 type KeptFollowUp = Omit<Row["followUps"][number], "kind"> & Partial<Pick<Row["followUps"][number], "kind">>;
@@ -58,7 +59,8 @@ function keptStagingOf(kept: KeptStaging): NonNullable<Row["staging"]> {
  * at the current schema (readStanding), its own and, on a Pairing session's
  * row, the issue's own under `plainPullRequest.own`; and each field a row has
  * gained since it was kept read as a row with none of it, so one kept before
- * v4.1.0 has `shots` null, one kept before a Follow-up had a kind has each
+ * v4.1.0 has `shots` null, one kept before a row carried its Operator
+ * session has `operatorSession` null (#951), one kept before a Follow-up had a kind has each
  * of its Follow-ups an idea, and one kept with `staging` before a row gave
  * its Trial steps has `staging.trial` null (#965). Every other field is as
  * it was kept, and a row of this release comes back as it is. Null for
