@@ -74,6 +74,9 @@ jobs:
     name: Tick check
     needs: kit
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: 15
     # One check at a time, so a re-run never races the scheduled one into a second issue.
     concurrency:

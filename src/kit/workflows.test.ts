@@ -3,8 +3,10 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { KIT_ENVIRONMENT } from "./environment.ts";
 import { kitJobOutputs } from "./jobs.ts";
 import { JUDGE_JOB } from "./judge.ts";
 import { PREVIEW_POLL_MINUTES } from "./previewLink.ts";
@@ -3302,5 +3304,102 @@ describe("A pull request review's run", () => {
       "-f",
       "inputs[review]=4521",
     ]);
+  });
+});
+
+/** Each job of a workflow, in the file's order, with the environment its YAML names and whether its own text reads a secret, as `secrets.` or `secrets[`. */
+function jobEnvironments(workflow: string): readonly { readonly name: string; readonly readsSecret: boolean; readonly environment: unknown }[] {
+  const jobs = (parse(workflow) as { jobs: Record<string, { readonly environment?: unknown }> }).jobs;
+  const text = workflow.slice(workflow.indexOf("\njobs:\n"));
+  return Object.entries(jobs).map(([name, body]) => ({ name, readsSecret: /\bsecrets[.[]/.test(jobIn(text, name)), environment: body.environment }));
+}
+
+/**
+ * What each job of a workflow gets wrong about the `fabrik` environment. None
+ * when every job that reads a secret names it, with `deployment: false` and
+ * nothing more, and every job that reads none names no environment.
+ */
+function environmentFaults(workflow: string): string[] {
+  return jobEnvironments(workflow).flatMap(({ name, readsSecret, environment }) => {
+    if (!readsSecret) return environment === undefined ? [] : [`${name} reads no secret and names an environment`];
+    if (environment === undefined) return [`${name} reads a secret and names no environment`];
+    if (!isDeepStrictEqual(environment, { name: KIT_ENVIRONMENT, deployment: false })) return [`${name} reads a secret and names its environment as ${JSON.stringify(environment)}`];
+    return [];
+  });
+}
+
+// #928, ADR-0004: the Kit's tokens are the secrets of the `fabrik` environment, which only the default branch may use.
+describe("The fabrik environment", () => {
+  it.each(workflows)("is named, with deployment: false, by every job of $path that reads a secret, and no job that reads none names an environment", ({ text }) => {
+    expect(environmentFaults(text)).toEqual([]);
+  });
+
+  it.each([
+    {
+      file: "loop.yml",
+      named: [
+        "kit",
+        "triage",
+        "design",
+        "prototype",
+        "implement-claim",
+        "implement",
+        "review",
+        "digest",
+        "audit",
+        "retro-evidence",
+        "retro",
+        "research",
+        "replay-implement",
+        "replay-gates",
+        "replay-review",
+        "replay-score",
+        "replay-record",
+        "push",
+        "dispatch",
+        "design-queue",
+        "score",
+        "score-record",
+      ],
+      none: ["review-hand-off", "review-checks", "rerun-checks", "rerun-wait"],
+    },
+    { file: "schedule.yml", named: ["tick", "dispatch", "design-queue", "skills-bump", "release-running", "monitor"], none: ["kit"] },
+    { file: "tick-check.yml", named: ["check"], none: ["kit"] },
+    { file: "weekly-summary.yml", named: ["summary"], none: ["kit"] },
+  ])("is named by each job of $file that reads a token, and by none of those that read none", ({ file, named, none }) => {
+    const jobs = jobEnvironments(workflows.find((workflow) => workflow.path.endsWith(`/${file}`))!.text);
+
+    expect(jobs.filter((job) => job.environment !== undefined).map((job) => job.name)).toEqual(named);
+    expect(jobs.filter((job) => job.environment === undefined).map((job) => job.name)).toEqual(none);
+  });
+
+  describe("in a made-up workflow", () => {
+    const READS = "        env:\n          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PUSH_TOKEN }}\n";
+    const NAMED = "    environment:\n      name: fabrik\n      deployment: false\n";
+    const madeUp = (...jobs: readonly (readonly [name: string, environment: string, env: string])[]): string =>
+      `name: Made up\n\non:\n  workflow_call:\n    secrets:\n      OP_PUSH_TOKEN:\n        required: true\n\njobs:\n${jobs
+        .map(([name, environment, env]) => `  ${name}:\n    runs-on: ubuntu-latest\n${environment}    steps:\n      - run: echo hello\n${env}`)
+        .join("\n")}`;
+
+    it("is found missing from a new job that reads a token and names no environment", () => {
+      expect(environmentFaults(madeUp(["kit", "", ""], ["push", NAMED, READS], ["new-job", "", READS]))).toEqual(["new-job reads a secret and names no environment"]);
+    });
+
+    it.each([
+      ["it by its name alone, which records a Deployment", "    environment: fabrik\n", '"fabrik"'],
+      ["it with no deployment: false", "    environment:\n      name: fabrik\n", '{"name":"fabrik"}'],
+      ["it with deployment: true", "    environment:\n      name: fabrik\n      deployment: true\n", '{"name":"fabrik","deployment":true}'],
+      ["another environment", "    environment:\n      name: production\n      deployment: false\n", '{"name":"production","deployment":false}'],
+    ])("is found wrong in a job that reads a token and names %s", (_name, environment, read) => {
+      expect(environmentFaults(madeUp(["kit", "", ""], ["push", environment, READS]))).toEqual([`push reads a secret and names its environment as ${read}`]);
+    });
+
+    it("is found on a job that names it and reads no token", () => {
+      expect(environmentFaults(madeUp(["kit", NAMED, ""], ["push", NAMED, READS]))).toEqual(["kit reads no secret and names an environment"]);
+    });
+
+    it("is named only once by a job: YAML takes no second environment: key", () => {
+      expect(() => environmentFaults(madeUp(["push", NAMED + NAMED, READS]))).toThrow("Map keys must be unique");
+    });
   });
 });
