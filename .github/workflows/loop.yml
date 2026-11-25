@@ -18,6 +18,13 @@
 #   pinned. When the agent job failed or was cancelled (its timeout-minutes
 #   included), it posts the failure notice instead.
 #
+# Every job that reads a service-account token names the caller repo's
+# `fabrik` environment, with `deployment: false` so GitHub records no
+# Deployment (ADR-0021), and only the default branch may use it (ADR-0004):
+# GitHub fails such a job on any other ref before its first step. A job that
+# reads no token names none. The caller still passes each token by name, and
+# it reaches the job from the environment.
+#
 # Scoring (#149) follows the same split. The push job's record step plans
 # whether the Implement run it recorded is scored. When it is, the judge job
 # (`score`) runs the judge with no tools and no write credential, and the
@@ -36,6 +43,13 @@
 # `Implement`, so Dispatch never counts them. Last, the replay-record job, the
 # replay's own push job (ADR-0009's addendum), writes both arms to fabrik-runs
 # and lands the run on the replay issue. The push job never runs on it.
+#
+# A pull request review's run is the one GitHub starts as the pull request's
+# merge ref, never as the default branch, so the `fabrik` environment refuses
+# it (ADR-0004). It runs the hand-off job alone: no Kit job and no token. That
+# job starts the caller workflow on the default branch by workflow_dispatch,
+# naming the pull request and the review, and the Kit reads the review from
+# GitHub in that run before it acts (src/github/handOff.ts).
 #
 # The steps these jobs share are composite actions in .github/actions/, used
 # from the Kit's own checkout at kit/: prepare-agent readies an agent job, and
@@ -60,7 +74,12 @@ permissions: {}
 jobs:
   kit:
     name: Kit
+    # Never on a review's own run, which runs the hand-off job alone: every other job needs this one.
+    if: github.event_name != 'pull_request_review'
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: 5
     permissions:
       # Only to read this workflow's own commit from the job's OIDC token.
@@ -256,11 +275,39 @@ jobs:
       - name: ${{ steps.route.outputs.kit-said }}
         run: "true"
 
+  review-hand-off:
+    name: Hand the review to the default branch
+    # A review's run is the one GitHub starts as the pull request's merge ref, which the
+    # `fabrik` environment refuses (ADR-0004). So it reads no token and runs no Kit job:
+    # it starts the caller workflow on the default branch, naming the pull request and
+    # the review, and that run reads the review from GitHub before it acts on it.
+    if: github.event_name == 'pull_request_review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Start the caller workflow on the default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PULL_REQUEST: ${{ github.event.pull_request.number }}
+          REVIEW: ${{ github.event.review.id }}
+        run: |
+          set -euo pipefail
+          path="${WORKFLOW_REF%%@*}"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/${path##*/}/dispatches" \
+            -f ref="$DEFAULT_BRANCH" -f "inputs[pull_request]=$PULL_REQUEST" -f "inputs[review]=$REVIEW"
+
   triage:
     name: Triage
     needs: kit
     if: needs.kit.outputs.route == 'triage'
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.triage-timeout-minutes) }}
     concurrency:
       group: fabrik-triage-${{ github.event.issue.number }}
@@ -374,6 +421,9 @@ jobs:
     # A prototype turn of the session runs in the prototype job instead.
     if: needs.kit.outputs.route == 'design' && needs.kit.outputs.prototype != 'true'
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.design-timeout-minutes) }}
     # One turn per issue at a time. queue: max keeps every queued Operator reply
     # instead of letting a newer one cancel the one already waiting.
@@ -521,6 +571,9 @@ jobs:
     needs: kit
     if: needs.kit.outputs.route == 'design' && needs.kit.outputs.prototype == 'true'
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     # Its agent step stops at the Implement role's own timeout; this leaves room
     # for capture after it (implementJobTimeoutMinutes in src/evidence/capture.ts).
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-job-timeout-minutes) }}
@@ -768,6 +821,9 @@ jobs:
     needs: kit
     if: needs.kit.outputs.route == 'implement' || needs.kit.outputs.route == 'research' || needs.kit.outputs.route == 'replay' || needs.kit.outputs.route == 'rerun-checks' || (needs.kit.outputs.route == 'design' && github.event.label.name == 'agent:design')
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: 10
     # One replay claim at a time across the repo, since one replay Ticket runs at a time across
     # every replay issue: a claim waiting here reads the one before it. Every other claim runs at once.
@@ -809,6 +865,9 @@ jobs:
     needs: kit
     if: needs.kit.outputs.route == 'implement'
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     # Its agent step stops at the Implement role's own timeout; this leaves room
     # for UI evidence capture after it, so capture never cancels the job before
     # its result uploads (implementJobTimeoutMinutes in src/evidence/capture.ts).
@@ -1299,6 +1358,9 @@ jobs:
       (needs.rerun-wait.result == 'skipped' || (needs.rerun-wait.result == 'success' &&
       (needs.rerun-wait.outputs.checks == 'green' || needs.rerun-wait.outputs.checks == 'red')))))
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.review-timeout-minutes) }}
     # One Review per PR at a time.
     concurrency:
@@ -1550,6 +1612,9 @@ jobs:
     needs: kit
     if: needs.kit.outputs.route == 'digest'
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.digest-timeout-minutes) }}
     # One Digest run per PR at a time.
     concurrency:
@@ -1672,6 +1737,9 @@ jobs:
     needs: kit
     if: needs.kit.outputs.route == 'audit'
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.audit-timeout-minutes) }}
     # One Auditor run per repo at a time.
     concurrency:
@@ -1793,6 +1861,9 @@ jobs:
     needs: kit
     if: needs.kit.outputs.route == 'retro'
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.retro-timeout-minutes) }}
     permissions: {}
     outputs:
@@ -1823,6 +1894,9 @@ jobs:
     needs: [kit, retro-evidence]
     if: needs.kit.outputs.route == 'retro'
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.retro-timeout-minutes) }}
     # One Retro run per repo at a time.
     concurrency:
@@ -1875,6 +1949,9 @@ jobs:
     needs: kit
     if: needs.kit.outputs.route == 'research'
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.research-timeout-minutes) }}
     # One Researcher run per Decision at a time, so two never race on one branch.
     concurrency:
@@ -2005,6 +2082,9 @@ jobs:
     needs: [kit, implement-claim]
     if: needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket && needs.kit.outputs.replay-kit-sha-unavailable == ''
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     # The Implement role's own timeout: a replay arm captures no UI evidence after it.
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}
     # Both arms run, whatever the other comes to: the replay-record job lands each.
@@ -2054,6 +2134,9 @@ jobs:
     needs: [kit, implement-claim, replay-implement]
     if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket && needs.kit.outputs.replay-kit-sha-unavailable == '' }}
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     # Kit config has no gates timeout; they run what an Implement run's checks would.
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.implement-timeout-minutes) }}
     strategy:
@@ -2092,6 +2175,9 @@ jobs:
     needs: [kit, implement-claim, replay-implement]
     if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket && needs.kit.outputs.replay-kit-sha-unavailable == '' }}
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.review-timeout-minutes) }}
     strategy:
       fail-fast: false
@@ -2135,6 +2221,9 @@ jobs:
     needs: [kit, implement-claim, replay-implement]
     if: ${{ !cancelled() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket && needs.kit.outputs.replay-kit-sha-unavailable == '' }}
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     # The Kit's, not Kit config's: JUDGE_TIMEOUT_MINUTES in src/kit/runStore.ts (a test holds the two together).
     timeout-minutes: 15
     strategy:
@@ -2179,6 +2268,9 @@ jobs:
     if: always() && needs.kit.outputs.route == 'replay' && needs.implement-claim.outputs.replay-ticket == needs.kit.outputs.ticket
     continue-on-error: true
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: 15
     permissions: {}
     steps:
@@ -2215,6 +2307,9 @@ jobs:
     needs: [kit, triage, design, prototype, implement, review-checks, rerun-checks, rerun-wait, review, digest, audit, retro-evidence, retro, research]
     if: always() && needs.kit.result == 'success' && needs.kit.outputs.route != 'none' && needs.kit.outputs.route != 'replay' && needs.kit.outputs.route != 'rerun-checks'
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: 10
     # A push to the default branch runs the conflict check, as the scheduled tick does: it takes turns with
     # the tick and with the next push's check, queueing, so two never note the same Request changes (#341).
@@ -2347,6 +2442,9 @@ jobs:
     needs: [kit, push]
     if: ${{ !cancelled() && needs.push.result == 'success' && needs.push.outputs.dispatch == 'true' }}
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: ${{ fromJSON(needs.kit.outputs.dispatch-timeout-minutes) }}
     # One check at a time, so two can't both fill the same free slot. A newer
     # pending check replacing an older one is fine: each reads fresh state.
@@ -2383,6 +2481,9 @@ jobs:
     needs: [kit, push]
     if: ${{ !cancelled() && needs.push.result == 'success' && needs.push.outputs.design-queue == 'true' }}
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: 10
     # One check at a time per repo, so two can't both fill the same free slot.
     # A newer pending check replacing an older one is fine: each reads fresh state.
@@ -2424,6 +2525,9 @@ jobs:
     needs: [kit, push]
     if: ${{ !cancelled() && needs.push.outputs.score == 'true' }}
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     # The Kit's, not Kit config's: JUDGE_TIMEOUT_MINUTES in src/kit/runStore.ts (a test holds the two together).
     timeout-minutes: 15
     permissions:
@@ -2474,6 +2578,9 @@ jobs:
     if: ${{ !cancelled() && needs.score.result != 'skipped' }}
     continue-on-error: true
     runs-on: ubuntu-latest
+    environment:
+      name: fabrik
+      deployment: false
     timeout-minutes: 10
     permissions: {}
     env:

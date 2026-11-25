@@ -1,32 +1,155 @@
 // What setup reads before planning, with the Operator's own gh and op: the
-// Product repo's files, labels, secrets, branch protection and Merge gate, the
-// 1Password account's vaults, and the fabrik-runs store. It only reads.
+// Product repo's files, labels, secrets, fabrik environment, branch protection
+// and Merge gate, the 1Password account's vaults, and the fabrik-runs store,
+// with its default branch and its own fabrik environment.
+// With git it reads the caller workflow the default branch holds.
+// For Setup's report it reads production's environment too, when the Kit
+// config names one. It only reads.
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { KIT_CONFIG_PATH } from "../kit/config.ts";
+import { KIT_ENVIRONMENT } from "../kit/environment.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import { READY_FOR_AGENT } from "../loop/labels.ts";
 import { ok, type Run } from "./exec.ts";
-import { type Allowances, type DeploymentsSeen, FABRIK_VAULT, MERGE_GATE_RULESET, type BranchProtection, type MergeGateRuleset, type ProductState, type RunStoreState } from "./plan.ts";
-import { DEPENDABOT_PATH, STORE_CALLER_PATH } from "./shims.ts";
+import {
+  type Allowances,
+  type BranchProtection,
+  type DeploymentsSeen,
+  type EnvironmentPolicy,
+  type EnvironmentRule,
+  type EnvironmentState,
+  FABRIK_VAULT,
+  MERGE_GATE_RULESET,
+  type MergeGateRuleset,
+  type ProductionEnvironment,
+  productionEnvironmentIn,
+  type ProductState,
+  type RunStoreState,
+} from "./plan.ts";
+import { CALLER_PATH, DEPENDABOT_PATH, STORE_CALLER_PATH } from "./shims.ts";
 
-/** Everything planSetup needs, for the repo the checks found. */
-export async function gatherState(run: Run, productDir: string, repo: ProductState["repo"], paths: readonly string[]): Promise<ProductState> {
+/**
+ * Everything planSetup needs, for the repo the checks found.
+ * `defaultBranchTip` is the default branch's tip on origin, as they found it.
+ */
+export async function gatherState(
+  run: Run,
+  productDir: string,
+  repo: ProductState["repo"],
+  paths: readonly string[],
+  defaultBranchTip: string,
+): Promise<ProductState> {
   const cwd = productDir;
   const files = Object.fromEntries(
     await Promise.all(paths.map(async (path) => [path, await readFile(join(productDir, path), "utf8").catch(() => null)] as const)),
   );
+  // The checkout's own copy can be the setup branch's, so the default branch's is read from its tip.
+  const shown = await run("git", ["show", `${defaultBranchTip}:${CALLER_PATH}`], { cwd });
+  const defaultBranchCaller = shown.code === 0 ? shown.stdout : null;
   const names = (json: string) => (JSON.parse(json) as { name: string }[]).map((item) => item.name);
   const labels = names(await ok(run, "gh", ["label", "list", "--limit", "1000", "--json", "name"], { cwd }));
   const secrets = names(await ok(run, "gh", ["secret", "list", "--json", "name"], { cwd }));
   const vaults = names(await ok(run, "op", ["vault", "list", "--format", "json"], { cwd }));
   const fabrikItems = vaults.includes(FABRIK_VAULT) ? await vaultItems(run, cwd, FABRIK_VAULT) : [];
-  const [protection, mergeGate, store] = await Promise.all([
+  const [environment, protection, mergeGate, store] = await Promise.all([
+    gatherEnvironment(run, cwd, `${repo.owner}/${repo.name}`, KIT_ENVIRONMENT),
     gatherProtection(run, cwd, repo),
     gatherMergeGate(run, cwd, repo),
     gatherStore(run, cwd),
   ]);
   const readyForAgent = await gatherReadyForAgent(run, cwd, labels);
-  return { repo, files, labels, secrets, vaults, fabrikItems, protection, mergeGate, store, readyForAgent };
+  const production = await gatherProduction(run, cwd, `${repo.owner}/${repo.name}`, files[KIT_CONFIG_PATH] ?? null);
+  return { repo, files, defaultBranchCaller, labels, secrets, environment, production, vaults, fabrikItems, protection, mergeGate, store, readyForAgent };
+}
+
+/**
+ * Production's environment, for Setup's report: the one the checkout's Kit
+ * config's `production` block names, and which refs it lets through, never its
+ * secrets' names. Null, with no environment read, when the Kit config names
+ * none. The repo is `owner/name`. A refused read is given with GitHub's
+ * answer, never thrown: Setup never blocks on its report.
+ */
+async function gatherProduction(run: Run, cwd: string, repo: string, kitConfig: string | null): Promise<ProductionEnvironment | null> {
+  const name = productionEnvironmentIn(kitConfig);
+  if (name === null) return null;
+  try {
+    return { name, policy: await readEnvironmentPolicy(run, cwd, repo, name) };
+  } catch (error) {
+    return { name, policy: null, refused: error instanceof RefusedRead ? error.answer : error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** A read GitHub refused. Its message names the read and GitHub's answer, and the answer is kept apart for a line that gives it alone. */
+class RefusedRead extends Error {
+  readonly answer: string;
+
+  constructor(reading: string, { code, stderr }: { readonly code: number; readonly stderr: string }) {
+    const answer = stderr.trim() || `exit ${code}`;
+    super(`${reading} failed: ${answer}`);
+    this.answer = answer;
+  }
+}
+
+/**
+ * A repo's environment: which refs it lets through and its secrets' names, or
+ * null when the repo has none of that name. The repo is `owner/name`.
+ * `elsewhere` says it isn't the checkout's own repo, so `gh secret` is told it
+ * with `--repo`.
+ */
+export async function gatherEnvironment(
+  run: Run,
+  cwd: string,
+  repo: string,
+  name: string,
+  { elsewhere = false }: { readonly elsewhere?: boolean } = {},
+): Promise<EnvironmentState | null> {
+  const policy = await readEnvironmentPolicy(run, cwd, repo, name);
+  if (policy === null) return null;
+  const where = elsewhere ? ["--repo", repo] : [];
+  const secrets = JSON.parse(await ok(run, "gh", ["secret", "list", "--env", name, ...where, "--json", "name"], { cwd })) as { name: string }[];
+  return { ...policy, secrets: secrets.map((secret) => secret.name) };
+}
+
+/**
+ * Which refs a repo's environment lets through: its setting, and its rules
+ * when it is set to "Selected branches and tags". Null when GitHub answers 404
+ * for it, as for a repo that has none of that name. Any other refusal throws,
+ * naming GitHub's answer. The plan reads with it, and so does each step that
+ * must find the environment held as GitHub has it now: the one that holds it,
+ * once it has, and the one that stores a token in it, before it makes one.
+ */
+export async function readEnvironmentPolicy(run: Run, cwd: string, repo: string, name: string): Promise<EnvironmentPolicy | null> {
+  // The name is one segment of the path: a Product repo's own may hold a space or a slash.
+  const read = await run("gh", ["api", `repos/${repo}/environments/${encodeURIComponent(name)}`], { cwd });
+  if (read.code !== 0) {
+    if (/HTTP 404/.test(read.stderr + read.stdout)) return null;
+    throw new RefusedRead(`Reading the ${name} environment on ${repo}`, read);
+  }
+  const policy = (JSON.parse(read.stdout) as EnvironmentResponse).deployment_branch_policy ?? null;
+  if (policy === null) return { branches: "all", rules: [] };
+  if (policy.custom_branch_policies !== true) return { branches: "protected", rules: [] };
+  return { branches: "selected", rules: await readEnvironmentRules(run, cwd, repo, name) };
+}
+
+/** GitHub's environment, as far as Setup reads it: null is every branch, and exactly one of the two switches is on otherwise. */
+interface EnvironmentResponse {
+  deployment_branch_policy?: { protected_branches?: boolean; custom_branch_policies?: boolean } | null;
+}
+
+/**
+ * The rules of a repo's environment set to "Selected branches and tags", as
+ * GitHub has them now: the step that holds one reads them before it adds its
+ * rule. GitHub lists them under any setting, so they alone never say an
+ * environment is held.
+ */
+export async function readEnvironmentRules(run: Run, cwd: string, repo: string, name: string): Promise<EnvironmentRule[]> {
+  const path = `repos/${repo}/environments/${encodeURIComponent(name)}/deployment-branch-policies?per_page=100`;
+  const read = await run("gh", ["api", path], { cwd });
+  if (read.code !== 0) throw new RefusedRead(`gh api ${path}`, read);
+  const listed = JSON.parse(read.stdout) as { branch_policies?: { id: number; name: string; type?: string }[] };
+  // A rule made before GitHub's rules had a type is a branch rule.
+  return (listed.branch_policies ?? []).map(({ id, name: ruleName, type }) => ({ id, name: ruleName, type: type === "tag" ? "tag" : "branch" }));
 }
 
 /** A page of the repo's Deployments, as many as GitHub gives to one. */
@@ -103,21 +226,38 @@ async function gatherReadyForAgent(run: Run, cwd: string, labels: readonly strin
   return (JSON.parse(await ok(run, "gh", args, { cwd })) as unknown[]).length;
 }
 
-/** The fabrik-runs store, read through the API: setup has no checkout of it. */
+/**
+ * The fabrik-runs store, read through the API: setup has no checkout of it.
+ * Its default branch and its own fabrik environment are read with the rest of
+ * it, and nothing of a store that doesn't exist.
+ */
 async function gatherStore(run: Run, cwd: string): Promise<RunStoreState> {
   const view = await run("gh", ["repo", "view", RUN_STORE_REPO, "--json", "visibility"], { cwd });
   if (view.code !== 0) {
     if (/Could not resolve to a Repository|HTTP 404/.test(view.stderr + view.stdout)) {
-      return { exists: false, private: false, files: {}, secrets: [] };
+      return { exists: false, private: false, defaultBranch: null, files: {}, secrets: [], environment: null };
     }
     throw new Error(`Reading ${RUN_STORE_REPO} failed: ${view.stderr.trim()}`);
   }
   const { visibility } = JSON.parse(view.stdout) as { visibility: string };
+  const defaultBranch = await readDefaultBranch(run, cwd, RUN_STORE_REPO);
   const files = Object.fromEntries(
     await Promise.all(STORE_PATHS.map(async (path) => [path, (await storeFile(run, cwd, path))?.text ?? null] as const)),
   );
   const listed = JSON.parse(await ok(run, "gh", ["secret", "list", "--repo", RUN_STORE_REPO, "--json", "name"], { cwd })) as { name: string }[];
-  return { exists: true, private: visibility === "PRIVATE", files, secrets: listed.map((secret) => secret.name) };
+  const environment = await gatherEnvironment(run, cwd, RUN_STORE_REPO, KIT_ENVIRONMENT, { elsewhere: true });
+  return { exists: true, private: visibility === "PRIVATE", defaultBranch, files, secrets: listed.map((secret) => secret.name), environment };
+}
+
+/**
+ * The name of a repo's default branch as GitHub has it now, or null for a repo
+ * with no commit yet, which has none. The repo is `owner/name`, and needn't be
+ * the checkout's.
+ */
+export async function readDefaultBranch(run: Run, cwd: string, repo: string): Promise<string | null> {
+  const view = JSON.parse(await ok(run, "gh", ["repo", "view", repo, "--json", "defaultBranchRef"], { cwd })) as { defaultBranchRef?: { name?: string } | null };
+  // gh prints an empty name for a repo with no commit.
+  return view.defaultBranchRef?.name || null;
 }
 
 /** Every file planSetup reads from the store. */

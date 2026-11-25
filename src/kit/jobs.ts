@@ -92,14 +92,15 @@
 //                            holds no text a person or an agent wrote. The job's last step takes it for its name
 // Its step summary names that Subscription, and notes when rotation is off.
 //   node src/kit/jobs.ts <product checkout>
-// Env: GH_TOKEN, a read-only token for gathering the snapshot, which for agent:implement also reads the Actions runs (#725);
+// Env: GH_TOKEN, a read-only token for gathering the snapshot, which for agent:implement also reads the Actions runs (#725),
+// and which on a review's hand-off first reads the review its inputs name (src/github/handOff.ts);
 // FABRIK_STORE_DIR, in a repo that opted in to Fable, the fable-store action's checkout of the store, whose Fable cap
 // readings the plan weighs (ADR-0034), empty when it couldn't check one out, which the step summary then says.
 import { appendFile, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { agentRunIn, replayRunIn } from "../github/apply.ts";
 import { GitHub, type Repo } from "../github/client.ts";
-import { loopEventFrom } from "../github/events.ts";
+import { nothingToDoFor, runEventFrom } from "../github/handOff.ts";
 import { defaultBranchOf, gatherSnapshot } from "../github/snapshot.ts";
 import { agentBranchFor } from "../loop/agentPullRequest.ts";
 import { DISPATCH_LABEL } from "../loop/labels.ts";
@@ -177,14 +178,16 @@ async function main(productDir: string): Promise<void> {
       return;
     }
   }
-  const event = loopEventFrom(eventName, payload);
+  // On a review's hand-off the inputs are believed for nothing: this job reads the review they name with its own
+  // read-only token before it plans, and plans what that review's own event would have, or nothing (src/github/handOff.ts).
+  const { event, handOff } = await runEventFrom(github, repo, config.operator, eventName, payload);
   let plan: Plan | null = null;
   let ticket: number | null = null;
   let summary: string | null = null;
   let mainAtStart: string | null = null;
   let defaultBranch: string | null = null;
   if (event === null) {
-    console.log(`The Loop doesn't act on ${eventName}.${String(payload["action"] ?? "")}`);
+    console.log(handOff === null ? `The Loop doesn't act on ${eventName}.${String(payload["action"] ?? "")}` : nothingToDoFor(handOff));
   } else {
     // This job only routes, with no Fabrik App token, so it doesn't know the App's login and takes any bot's
     // issue for the App's, so the App's pending Audit or Retro routes to its run: the push job's plan is the one applied.

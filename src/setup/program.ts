@@ -19,7 +19,7 @@ import { apply, describeAction, writtenPaths } from "./apply.ts";
 import { parseSetupArgs, SETUP_USAGE } from "./args.ts";
 import { checkSetup, offerToDeleteOldSetupSkill, type OriginTips } from "./checks.ts";
 import { type Env, ok, type Run } from "./exec.ts";
-import { appliedLines, closingLines, setupCommand } from "./finish.ts";
+import { appliedLines, closingLines, reportSection, setupCommand } from "./finish.ts";
 import { gatherDeployments, gatherState, vaultItems } from "./gather.ts";
 import { loadSetupKit, type SetupKit } from "./kit.ts";
 import { type DoneSources, mergesFromConsole, type OneRunSteps, readinessOf, runOnce, stepsDone, wizardGaps } from "./oneRun.ts";
@@ -47,7 +47,7 @@ import {
   setupBranch,
   switchToSetupBranch,
 } from "./setupBranch.ts";
-import { pinCaller } from "./shims.ts";
+import { pinCaller, STORE_CALLER_PATH } from "./shims.ts";
 import { WIZARD_REPORT_ENV, WIZARD_SECOND_SUBSCRIPTION_ENV, type WizardRun } from "./wizard.ts";
 
 export interface SetupIo {
@@ -114,7 +114,7 @@ export async function runSetup(argv: readonly string[], io: SetupIo): Promise<nu
     const unreachable = await checkOp(run, productDir, env, chosen.account.name);
     if (unreachable !== null) return stop(io, unreachable);
 
-    const state = await gatherState(run, productDir, checked.repo, paths);
+    const state = await gatherState(run, productDir, checked.repo, paths, checked.origin.defaultBranch);
     // The default branch the checks found has no Kit config, so one here is the starter setup wrote on its branch.
     const config = await run("git", ["cat-file", "-e", `${checked.origin.defaultBranch}:${KIT_CONFIG_PATH}`], { cwd: productDir });
     const wroteStarter = config.code !== 0;
@@ -266,13 +266,14 @@ async function oneRun(inputs: OneRunInputs): Promise<number> {
     },
     afterWizard: async () => {
       // Read again and planned again: a second Subscription's token the wizard stored gets its subscriptions line from this plan.
-      const now = await gatherState(run, cwd, repo, paths);
+      const now = await gatherState(run, cwd, repo, paths, origin.defaultBranch);
       const appItems = await appVaultItems(run, cwd, now);
       const earlierPr = (await openSetupPr(run, cwd, branch))?.body ?? null;
       gapsAfter = wizardGaps(now, answers, appItems);
       readAfter = { protection: now.protection, appItems };
       return {
-        plan: planSetup(now, kit, answers, { wroteStarter }),
+        // The run has written the store's caller by now, and the store's repo-level secret goes only on a run that found the new one there.
+        plan: planSetup(now, kit, answers, { wroteStarter, storeCallerAtStart: state.store.files[STORE_CALLER_PATH] ?? null }),
         readiness: readinessOf({
           repo: repoName,
           report: wizardReport,
@@ -374,8 +375,8 @@ function stepsOf(plan: SetupPlan): string[] {
   return ["Setup would:", ...plan.actions.map((action) => `- ${describeAction(action)}`)];
 }
 
-/** The lines, then the plan's notes for the Operator. */
+/** The lines, then the plan's notes for the Operator, then Setup's report: every way the plan is printed says all three. */
 function withNotes(lines: readonly string[], plan: SetupPlan): string {
   const notes = plan.notes.length === 0 ? [] : [...(lines.length === 0 ? [] : [""]), "For the Operator:", ...plan.notes.map((note) => `- ${note}`)];
-  return [...lines, ...notes].join("\n");
+  return [...lines, ...notes, ...reportSection(plan.report)].join("\n");
 }

@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { CALLER_JOBS, callerWorkflowPath, checkCallerWorkflow, checkKit } from "./caller.ts";
 import { resolveKitConfig } from "./config.ts";
+import { handOffFrom } from "../github/events.ts";
 import { AUDIT_LABEL, DESIGN_LABEL, DISPATCH_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, RESEARCH_LABEL, REPLAY_TRIGGER_LABEL, RETRO_LABEL, REVIEW_LABEL } from "../loop/labels.ts";
 
 function callerWith(...uses: string[]): string {
@@ -103,6 +105,20 @@ describe("Caller workflow release check", () => {
     expect(template).toMatch(/^ {2}issue_comment:\n {4}types: \[created\]$/m);
   });
 
+  // #927: a review's own run holds no token, and starts this one on the default branch (ADR-0004).
+  it("the caller template runs on a submitted review and on the dispatch its hand-off sends, whose two inputs, both required text, are the ones the Kit reads a hand-off from", () => {
+    const template = readFileSync(new URL("../../templates/fabrik.yml", import.meta.url), "utf8");
+    const on = (parse(template) as { on: { pull_request_review: unknown; workflow_dispatch?: { inputs: Record<string, { required: boolean; type: string }> } } }).on;
+
+    expect(on.pull_request_review).toEqual({ types: ["submitted"] });
+    const inputs = on.workflow_dispatch?.inputs ?? {};
+    expect(Object.entries(inputs).map(([name, input]) => [name, input.required, input.type])).toEqual([
+      ["pull_request", true, "string"],
+      ["review", true, "string"],
+    ]);
+    expect(handOffFrom("workflow_dispatch", { inputs: Object.fromEntries(Object.keys(inputs).map((name) => [name, "60"])) })).toEqual({ pullRequest: 60, review: 60 });
+  });
+
   it("the caller template's job keys are the ones the Kit knows its own check runs by", () => {
     const template = readFileSync(new URL("../../templates/fabrik.yml", import.meta.url), "utf8");
     const jobs = template.slice(template.indexOf("\njobs:\n"));
@@ -168,6 +184,14 @@ describe("Caller workflow release check", () => {
       expect(cases).toContain(
         "github.event_name == 'pull_request_review' && github.event.review.state == 'changes_requested' && format('Request changes PR #{0}', github.event.pull_request.number) ||",
       );
+    });
+
+    // #927: the review itself is read only once the run is under way, so its name says no more than the pull request.
+    it("names the run a review's hand-off starts for the pull request its inputs name, after the review's own runs", () => {
+      const handedOff = "github.event_name == 'workflow_dispatch' && format('Review on PR #{0}, handed off', github.event.inputs.pull_request) ||";
+
+      expect(cases).toContain(handedOff);
+      expect(cases[cases.indexOf(handedOff) - 1]).toBe("github.event_name == 'pull_request_review' && format('Comment on PR #{0}', github.event.pull_request.number) ||");
     });
   });
 

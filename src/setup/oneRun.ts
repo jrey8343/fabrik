@@ -13,6 +13,7 @@ import {
   CLAUDE_TOKEN_ITEM,
   FABRIK_APP_VAULT,
   FABRIK_VAULT,
+  oldAccountsNotes,
   type ProductState,
   requiredChecks,
   SECOND_SUBSCRIPTION,
@@ -139,10 +140,12 @@ export function readinessOf({ repo, report, earlierPr = null, fabrikItems, appIt
 export interface RunSummary {
   /** Each step setup carried out in this run. */
   readonly done: readonly string[];
-  /** The notes for the Operator, from the plan made after the wizard. */
+  /** The notes for the Operator, from the plan made after the wizard, after the one naming the old service accounts of the secrets this run deleted. */
   readonly notes: readonly string[];
   /** What the merge waits for that the wizard finishes. Empty when nothing it finishes holds the merge back, or there's no setup PR. */
   readonly blockers: readonly string[];
+  /** Setup's report, from the plan made after the wizard. The run's last lines say it again, and the setup PR never holds it: a public repo's would show a secret's name. */
+  readonly report: readonly string[];
   /** What else the merge waits for: the token of each listed Subscription no wizard stage stores, which the Operator stores by hand, as the plan's note says. */
   readonly storeByHand?: readonly string[];
   /** The repo the Operator has confirmed the Fabrik App is installed on, which the setup PR keeps for later runs. */
@@ -225,7 +228,8 @@ export async function runOnce({ plan, repo, earlierDone = [] }: OneRun, steps: O
   const files = after.plan.actions.filter((action) => action.kind === "write-file");
   const rest = after.plan.actions.filter((action) => action.kind !== "write-file");
   if (files.length > 0) await steps.apply(files);
-  const notes = [...after.plan.notes];
+  // A secret this run deleted is gone from what the plan made after the wizard read, so only the plan the run applied can still name its old account.
+  const notes = [...oldAccountsNotes(plan.actions).filter((note) => !after.plan.notes.includes(note)), ...after.plan.notes];
   if (rest.length > 0) {
     notes.push(
       `Setup found more to do after the wizard, and left it for the next run: ${rest.map(describeAction).join("; ")}. Run setup again to do it.`,
@@ -238,13 +242,14 @@ export async function runOnce({ plan, repo, earlierDone = [] }: OneRun, steps: O
   // A setup PR that changes no file would merge nothing, as after a repair of only labels, secrets or protection.
   if (!committed && !(await steps.somethingToPublish())) {
     await steps.leaveSetupBranch();
-    return { kind: "applied", summary: { done, notes, blockers: [] } };
+    return { kind: "applied", summary: { done, notes, blockers: [], report: after.plan.report } };
   }
   await steps.push();
   const published = await steps.publish({
     done,
     notes,
     blockers: mergeBlockers(after.readiness, repo),
+    report: after.plan.report,
     storeByHand: tokensByHand(after.readiness),
     ...(after.readiness.appInstalled ? { appInstalledOn: repo } : {}),
   });

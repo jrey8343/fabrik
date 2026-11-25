@@ -12,8 +12,8 @@ const WORKFLOW: SetupAction = { kind: "write-file", path: ".github/workflows/fab
 const LABEL: SetupAction = { kind: "create-label", name: "needs-triage", color: "ededed", description: "Waiting for Triage" };
 const SUBSCRIPTIONS: SetupAction = { kind: "write-file", path: ".fabrik/config.json", content: "{}\n", why: "the subscriptions line" };
 
-function plan(actions: SetupAction[], notes: string[] = []): SetupPlan {
-  return { actions, notes };
+function plan(actions: SetupAction[], notes: string[] = [], report: string[] = []): SetupPlan {
+  return { actions, notes, report };
 }
 
 function fakeSteps(options: { yes?: boolean; after?: SetupPlan; readiness?: Readiness; commits?: boolean; onTheBranch?: boolean } = {}) {
@@ -135,7 +135,18 @@ describe("One setup run", () => {
     const result = await runOnce({ plan: plan([LABEL], ["a note"]), repo: "acme/clinic" }, steps);
 
     expect(log).toEqual(["confirm", "switch", "apply create-label", "wizard", "read again", "commit", "anything to publish?", "leave"]);
-    expect(result).toEqual({ kind: "applied", summary: { done: ["create the label needs-triage"], notes: [], blockers: [] } });
+    expect(result).toEqual({ kind: "applied", summary: { done: ["create the label needs-triage"], notes: [], blockers: [], report: [] } });
+  });
+
+  it("carries Setup's report as the plan made after the wizard has it, with a setup PR and with none", async () => {
+    const before = plan([LABEL], [], ["This repo holds no repo-level Actions secret of its own."]);
+    const after = plan([], [], ["This repo holds no repo-level Actions secret of its own.", "Production's environment, production, isn't on this repo."]);
+
+    const published = await runOnce({ plan: before, repo: "acme/clinic" }, fakeSteps({ after }).steps);
+    const applied = await runOnce({ plan: before, repo: "acme/clinic" }, fakeSteps({ after, commits: false }).steps);
+
+    expect(published.kind === "done" && published.summary.report).toEqual(after.report);
+    expect(applied.kind === "applied" && applied.summary.report).toEqual(after.report);
   });
 
   it("with nothing committed, still pushes and publishes what an earlier run left on the setup branch", async () => {

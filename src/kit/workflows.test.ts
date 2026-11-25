@@ -1,7 +1,12 @@
 // The Kit's reusable workflows are wiring only. These hold the wiring to the
 // files it names, since nothing runs the workflows before a release.
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
+import { KIT_ENVIRONMENT } from "./environment.ts";
 import { kitJobOutputs } from "./jobs.ts";
 import { JUDGE_JOB } from "./judge.ts";
 import { PREVIEW_POLL_MINUTES } from "./previewLink.ts";
@@ -9,6 +14,7 @@ import { DIGEST_JOB, PROTOTYPE_JOB, RETRO_EVIDENCE_JOB } from "./pushJob.ts";
 import { REPLAY_ARMS } from "./runRecord.ts";
 import { RETRO_EVIDENCE_FILE } from "./retroEvidence.ts";
 import { JUDGE_TIMEOUT_MINUTES } from "./runStore.ts";
+import { tempDir } from "../__fixtures__/skillsArchive.ts";
 import { kitConfig } from "../__fixtures__/snapshots.ts";
 import { DIGEST_JOB_NAME, IMPLEMENT_JOB_NAME } from "../github/snapshot.ts";
 import { REPLAY_ROUTE_JOB_MINUTES } from "../loop/replayGate.ts";
@@ -104,8 +110,12 @@ describe("The Kit's workflows", () => {
     for (const action of local) expect(existsSync(new URL(`${action}/action.yml`, root)), action).toBe(true);
   });
 
-  it.each(workflows)("$path leaves reading GitHub to the Kit's Node program, never inline gh calls", ({ text }) => {
-    expect(text).not.toMatch(/\bgh (api|issue|pr|repo|release|run|workflow) /);
+  // A review's hand-off checks no Kit out, so its one call, which starts the caller workflow and reads nothing, is inline (#927).
+  it.each(workflows)("$path leaves reading GitHub to the Kit's Node program, never inline gh calls, but for a review's hand-off, which has no Kit", ({ text }) => {
+    const handOff = text === loop ? jobIn(text, "review-hand-off") : "";
+
+    expect(text.replace(handOff, "")).not.toMatch(/\bgh (api|issue|pr|repo|release|run|workflow) /);
+    expect(handOff.match(/\bgh /g) ?? []).toHaveLength(handOff === "" ? 0 : 1);
   });
 
   // Kept for reading a failed or timed-out run. Never fabrik-agent-*: the push job
@@ -3068,28 +3078,40 @@ describe("Re-running red checks", () => {
   });
 });
 
+type NeededJob = { readonly result: string; readonly outputs?: Readonly<Record<string, string>> };
+
+/** A job's own `if:`, folded or on one line, as loop.yml writes it. */
+function conditionOf(name: string): string {
+  const body = job(name);
+  const condition = /\n    if: >-\n((?: {6}.*\n)+)/.exec(body)?.[1] ?? /\n    if: (.*)\n/.exec(body)?.[1];
+  if (condition === undefined) throw new Error(`${name} has no if:`);
+  return condition;
+}
+
+/** A job's `if:`, evaluated as GitHub would on these jobs' results and outputs, in a run of this event that wasn't cancelled. */
+function jobRuns(name: string, jobs: Readonly<Record<string, NeededJob>>, github: { readonly event?: string; readonly label?: string } = {}): boolean {
+  const condition = conditionOf(name);
+  const read =(needed: string, output: string | undefined) => {
+    const ran = jobs[needed] ?? { result: "skipped" };
+    return output === undefined ? ran.result : (ran.outputs?.[output] ?? "");
+  };
+  const js = condition
+    .replace(/\s+/g, " ")
+    .replace(/^ ?\$\{\{(.*)\}\} ?$/, "$1")
+    .replace(/!cancelled\(\)/g, "true")
+    .replace(/always\(\)/g, "true")
+    .replace(/github\.event_name/g, JSON.stringify(github.event ?? ""))
+    .replace(/github\.event\.label\.name/g, JSON.stringify(github.label ?? ""))
+    .replace(/needs\.([\w-]+)\.(?:result|outputs\.([\w-]+))/g, (_all, needed: string, output?: string) => JSON.stringify(read(needed, output)))
+    .replace(/([!=])=/g, "$1==");
+  if (!/^[\s"'\w\-:.[\]()&|!=]*$/.test(js)) throw new Error(`${name}'s if: has more than the test reads: ${js}`);
+  return new Function(`return (${js});`)() as boolean;
+}
+
 // #783: agent:rerun-checks routes to the Re-run red checks job for one more re-run of an Unrelated failure at the Merge gate.
 describe("One more re-run at the Merge gate", () => {
-  type Job = { readonly result: string; readonly outputs?: Readonly<Record<string, string>> };
-  /** A job's `if:`, evaluated as GitHub would on these jobs' results and outputs, in a run that wasn't cancelled. */
-  const runs = (name: string, jobs: Readonly<Record<string, Job>>, label = "agent:rerun-checks"): boolean => {
-    const body = job(name);
-    const condition = /\n    if: >-\n((?: {6}.*\n)+)/.exec(body)?.[1] ?? /\n    if: (.*)\n/.exec(body)?.[1];
-    if (condition === undefined) throw new Error(`${name} has no if:`);
-    const read = (needed: string, output: string | undefined) => {
-      const ran = jobs[needed] ?? { result: "skipped" };
-      return output === undefined ? ran.result : (ran.outputs?.[output] ?? "");
-    };
-    const js = condition
-      .replace(/\s+/g, " ")
-      .replace(/!cancelled\(\)/g, "true")
-      .replace(/always\(\)/g, "true")
-      .replace(/github\.event\.label\.name/g, JSON.stringify(label))
-      .replace(/needs\.([\w-]+)\.(?:result|outputs\.([\w-]+))/g, (_all, needed: string, output?: string) => JSON.stringify(read(needed, output)))
-      .replace(/([!=])=/g, "$1==");
-    if (!/^[\s"'\w\-:.[\]()&|!=]*$/.test(js)) throw new Error(`${name}'s if: has more than the test reads: ${js}`);
-    return new Function(`return (${js});`)() as boolean;
-  };
+  type Job = NeededJob;
+  const runs = (name: string, jobs: Readonly<Record<string, Job>>, label = "agent:rerun-checks"): boolean => jobRuns(name, jobs, { label });
   const gate: Readonly<Record<string, Job>> = { kit: { result: "success", outputs: { route: "rerun-checks" } } };
 
   it("routes agent:rerun-checks to the Re-run red checks job, though the Review checks job it needs on a Review is skipped", () => {
@@ -3125,10 +3147,10 @@ describe("One more re-run at the Merge gate", () => {
     expect(runs("push", after)).toBe(false);
   });
 
-  it("leaves the Re-run red checks job the only one with actions: write", () => {
+  it("leaves the Re-run red checks job and a review's hand-off the only ones with actions: write", () => {
     const writers = loop.split(/\n(?=  [a-z-]+:\n)/).filter((section) => /\n {6}actions: write\n/.test(section)).map((section) => section.split(":")[0]!.trim());
 
-    expect(writers).toEqual(["rerun-checks"]);
+    expect(writers.sort()).toEqual(["rerun-checks", "review-hand-off"]);
   });
 });
 
@@ -3200,5 +3222,210 @@ describe("When the Reviewer runs", () => {
     // Both waits' files, under the names the Reviewer's runner reads them by, as the push job does.
     expect(job("review-checks")).toContain(`name: fabrik-agent-failure-excerpts\n          path: \${{ runner.temp }}/fabrik-out/${FAILURE_EXCERPTS_FILE}`);
     expect(job("rerun-wait")).toContain(`name: fabrik-agent-failure-excerpts-rerun\n          path: \${{ runner.temp }}/fabrik-out/${RERUN_FAILURE_EXCERPTS_FILE}`);
+  });
+});
+
+// #927, ADR-0004: GitHub starts a review's run as the pull request's merge ref, so it holds no token and only hands off.
+describe("A pull request review's run", () => {
+  const EVENTS = ["pull_request_review", "workflow_dispatch", "issues", "issue_comment", "pull_request_target", "push"];
+
+  type Step = { readonly uses?: string; readonly env?: Readonly<Record<string, string>>; readonly run?: string };
+  const handOff = (parse(loop) as { jobs: Record<string, { permissions: unknown; steps: readonly Step[] }> }).jobs["review-hand-off"]!;
+  const step = handOff.steps[0]!;
+
+  it("runs the hand-off job, which no other event's run does", () => {
+    expect(EVENTS.filter((event) => jobRuns("review-hand-off", {}, { event }))).toEqual(["pull_request_review"]);
+  });
+
+  it("skips the Kit job, which every other event's run runs, a hand-off's run among them", () => {
+    expect(EVENTS.filter((event) => jobRuns("kit", {}, { event }))).toEqual(["workflow_dispatch", "issues", "issue_comment", "pull_request_target", "push"]);
+  });
+
+  it("runs no other job: each needs the Kit job, and none that goes on past a skipped job has an if: that holds with the Kit job skipped", () => {
+    const others = [...loop.slice(loop.indexOf("\njobs:\n")).matchAll(/^ {2}([a-z-]+):$/gm)].map((match) => match[1]!).filter((name) => name !== "kit" && name !== "review-hand-off");
+
+    expect(others).toContain("push");
+    for (const name of others) {
+      const needs = /\n    needs: \[?([^\]\n]*)\]?\n/.exec(job(name))?.[1]?.split(", ") ?? [];
+      expect(needs, name).toContain("kit");
+      // GitHub skips a job that needs a skipped one, unless its if: calls a status function.
+      if (/\b(always|cancelled|failure)\(\)/.test(conditionOf(name))) expect(jobRuns(name, {}, { event: "pull_request_review" }), name).toBe(false);
+    }
+  });
+
+  it("gives the hand-off job actions: write on the workflow token and no other permission", () => {
+    expect(handOff.permissions).toEqual({ actions: "write" });
+  });
+
+  it("names no environment in the hand-off job, which reads no secret and checks nothing out: its one step is a script", () => {
+    expect(handOff).not.toHaveProperty("environment");
+    expect(job("review-hand-off")).not.toContain("secrets.");
+    expect(handOff.steps).toHaveLength(1);
+    expect(step.uses).toBeUndefined();
+    expect(step.env?.["GH_TOKEN"]).toBe("${{ github.token }}");
+  });
+
+  it("hands the pull request's number and the review's id to the hand-off's step through env:, never in its run: script", () => {
+    expect(step.env).toMatchObject({ PULL_REQUEST: "${{ github.event.pull_request.number }}", REVIEW: "${{ github.event.review.id }}" });
+    expect(step.run).not.toContain("${{");
+  });
+
+  it("starts the caller workflow's own file on the default branch, whatever either is named, with the pull request and the review as its inputs", async () => {
+    const bin = await tempDir("hand-off");
+    const said = join(bin, "said");
+    writeFileSync(join(bin, "gh"), '#!/bin/sh\nprintf \'%s\\n\' "$@" >"$GH_SAID"\n', { mode: 0o755 });
+
+    // As GitHub runs a run: script on a Linux runner, with what the step's env: holds on a review of PR #60.
+    const run = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", step.run ?? ""], {
+      encoding: "utf8",
+      env: {
+        PATH: `${bin}:${process.env["PATH"] ?? ""}`,
+        GH_SAID: said,
+        GH_TOKEN: "workflow-token",
+        GITHUB_REPOSITORY: "acme/shop",
+        WORKFLOW_REF: "acme/shop/.github/workflows/factory.yml@refs/pull/60/merge",
+        DEFAULT_BRANCH: "trunk",
+        PULL_REQUEST: "60",
+        REVIEW: "4521",
+      },
+    });
+
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(readFileSync(said, "utf8").trimEnd().split("\n")).toEqual([
+      "api",
+      "--method",
+      "POST",
+      "repos/acme/shop/actions/workflows/factory.yml/dispatches",
+      "-f",
+      "ref=trunk",
+      "-f",
+      "inputs[pull_request]=60",
+      "-f",
+      "inputs[review]=4521",
+    ]);
+  });
+});
+
+/** Each job of a workflow, in the file's order, with the environment its YAML names and whether its own text reads a secret, as `secrets.` or `secrets[`. */
+function jobEnvironments(workflow: string): readonly { readonly name: string; readonly readsSecret: boolean; readonly environment: unknown }[] {
+  const jobs = (parse(workflow) as { jobs: Record<string, { readonly environment?: unknown }> }).jobs;
+  const text = workflow.slice(workflow.indexOf("\njobs:\n"));
+  return Object.entries(jobs).map(([name, body]) => ({ name, readsSecret: /\bsecrets[.[]/.test(jobIn(text, name)), environment: body.environment }));
+}
+
+/**
+ * What each job of a workflow gets wrong about the `fabrik` environment. None
+ * when every job that reads a secret names it, with `deployment: false` and
+ * nothing more, and every job that reads none names no environment.
+ */
+function environmentFaults(workflow: string): string[] {
+  return jobEnvironments(workflow).flatMap(({ name, readsSecret, environment }) => {
+    if (!readsSecret) return environment === undefined ? [] : [`${name} reads no secret and names an environment`];
+    if (environment === undefined) return [`${name} reads a secret and names no environment`];
+    if (!isDeepStrictEqual(environment, { name: KIT_ENVIRONMENT, deployment: false })) return [`${name} reads a secret and names its environment as ${JSON.stringify(environment)}`];
+    return [];
+  });
+}
+
+// #928, ADR-0004: the Kit's tokens are the secrets of the `fabrik` environment, which only the default branch may use.
+describe("The fabrik environment", () => {
+  it.each(workflows)("is named, with deployment: false, by every job of $path that reads a secret, and no job that reads none names an environment", ({ text }) => {
+    expect(environmentFaults(text)).toEqual([]);
+  });
+
+  it.each([
+    {
+      file: "loop.yml",
+      named: [
+        "kit",
+        "triage",
+        "design",
+        "prototype",
+        "implement-claim",
+        "implement",
+        "review",
+        "digest",
+        "audit",
+        "retro-evidence",
+        "retro",
+        "research",
+        "replay-implement",
+        "replay-gates",
+        "replay-review",
+        "replay-score",
+        "replay-record",
+        "push",
+        "dispatch",
+        "design-queue",
+        "score",
+        "score-record",
+      ],
+      none: ["review-hand-off", "review-checks", "rerun-checks", "rerun-wait"],
+    },
+    { file: "schedule.yml", named: ["tick", "dispatch", "design-queue", "skills-bump", "release-running", "monitor"], none: ["kit"] },
+    { file: "tick-check.yml", named: ["check"], none: ["kit"] },
+    { file: "weekly-summary.yml", named: ["summary"], none: ["kit"] },
+  ])("is named by each job of $file that reads a token, and by none of those that read none", ({ file, named, none }) => {
+    const jobs = jobEnvironments(workflows.find((workflow) => workflow.path.endsWith(`/${file}`))!.text);
+
+    expect(jobs.filter((job) => job.environment !== undefined).map((job) => job.name)).toEqual(named);
+    expect(jobs.filter((job) => job.environment === undefined).map((job) => job.name)).toEqual(none);
+  });
+
+  /** A workflow's header comment, the lines above its `name:`, as its paragraphs. */
+  const headerOf = (text: string): readonly string[] => text.slice(0, text.indexOf("\nname: ")).split("\n#\n");
+
+  it("is said in loop.yml's header comment, straight after the paragraph on each AFK role", () => {
+    const header = headerOf(loop);
+
+    expect(header[header.findIndex((paragraph) => paragraph.startsWith("# Each AFK role is an agent job")) + 1]).toBe(
+      [
+        "# Every job that reads a service-account token names the caller repo's",
+        "# `fabrik` environment, with `deployment: false` so GitHub records no",
+        "# Deployment (ADR-0021), and only the default branch may use it (ADR-0004):",
+        "# GitHub fails such a job on any other ref before its first step. A job that",
+        "# reads no token names none. The caller still passes each token by name, and",
+        "# it reaches the job from the environment.",
+      ].join("\n"),
+    );
+  });
+
+  it.each(workflows.filter(({ text }) => text !== loop))("is said in one line of $path's header comment", ({ text }) => {
+    const said = headerOf(text)
+      .flatMap((paragraph) => paragraph.split("\n"))
+      .filter((line) => line.includes("environment"));
+
+    expect(said).toEqual(["# Each job that reads OP_PUSH_TOKEN names the caller repo's fabrik environment, as loop.yml's do (ADR-0004)."]);
+  });
+
+  describe("in a made-up workflow", () => {
+    const READS = "        env:\n          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PUSH_TOKEN }}\n";
+    const NAMED = "    environment:\n      name: fabrik\n      deployment: false\n";
+    const madeUp = (...jobs: readonly (readonly [name: string, environment: string, env: string])[]): string =>
+      `name: Made up\n\non:\n  workflow_call:\n    secrets:\n      OP_PUSH_TOKEN:\n        required: true\n\njobs:\n${jobs
+        .map(([name, environment, env]) => `  ${name}:\n    runs-on: ubuntu-latest\n${environment}    steps:\n      - run: echo hello\n${env}`)
+        .join("\n")}`;
+
+    it("is found missing from a new job that reads a token and names no environment", () => {
+      expect(environmentFaults(madeUp(["kit", "", ""], ["push", NAMED, READS], ["new-job", "", READS]))).toEqual(["new-job reads a secret and names no environment"]);
+    });
+
+    it.each([
+      ["it by its name alone, which records a Deployment", "    environment: fabrik\n", '"fabrik"'],
+      ["it with no deployment: false", "    environment:\n      name: fabrik\n", '{"name":"fabrik"}'],
+      ["it with deployment: true", "    environment:\n      name: fabrik\n      deployment: true\n", '{"name":"fabrik","deployment":true}'],
+      ["another environment", "    environment:\n      name: production\n      deployment: false\n", '{"name":"production","deployment":false}'],
+    ])("is found wrong in a job that reads a token and names %s", (_name, environment, read) => {
+      expect(environmentFaults(madeUp(["kit", "", ""], ["push", environment, READS]))).toEqual([`push reads a secret and names its environment as ${read}`]);
+    });
+
+    it("is found on a job that names it and reads no token", () => {
+      expect(environmentFaults(madeUp(["kit", NAMED, ""], ["push", NAMED, READS]))).toEqual(["kit reads no secret and names an environment"]);
+    });
+
+    it("is named only once by a job: YAML takes no second environment: key", () => {
+      expect(() => environmentFaults(madeUp(["push", NAMED + NAMED, READS]))).toThrow("Map keys must be unique");
+    });
   });
 });

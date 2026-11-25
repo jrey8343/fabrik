@@ -101,6 +101,7 @@ const READ_ONLY = [
   /^git ls-remote /,
   /^git merge-base --is-ancestor /,
   /^git cat-file -e /,
+  /^git show /,
   /^gh api (?!--method)/,
   /^gh repo view /,
   /^gh (label|secret|issue) list /,
@@ -119,6 +120,16 @@ describe("The setup program", () => {
     expect(code).toBe(0);
     expect(said[0]).toBe("Setup uses the 1Password account my.1password.com (operator@example.com).");
     expect(said).toContain("Setup would:");
+  });
+
+  it("stops before any plan when GitHub refuses the read of the fabrik environment with anything but a 404, naming its answer", async () => {
+    const refused = { "gh api repos/acme/clinic/environments/fabrik": { code: 1, stderr: "gh: Server Error (HTTP 502)\n" } };
+
+    const { code, said, complaints } = await setup([".", "v1.4.2"], { script: refused });
+
+    expect(code).toBe(1);
+    expect(complaints).toEqual(["Reading the fabrik environment on acme/clinic failed: gh: Server Error (HTTP 502)"]);
+    expect(said).toEqual([]);
   });
 
   it("plans the Fabrik vaults an account lacks as ordinary steps, not a warning", async () => {
@@ -363,6 +374,51 @@ describe("The setup program", () => {
 
     expect(code).toBe(0);
     expect(said).toContain("Run setup again without --plan to do it.");
+  });
+
+  describe("Setup's report, said under the plan after its notes", () => {
+    const ANSWERED = ["--no-time-zone", "--no-second-subscription", "--no-paused", "--no-production", "--no-staging"];
+    const ownSecrets = { "gh secret list --json name": { stdout: JSON.stringify([{ name: "STRIPE_KEY" }, { name: "FABRIK_OP_PUSH_TOKEN" }, { name: "CLOUDFLARE_API_TOKEN" }]) } };
+    const REPORT = [
+      "Setup's report:",
+      "- The repo-level Actions secret CLOUDFLARE_API_TOKEN can be read by a workflow run on any branch.",
+      "- The repo-level Actions secret STRIPE_KEY can be read by a workflow run on any branch.",
+      "- A credential that can reach production belongs in an environment held to main alone, or in a role taken by OIDC whose trust names that environment and not the whole repo. Only test and preview credentials sit at repo level.",
+    ];
+    const NOTE = "- main has no Required checks yet: list the CI checks that must pass in sandbox.checks in .fabrik/config.json, then run setup again.";
+    // The Kit's own token at repo level is a note's, never the report's: the default branch has no caller workflow yet, so it stays (#931).
+    const STAYS =
+      "- The repo-level Actions secret FABRIK_OP_PUSH_TOKEN stays for now, since the Kit main pins names no environment and reads it. " +
+      "Once the setup PR is merged, run setup again and it deletes it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
+
+    it.each<[string, string[], Options, string[]]>([
+      ["with --plan", ["--plan"], {}, []],
+      ["without a terminal", [], { prompt: null }, []],
+      ["in a terminal, before it asks the Operator's yes", ANSWERED, { prompt: scripted("n"), script: NO_EARLIER_RUN }, ["", "Setup changed nothing."]],
+    ])("%s", async (_, args, options, after) => {
+      const { code, said } = await setup([".", "v1.4.2", ...args], { ...options, script: { ...ownSecrets, ...options.script } });
+
+      expect(code).toBe(0);
+      expect(said).toContain("Setup would:");
+      expect(said.slice(said.indexOf("For the Operator:"))).toEqual(["For the Operator:", STAYS, NOTE, "", ...REPORT, ...after]);
+    });
+
+    it("says a repo with no secret of its own holds none, and whether the environment the checkout's Kit config names for production is held", async () => {
+      await mkdir(join(productDir, ".fabrik"));
+      await writeFile(join(productDir, ".fabrik/config.json"), JSON.stringify({ production: { url: "https://clinic.example.com", environment: "live" } }));
+      const live = { "gh api repos/acme/clinic/environments/live": { stdout: JSON.stringify({ name: "live", deployment_branch_policy: null }) } };
+
+      const { code, said, calls } = await setup([".", "v1.4.2", "--plan"], { script: live });
+
+      expect(code).toBe(0);
+      expect(said.slice(said.indexOf("Setup's report:") - 1)).toEqual([
+        "",
+        "Setup's report:",
+        "- This repo holds no repo-level Actions secret of its own.",
+        "- Production's environment, live, isn't held to main alone (every branch), so a run on another ref that names it is given its secrets.",
+      ]);
+      expect(calls.filter((call) => !isReadOnly(call)).map((call) => call.line)).toEqual([]);
+    });
   });
 
   it("refuses a flag it doesn't know with the usage line, before running anything", async () => {

@@ -7,12 +7,13 @@ import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { aReadyOperator, fakeCommands } from "../__fixtures__/setupCommands.ts";
-import { aWorld, store, type World, worldScript } from "../__fixtures__/setupWorld.ts";
+import { anEnvironment, aWorld, environmentOf, store, type World, type WorldEnvironment, worldScript } from "../__fixtures__/setupWorld.ts";
 import { tempDir } from "../__fixtures__/skillsArchive.ts";
 import { resolveKitConfig } from "../kit/config.ts";
 import { type Env, type Run, spawnRun } from "./exec.ts";
 import { runSetup } from "./program.ts";
 import type { Prompt } from "./prompt.ts";
+import { pinCaller } from "./shims.ts";
 import { WIZARD_SECOND_SUBSCRIPTION_ENV } from "./wizard.ts";
 
 const KIT_DIR = resolve(import.meta.dirname, "..", "..");
@@ -23,6 +24,9 @@ const FLAGS = ["--no-production", "--no-staging", "--no-time-zone", "--no-second
 let origin: string;
 let checkout: string;
 let env: Env;
+
+/** The Kit's three Actions secrets, by name, in the order Setup makes their accounts. */
+const TOKENS = ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"];
 
 const git = (...args: string[]) => execFileSync("git", args, { cwd: checkout, encoding: "utf8", env: env as NodeJS.ProcessEnv });
 const originGit = (...args: string[]) => execFileSync("git", args, { cwd: origin, encoding: "utf8", env: env as NodeJS.ProcessEnv });
@@ -85,9 +89,11 @@ interface Options {
   readonly args?: string[];
   /** Whether stdin is a terminal. Without one, setup asks nothing. */
   readonly terminal?: boolean;
+  /** What happens elsewhere as the run goes, given each command line before it runs, as when someone changes the repo on github.com meanwhile. */
+  readonly during?: (line: string) => void;
 }
 
-async function setupOnce(world: World, { answers = ["y"], wizard = walksEveryStage, args = FLAGS, terminal = true }: Options = {}) {
+async function setupOnce(world: World, { answers = ["y"], wizard = walksEveryStage, args = FLAGS, terminal = true, during }: Options = {}) {
   const log: string[] = [];
   const said: string[] = [];
   const complaints: string[] = [];
@@ -95,6 +101,7 @@ async function setupOnce(world: World, { answers = ["y"], wizard = walksEverySta
   const commands = fakeCommands({ ...aReadyOperator(checkout), ...worldScript(world, { commitsAhead, compare }) });
   const run: Run = async (command, commandArgs, options) => {
     log.push([command, ...commandArgs].join(" "));
+    during?.(log.at(-1)!);
     return command === "git" ? spawnRun(command, commandArgs, options) : commands.run(command, commandArgs, options);
   };
   const prompt = scripted(answers);
@@ -1357,6 +1364,709 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect((await setupOnce(world)).said).toContain("Nothing to do: this repo's Fabrik install is complete.");
   });
 
+  describe("the fabrik environment, held to the default branch (ADR-0004)", () => {
+    const ENVIRONMENT = "repos/acme/clinic/environments/fabrik";
+    const CREATE = "- create the fabrik environment, held to main alone: only a run of main is given its secrets";
+    /** The environment's rules as GitHub holds them, without the ids it gave them. */
+    const rulesOf = (world: World) => environmentOf(world)?.rules.map(({ name, type }) => ({ name, type }));
+
+    it("on a fresh repo, plans making it as the first step, and makes it with one branch rule naming the default branch", async () => {
+      const world = aWorld();
+
+      const { code, said, complaints, calls } = await setupOnce(world);
+
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(said[said.indexOf("Setup would:") + 1]).toBe(CREATE);
+      expect(environmentOf(world)?.policy).toEqual({ protected_branches: false, custom_branch_policies: true });
+      expect(rulesOf(world)).toEqual([{ name: "main", type: "branch" }]);
+      const puts = calls.filter((call) => call.line === `gh api --method PUT ${ENVIRONMENT} --input -`);
+      expect(puts.map((call) => call.input)).toEqual(['{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}']);
+    });
+
+    type Found = Parameters<typeof anEnvironment>[1];
+
+    it.each<[string, Found, string]>([
+      ["every branch, as GitHub makes one a workflow names", { policy: "all" }, "every branch"],
+      ["protected branches only", { policy: "protected" }, "protected branches only"],
+      ["selected branches and tags with no rule", { policy: "selected" }, "none"],
+      ["a rule naming another branch", { rules: ["release"] }, "release"],
+      ["a tag rule named main", { rules: [{ name: "main", type: "tag" }] }, "tag main"],
+      ["the right rule beside another", { rules: ["main", "release/*"] }, "main, release/*"],
+      ["a rule naming what the default branch was called before it was renamed", { rules: ["master"] }, "master"],
+    ])("found with %s, plans holding it first, from what to what, and leaves exactly the one rule and its secrets", async (_, found, before) => {
+      const world = aWorld();
+      anEnvironment(world, { ...found, secrets: ["STRIPE_KEY"] });
+
+      const { code, said, complaints } = await setupOnce(world);
+
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(said[said.indexOf("Setup would:") + 1]).toBe(`- hold the fabrik environment to main alone: rules ${before} → main`);
+      expect(environmentOf(world)?.policy).toEqual({ protected_branches: false, custom_branch_policies: true });
+      expect(rulesOf(world)).toEqual([{ name: "main", type: "branch" }]);
+      // Its own secret stays, beside the three tokens the run's later steps store in it.
+      expect([...environmentOf(world)!.secrets]).toEqual(["STRIPE_KEY", ...TOKENS]);
+    });
+
+    it("adds the rule naming the default branch before it deletes any other, then reads the environment back, its setting and its rules", async () => {
+      const world = aWorld();
+      const found = anEnvironment(world, { rules: ["release", { name: "main", type: "tag" }] });
+      const [release, tag] = found.rules.map((rule) => rule.id);
+
+      await setupOnce(world);
+
+      const RULES = `${ENVIRONMENT}/deployment-branch-policies`;
+      const applying = world.environmentCalls.slice(world.environmentCalls.indexOf(`gh api --method PUT ${ENVIRONMENT} --input -`));
+      expect(applying.slice(0, 7)).toEqual([
+        `gh api --method PUT ${ENVIRONMENT} --input -`,
+        `gh api ${RULES}?per_page=100`,
+        `gh api --method POST ${RULES} -f name=main -f type=branch`,
+        `gh api --method DELETE ${RULES}/${release}`,
+        `gh api --method DELETE ${RULES}/${tag}`,
+        `gh api ${ENVIRONMENT}`,
+        `gh api ${RULES}?per_page=100`,
+      ]);
+    });
+
+    it("adds no rule to one that has the default branch's rule beside another, and deletes only the other", async () => {
+      const world = aWorld();
+      const found = anEnvironment(world, { rules: ["main", "release"] });
+      const [main, release] = found.rules.map((rule) => rule.id);
+
+      await setupOnce(world);
+
+      const changes = world.environmentCalls.filter((line) => /--method (POST|DELETE)/.test(line));
+      expect(changes).toEqual([`gh api --method DELETE ${ENVIRONMENT}/deployment-branch-policies/${release}`]);
+      expect(environmentOf(world)?.rules).toEqual([{ id: main, name: "main", type: "branch" }]);
+    });
+
+    const changing = (world: World) => world.environmentCalls.filter((line) => line.includes("--method"));
+
+    it("on a working install, whose environment the first run held, plans no step, changes nothing of it and says the install is complete", async () => {
+      const world = aWorld();
+      await setupOnce(world);
+      mergeTheSetupPr(world);
+      world.environmentCalls.length = 0;
+
+      const { code, said } = await setupOnce(world);
+
+      expect(code).toBe(0);
+      expect(said).toContain("Nothing to do: this repo's Fabrik install is complete.");
+      expect(said.join("\n")).not.toContain("the fabrik environment");
+      expect(changing(world)).toEqual([]);
+    });
+
+    it("on a working install whose one rule was deleted since, puts it back, opens no PR, and the next run plans nothing", async () => {
+      const world = aWorld();
+      await setupOnce(world);
+      mergeTheSetupPr(world);
+      environmentOf(world)!.rules = [];
+
+      const { code, said, complaints } = await setupOnce(world);
+
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(said.filter((line) => line.startsWith("- "))).toContain("- hold the fabrik environment to main alone: rules none → main");
+      expect(rulesOf(world)).toEqual([{ name: "main", type: "branch" }]);
+      expect(world.prs).toHaveLength(1);
+      expect(said).toContain("Every file setup writes is already on main, so there's no setup PR to open. Setup switched back to main.");
+      expect((await setupOnce(world)).said).toContain("Nothing to do: this repo's Fabrik install is complete.");
+    });
+
+    it("with --plan, names the step and changes nothing of the environment", async () => {
+      const world = aWorld();
+      anEnvironment(world, { rules: ["release"] });
+
+      const { code, said } = await setupOnce(world, { args: [...FLAGS, "--plan"] });
+
+      expect(code).toBe(0);
+      expect(said[said.indexOf("Setup would:") + 1]).toBe("- hold the fabrik environment to main alone: rules release → main");
+      expect(changing(world)).toEqual([]);
+      expect(rulesOf(world)).toEqual([{ name: "release", type: "branch" }]);
+    });
+
+    /** What a run changed beyond the fabrik environment: nothing, when it stopped at the environment's step. */
+    const changedElsewhere = (world: World, log: string[]) => ({
+      labels: [...world.labels],
+      secrets: [...world.secrets],
+      vaults: [...world.vaults],
+      protection: world.protection,
+      ruleset: world.ruleset,
+      prs: world.prs.length,
+      commands: log.filter((line) => /^gh (label create|secret set|pr create)|^op (vault|service-account) create|^git (commit|push)|^wizard$/.test(line)),
+    });
+    const NOTHING = { labels: [], secrets: [], vaults: [], protection: null, ruleset: null, prs: 0, commands: [] };
+
+    it("stops when the rules don't read back as the one rule, saying what they read back as, and runs no later step", async () => {
+      const world = aWorld();
+      anEnvironment(world, { policy: "all" }).dropsNewRules = true;
+
+      const { code, complaints, log } = await setupOnce(world);
+
+      expect(code).toBe(1);
+      expect(complaints).toEqual([
+        "The fabrik environment on acme/clinic reads back as none, not held to main alone, so Setup stored no token in it. Run setup again.",
+      ]);
+      expect(changedElsewhere(world, log)).toEqual(NOTHING);
+    });
+
+    it.each<[string, WorldEnvironment["policy"]]>([
+      ["every branch", null],
+      ["protected branches only", { protected_branches: true, custom_branch_policies: false }],
+    ])("stops when the setting reads back as %s though the one rule is listed, saying so, and runs no later step", async (setting, policy) => {
+      const world = aWorld();
+      anEnvironment(world, { rules: ["release"] });
+      // Someone changes the setting on github.com once Setup has set it, before Setup reads the environment back.
+      const during = (line: string) => {
+        if (line.startsWith(`gh api --method POST ${ENVIRONMENT}/deployment-branch-policies `)) environmentOf(world)!.policy = policy;
+      };
+
+      const { code, complaints, log } = await setupOnce(world, { during });
+
+      expect(rulesOf(world)).toEqual([{ name: "main", type: "branch" }]);
+      expect(code).toBe(1);
+      expect(complaints).toEqual([
+        `The fabrik environment on acme/clinic reads back as ${setting}, not held to main alone, so Setup stored no token in it. Run setup again.`,
+      ]);
+      expect(changedElsewhere(world, log)).toEqual(NOTHING);
+    });
+
+    it("stops when GitHub refuses the environment, naming its answer and the plans that have environments, and applies no other step of the plan", async () => {
+      const world = aWorld();
+      world.environmentRefusal = "gh: Not Found (HTTP 404)\n";
+
+      const { code, complaints, log } = await setupOnce(world);
+
+      expect(code).toBe(1);
+      expect(complaints).toEqual([
+        "GitHub refused the fabrik environment on acme/clinic: gh: Not Found (HTTP 404). A private repo needs a GitHub plan with environments: GitHub Pro for a personal account's repo, or GitHub Team for an organization's. The Kit keeps no fallback to repo-level secrets, so Setup stopped before changing anything else.",
+      ]);
+      expect(world.environments.size).toBe(0);
+      expect(changedElsewhere(world, log)).toEqual(NOTHING);
+    });
+  });
+
+  describe("the three tokens, stored in the fabrik environment under new service accounts (ADR-0004)", () => {
+    const ENVIRONMENT = "repos/acme/clinic/environments/fabrik";
+    /** Each service account the run made, as op was asked for it. */
+    const made = (log: string[]) => log.filter((line) => line.startsWith("op service-account create "));
+
+    it("on a fresh repo, makes the environment, then the three -env accounts, each stored in the fabrik environment, and sets no repo-level secret", async () => {
+      const world = aWorld();
+
+      const { code, said, complaints, log } = await setupOnce(world);
+
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(said.slice(said.indexOf("Setup would:"), said.indexOf(`On ${BRANCH}.`)).filter((line) => line.includes("service account"))).toEqual([
+        '- create the read-only service account "fabrik-acme-clinic-agent-env" (reads "Fabrik") and store it as FABRIK_OP_AGENT_TOKEN in the fabrik environment',
+        '- create the read-only service account "fabrik-acme-clinic-implement-env" (reads "Fabrik", "Fabrik Sandbox · clinic") and store it as FABRIK_OP_IMPLEMENT_TOKEN in the fabrik environment',
+        '- create the read-only service account "fabrik-acme-clinic-push-env" (reads "Fabrik App") and store it as FABRIK_OP_PUSH_TOKEN in the fabrik environment',
+      ]);
+      expect(made(log)).toEqual([
+        "op service-account create fabrik-acme-clinic-agent-env --vault Fabrik:read_items --raw",
+        "op service-account create fabrik-acme-clinic-implement-env --vault Fabrik:read_items --vault Fabrik Sandbox · clinic:read_items --raw",
+        "op service-account create fabrik-acme-clinic-push-env --vault Fabrik App:read_items --raw",
+      ]);
+      expect(index(log, /^gh api --method PUT repos\/acme\/clinic\/environments\/fabrik /)).toBeLessThan(index(log, /^op service-account create /));
+      expect([...environmentOf(world)!.secrets]).toEqual(TOKENS);
+      expect([...world.secrets]).toEqual([]);
+    });
+
+    it("gives each token to gh secret set --env fabrik on its stdin, and shows it in no argument, no line it says and not in the setup PR", async () => {
+      const world = aWorld();
+
+      const { said, complaints, calls } = await setupOnce(world);
+
+      const sets = calls.filter((call) => call.line.startsWith("gh secret set "));
+      expect(sets.map(({ line, input }) => [line, input])).toEqual(TOKENS.map((name) => [`gh secret set ${name} --env fabrik`, "ops_token"]));
+      expect(calls.filter((call) => call.line.includes("ops_token"))).toEqual([]);
+      expect([...said, ...complaints, world.prs[0]!.body].join("\n")).not.toContain("ops_token");
+    });
+
+    it("reads the environment, its setting and its rules, before it makes each account, and makes none before the environment the run held reads back", async () => {
+      const world = aWorld();
+
+      const { log } = await setupOnce(world);
+
+      const PUT = `gh api --method PUT ${ENVIRONMENT} --input -`;
+      const RULES = `gh api ${ENVIRONMENT}/deployment-branch-policies?per_page=100`;
+      /** The environment read whole: its setting, then its rules. */
+      const READ = [`gh api ${ENVIRONMENT}`, RULES];
+      const steps = log.filter((line) => line.includes(ENVIRONMENT) || /^op service-account create |^gh secret set /.test(line));
+      expect(steps.slice(steps.indexOf(PUT), steps.indexOf(PUT) + 17)).toEqual([
+        PUT,
+        RULES,
+        `gh api --method POST ${ENVIRONMENT}/deployment-branch-policies -f name=main -f type=branch`,
+        ...READ,
+        ...READ,
+        "op service-account create fabrik-acme-clinic-agent-env --vault Fabrik:read_items --raw",
+        "gh secret set FABRIK_OP_AGENT_TOKEN --env fabrik",
+        ...READ,
+        "op service-account create fabrik-acme-clinic-implement-env --vault Fabrik:read_items --vault Fabrik Sandbox · clinic:read_items --raw",
+        "gh secret set FABRIK_OP_IMPLEMENT_TOKEN --env fabrik",
+        ...READ,
+        "op service-account create fabrik-acme-clinic-push-env --vault Fabrik App:read_items --raw",
+        "gh secret set FABRIK_OP_PUSH_TOKEN --env fabrik",
+      ]);
+    });
+
+    /** Someone changes the environment on github.com once the Operator has said yes, after Setup read it. */
+    const afterTheYes = (change: () => void) => (line: string) => {
+      if (line === `git switch -C ${BRANCH}`) change();
+    };
+    const STORED_NONE = "The fabrik environment on acme/clinic isn't held to main alone, so Setup stored no token in it. Run setup again.";
+
+    it.each<[string, (environment: WorldEnvironment) => void]>([
+      ["no rule", (environment) => void (environment.rules = [])],
+      ["a rule naming another branch", (environment) => void (environment.rules = [{ id: 201, name: "release", type: "branch" }])],
+      ["a tag rule named main", (environment) => void (environment.rules = [{ id: 201, name: "main", type: "tag" }])],
+      ["another rule beside its one", (environment) => void environment.rules.push({ id: 201, name: "release/*", type: "branch" })],
+      // GitHub keeps an environment's rules, and lists them, under a setting that doesn't use them.
+      ["its one rule, under a setting changed to every branch", (environment) => void (environment.policy = null)],
+      [
+        "its one rule, under a setting changed to protected branches only",
+        (environment) => void (environment.policy = { protected_branches: true, custom_branch_policies: false }),
+      ],
+    ])("in a run that found the environment held and planned no step for it, stops before it makes an account when its rules read as %s", async (_, change) => {
+      const world = aWorld();
+      const environment = anEnvironment(world, { rules: ["main"] });
+
+      const { code, said, complaints, log } = await setupOnce(world, { during: afterTheYes(() => change(environment)) });
+
+      expect(said.filter((line) => line.includes("the fabrik environment, held to") || line.includes("hold the fabrik environment"))).toEqual([]);
+      expect(code).toBe(1);
+      expect(complaints).toEqual([STORED_NONE]);
+      expect(made(log)).toEqual([]);
+      expect(log.filter((line) => line.startsWith("gh secret set "))).toEqual([]);
+      expect([...environment.secrets]).toEqual([]);
+      expect([...world.secrets]).toEqual([]);
+    });
+
+    it("stops before it makes an account when the environment is gone, as one deleted since Setup read it", async () => {
+      const world = aWorld();
+      anEnvironment(world, { rules: ["main"] });
+
+      const { code, complaints, log } = await setupOnce(world, { during: afterTheYes(() => world.environments.clear()) });
+
+      expect(complaints).toEqual([STORED_NONE]);
+      expect(code).toBe(1);
+      expect(made(log)).toEqual([]);
+      expect(log.filter((line) => line.startsWith("gh secret set "))).toEqual([]);
+      expect([...world.secrets]).toEqual([]);
+    });
+
+    it("on a repo whose three tokens sit at repo level only, makes three new accounts in the environment and leaves the repo-level secrets", async () => {
+      const world = aWorld();
+      const repoLevel = [...TOKENS, "STRIPE_KEY"];
+      for (const name of repoLevel) world.secrets.add(name);
+
+      const first = await setupOnce(world);
+
+      expect(first.complaints).toEqual([]);
+      expect(made(first.log).map((line) => line.split(" ")[3])).toEqual(["fabrik-acme-clinic-agent-env", "fabrik-acme-clinic-implement-env", "fabrik-acme-clinic-push-env"]);
+      expect([...environmentOf(world)!.secrets]).toEqual(TOKENS);
+      expect([...world.secrets]).toEqual(repoLevel);
+    });
+
+    it.each<[string, readonly string[]]>([
+      ["none of them", []],
+      ["all three", TOKENS],
+    ])("on a repo whose environment holds all three, makes no account, with %s at repo level", async (_, repoLevel) => {
+      const world = aWorld();
+      anEnvironment(world, { rules: ["main"], secrets: TOKENS });
+      for (const name of repoLevel) world.secrets.add(name);
+
+      const { code, said, log } = await setupOnce(world);
+
+      expect(code).toBe(0);
+      expect(said.filter((line) => line.includes("service account"))).toEqual([]);
+      expect(made(log)).toEqual([]);
+      expect(log.filter((line) => line.startsWith("gh secret set "))).toEqual([]);
+    });
+
+    it("on a repo whose environment lacks one, makes only that role's account, though a repo-level secret carries its name", async () => {
+      const world = aWorld();
+      anEnvironment(world, { rules: ["main"], secrets: ["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_PUSH_TOKEN"] });
+      for (const name of TOKENS) world.secrets.add(name);
+
+      const { code, log } = await setupOnce(world);
+
+      expect(code).toBe(0);
+      expect(made(log)).toEqual(["op service-account create fabrik-acme-clinic-implement-env --vault Fabrik:read_items --vault Fabrik Sandbox · clinic:read_items --raw"]);
+      expect(log.filter((line) => line.startsWith("gh secret set "))).toEqual(["gh secret set FABRIK_OP_IMPLEMENT_TOKEN --env fabrik"]);
+      expect([...environmentOf(world)!.secrets]).toEqual(["FABRIK_OP_AGENT_TOKEN", "FABRIK_OP_PUSH_TOKEN", "FABRIK_OP_IMPLEMENT_TOKEN"]);
+      expect([...world.secrets]).toEqual(TOKENS);
+    });
+  });
+
+  describe("the repo-level tokens, deleted once the default branch's Kit names the fabrik environment (ADR-0004)", () => {
+    const DELETES = TOKENS.map((name) => `- delete the repo-level Actions secret ${name}: the Kit main pins reads the fabrik environment's`);
+    /** Each service account the run made, and each repo-level secret it deleted, as op and gh were asked. */
+    const made = (log: string[]) => log.filter((line) => line.startsWith("op service-account create "));
+    const deleted = (log: string[]) => log.filter((line) => line.startsWith("gh secret delete "));
+    /** The steps of the plan Setup showed, before it applied any. */
+    const planned = (said: string[]) => said.slice(said.indexOf("Setup would:") + 1, said.indexOf("", said.indexOf("Setup would:")));
+
+    /** A repo already on the Kit: its default branch's caller workflow pins this release, and its three tokens sit at repo level, beside a secret of its own. */
+    async function onTheKitAt(world: World, release: string): Promise<void> {
+      const caller = ".github/workflows/fabrik.yml";
+      await mkdir(join(checkout, ".github/workflows"), { recursive: true });
+      await writeFile(join(checkout, caller), pinCaller(await readFile(join(KIT_DIR, "templates/fabrik.yml"), "utf8"), release));
+      git("add", caller);
+      git("commit", "-q", "-m", `Fabrik ${release}`);
+      git("push", "-q", "origin", "main");
+      for (const name of [...TOKENS, "STRIPE_KEY"]) world.secrets.add(name);
+    }
+
+    it("over two runs with the setup PR merged between them, moves the three tokens: the first makes the environment and three new accounts and deletes nothing, the second deletes the three repo-level secrets and makes no account", async () => {
+      const world = aWorld();
+      await onTheKitAt(world, "v0.9.1");
+
+      const first = await setupOnce(world);
+
+      expect(first.complaints).toEqual([]);
+      expect(planned(first.said)[0]).toBe("- create the fabrik environment, held to main alone: only a run of main is given its secrets");
+      expect(made(first.log).map((line) => line.split(" ")[3])).toEqual(["fabrik-acme-clinic-agent-env", "fabrik-acme-clinic-implement-env", "fabrik-acme-clinic-push-env"]);
+      expect(first.said.filter((line) => line.includes("delete the repo-level"))).toEqual([]);
+      expect(deleted(first.log)).toEqual([]);
+      expect([...world.secrets]).toEqual([...TOKENS, "STRIPE_KEY"]);
+
+      mergeTheSetupPr(world);
+      const second = await setupOnce(world);
+
+      expect(second.complaints).toEqual([]);
+      expect(planned(second.said)).toEqual(DELETES);
+      expect(made(second.log)).toEqual([]);
+      expect(deleted(second.log)).toEqual(TOKENS.map((name) => `gh secret delete ${name}`));
+      expect([...environmentOf(world)!.secrets]).toEqual(TOKENS);
+      expect([...world.secrets]).toEqual(["STRIPE_KEY"]);
+      expect((await setupOnce(world)).said).toContain("Nothing to do: this repo's Fabrik install is complete.");
+    });
+
+    const STAY =
+      "- The repo-level Actions secrets FABRIK_OP_AGENT_TOKEN, FABRIK_OP_IMPLEMENT_TOKEN and FABRIK_OP_PUSH_TOKEN stay for now, since the Kit main pins names no environment and reads them. " +
+      "Once the setup PR is merged, run setup again and it deletes them: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
+    const OLD_ACCOUNTS =
+      "- Once the repo-level secrets are deleted, delete the old service accounts fabrik-acme-clinic-agent, fabrik-acme-clinic-implement and fabrik-acme-clinic-push on 1Password's site. " +
+      "Their tokens still work until you do, though they sit nowhere on GitHub.";
+    /** What a run said before it applied anything, and its last lines, which follow the wizard's cleared screen. */
+    const underThePlan = (said: string[]) => said.slice(0, said.indexOf(`On ${BRANCH}.`));
+    const lastLines = (said: string[]) => said.slice(said.lastIndexOf("What setup did:"));
+    /** A step or a note of the move. Setup's report names the repo's own repo-level secrets on every run, in other words. */
+    const OF_THE_MOVE = /delete the repo-level|for now, since the Kit|old service account/;
+
+    it("says the repo-level secrets stay on the first run, and names the three old accounts on the run that deletes them, under the plan and again in its last lines, and on no run after", async () => {
+      const world = aWorld();
+      await onTheKitAt(world, "v0.9.1");
+
+      const first = await setupOnce(world);
+
+      expect(underThePlan(first.said)).toContain(STAY);
+      expect(lastLines(first.said)).toContain(STAY);
+      expect(world.prs[0]!.body.split("\n")).toContain(STAY);
+      expect(first.said).not.toContain(OLD_ACCOUNTS);
+
+      mergeTheSetupPr(world);
+      const second = await setupOnce(world);
+
+      expect(underThePlan(second.said)).toContain(OLD_ACCOUNTS);
+      expect(lastLines(second.said).filter((line) => line.includes("old service account"))).toEqual([OLD_ACCOUNTS]);
+      expect(second.said).not.toContain(STAY);
+
+      const third = await setupOnce(world);
+
+      expect(third.said.filter((line) => OF_THE_MOVE.test(line))).toEqual([]);
+    });
+
+    it("on the setup branch before its PR is merged, where the checkout's caller workflow pins Setup's release and the default branch's doesn't, deletes nothing and says the secrets stay", async () => {
+      const world = aWorld();
+      await onTheKitAt(world, "v0.9.1");
+      await setupOnce(world);
+
+      const { code, said, log } = await setupOnce(world);
+
+      expect(code).toBe(0);
+      expect(git("branch", "--show-current").trim()).toBe(BRANCH);
+      expect(await readFile(join(checkout, ".github/workflows/fabrik.yml"), "utf8")).toContain("loop.yml@v1.4.2");
+      expect(git("show", "origin/main:.github/workflows/fabrik.yml")).toContain("loop.yml@v0.9.1");
+      expect(said).toContain(STAY);
+      expect(said.filter((line) => line.includes("delete the repo-level"))).toEqual([]);
+      expect(deleted(log)).toEqual([]);
+      expect([...world.secrets]).toEqual([...TOKENS, "STRIPE_KEY"]);
+    });
+
+    it("with only one Kit secret at repo level, deletes only it, names only its role's old account, and leaves every other repo-level secret", async () => {
+      const world = aWorld();
+      await setupOnce(world);
+      mergeTheSetupPr(world);
+      const others = ["STRIPE_KEY", "FABRIK_OP_PUSH_TOKEN_OLD", "OP_PUSH_TOKEN"];
+      for (const name of ["FABRIK_OP_PUSH_TOKEN", ...others]) world.secrets.add(name);
+
+      const { code, said, log } = await setupOnce(world);
+
+      expect(code).toBe(0);
+      expect(planned(said)).toEqual(["- delete the repo-level Actions secret FABRIK_OP_PUSH_TOKEN: the Kit main pins reads the fabrik environment's"]);
+      expect(lastLines(said).filter((line) => line.includes("old service account"))).toEqual([
+        "- Once the repo-level secret is deleted, delete the old service account fabrik-acme-clinic-push on 1Password's site. Its token still works until you do, though it sits nowhere on GitHub.",
+      ]);
+      expect(deleted(log)).toEqual(["gh secret delete FABRIK_OP_PUSH_TOKEN"]);
+      expect([...world.secrets]).toEqual(others);
+      expect([...environmentOf(world)!.secrets]).toEqual(TOKENS);
+    });
+
+    it("on a repo with no Kit secret at repo level, deletes nothing and says nothing of it, on a first run and on a working install", async () => {
+      const world = aWorld();
+      world.secrets.add("STRIPE_KEY");
+
+      const first = await setupOnce(world);
+      mergeTheSetupPr(world);
+      const second = await setupOnce(world);
+
+      expect(second.said).toContain("Nothing to do: this repo's Fabrik install is complete.");
+      expect([...first.said, ...second.said, world.prs[0]!.body].join("\n")).not.toMatch(OF_THE_MOVE);
+      expect([...deleted(first.log), ...deleted(second.log)]).toEqual([]);
+      expect([...world.secrets]).toEqual(["STRIPE_KEY"]);
+    });
+
+    it("leaves the repo-level secrets in place when the step that makes a new account stops, though the default branch's Kit names the environment", async () => {
+      const world = aWorld();
+      await setupOnce(world);
+      mergeTheSetupPr(world);
+      // The environment lost one token, and the three still sit at repo level.
+      const environment = environmentOf(world)!;
+      environment.secrets.delete("FABRIK_OP_IMPLEMENT_TOKEN");
+      for (const name of TOKENS) world.secrets.add(name);
+      // Someone adds a rule on github.com once the Operator has said yes, after Setup read the environment.
+      const during = (line: string) => {
+        if (line === `git switch -C ${BRANCH}`) environment.rules.push({ id: 201, name: "release/*", type: "branch" });
+      };
+
+      const { code, said, complaints, log } = await setupOnce(world, { during });
+
+      expect(planned(said)).toEqual([
+        '- create the read-only service account "fabrik-acme-clinic-implement-env" (reads "Fabrik", "Fabrik Sandbox · clinic") and store it as FABRIK_OP_IMPLEMENT_TOKEN in the fabrik environment',
+        ...DELETES,
+      ]);
+      expect(code).toBe(1);
+      expect(complaints).toEqual(["The fabrik environment on acme/clinic isn't held to main alone, so Setup stored no token in it. Run setup again."]);
+      expect(deleted(log)).toEqual([]);
+      expect([...world.secrets]).toEqual(TOKENS);
+    });
+
+    it("with --plan, names the deletions and the old accounts, and deletes nothing", async () => {
+      const world = aWorld();
+      await setupOnce(world);
+      mergeTheSetupPr(world);
+      for (const name of TOKENS) world.secrets.add(name);
+
+      const { code, said, log } = await setupOnce(world, { args: [...FLAGS, "--plan"] });
+
+      expect(code).toBe(0);
+      expect(said).toEqual(expect.arrayContaining([...DELETES, OLD_ACCOUNTS]));
+      expect(deleted(log)).toEqual([]);
+      expect([...world.secrets]).toEqual(TOKENS);
+    });
+  });
+
+  describe("the store's one token, the push account's, in the store's own fabrik environment (ADR-0004)", () => {
+    const STORE = "jrey8343/fabrik-runs";
+    const STORE_CALLER = ".github/workflows/weekly-summary.yml";
+    const TOKEN = "FABRIK_OP_PUSH_TOKEN";
+    const STORE_ENVIRONMENT = `repos/${STORE}/environments/fabrik`;
+    /** Every question but the yes answered by a flag, the Operator's time zone among them, so Setup sets the store up. */
+    const WITH_THE_STORE = ["--no-production", "--no-staging", "--time-zone=Australia/Sydney", "--no-second-subscription", "--no-paused"];
+    const NEW_ACCOUNT = "op service-account create fabrik-jrey8343-fabrik-runs-push-env --vault Fabrik App:read_items --raw";
+    const STAYS =
+      "- jrey8343/fabrik-runs: The repo-level Actions secret FABRIK_OP_PUSH_TOKEN stays for now, since the caller workflow setup found there pins no Kit that names the fabrik environment. " +
+      "Once setup has written the one that does, run setup again and it deletes it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
+    const OLD_ACCOUNT =
+      "- jrey8343/fabrik-runs: Once the repo-level secret is deleted, delete the old service account fabrik-jrey8343-fabrik-runs-push on 1Password's site. " +
+      "Its token still works until you do, though it sits nowhere on GitHub.";
+    const DELETE = "- delete the repo-level Actions secret FABRIK_OP_PUSH_TOKEN in jrey8343/fabrik-runs: the Kit trunk pins reads the fabrik environment's";
+    /** A step or a note of the store's move. */
+    const OF_THE_MOVE = /delete the repo-level|stays for now|old service account|found more to do/;
+    const planned = (said: string[]) => said.slice(said.indexOf("Setup would:") + 1, said.indexOf("", said.indexOf("Setup would:")));
+    const underThePlan = (said: string[]) => said.slice(0, said.indexOf(`On ${BRANCH}.`));
+    const lastLines = (said: string[]) => said.slice(said.lastIndexOf("What setup did:"));
+    /** Each gh secret call of a run that names a repo, and each that changed a secret, as gh was asked. */
+    const secretCalls = (log: string[]) => log.filter((line) => /^gh secret (set|delete) /.test(line) || (line.startsWith("gh secret ") && line.includes("--repo")));
+
+    /** A store already on the Kit: private, with commits on `trunk`, its caller workflow pinned at this release, and its one token at repo level. */
+    async function aStoreOnTheKitAt(world: World, release: string): Promise<void> {
+      const template = await readFile(join(KIT_DIR, "templates/fabrik-runs-caller.yml"), "utf8");
+      Object.assign(world.store, { exists: true, private: true, defaultBranch: "trunk" });
+      world.store.files.set(STORE_CALLER, pinCaller(template, release));
+      world.store.secrets.add(TOKEN);
+    }
+
+    it("over two runs, moves the token of a store already on the Kit: the first holds the store's environment to the store's own default branch, makes the -env account in it and rewrites the store's caller, deleting nothing, and the second deletes the repo-level secret and names the old account", async () => {
+      const world = aWorld();
+      await aStoreOnTheKitAt(world, "v0.9.1");
+
+      const first = await setupOnce(world, { args: WITH_THE_STORE });
+
+      expect(first.complaints).toEqual([]);
+      expect(planned(first.said).slice(0, 2)).toEqual([
+        "- create the fabrik environment, held to main alone: only a run of main is given its secrets",
+        "- create the fabrik environment in jrey8343/fabrik-runs, held to trunk alone: only a run of trunk is given its secrets",
+      ]);
+      expect(planned(first.said)).toContain(
+        '- create the read-only service account "fabrik-jrey8343-fabrik-runs-push-env" (reads "Fabrik App") and store it as FABRIK_OP_PUSH_TOKEN in the fabrik environment in jrey8343/fabrik-runs',
+      );
+      expect(first.log).toContain(NEW_ACCOUNT);
+      expect(environmentOf(world, "fabrik", STORE)).toEqual({
+        policy: { protected_branches: false, custom_branch_policies: true },
+        rules: [{ id: expect.any(Number), name: "trunk", type: "branch" }],
+        secrets: new Set([TOKEN]),
+      });
+      expect(world.store.files.get(STORE_CALLER)).toContain("weekly-summary.yml@v1.4.2");
+      expect([...world.store.secrets]).toEqual([TOKEN]);
+      expect(first.log.filter((line) => line.startsWith("gh secret delete "))).toEqual([]);
+      // The run wrote the store's caller, and still deletes nothing and names no old account: only a run that finds it there does.
+      expect(underThePlan(first.said)).toContain(STAYS);
+      expect(lastLines(first.said).filter((line) => OF_THE_MOVE.test(line))).toEqual([STAYS]);
+
+      mergeTheSetupPr(world);
+      const second = await setupOnce(world, { args: WITH_THE_STORE });
+
+      expect(second.complaints).toEqual([]);
+      expect(planned(second.said)).toEqual([DELETE]);
+      expect(second.log).not.toContain(NEW_ACCOUNT);
+      expect([...world.store.secrets]).toEqual([]);
+      expect([...environmentOf(world, "fabrik", STORE)!.secrets]).toEqual([TOKEN]);
+      expect(underThePlan(second.said)).toContain(OLD_ACCOUNT);
+      // What it did, then the old account, named once.
+      expect(lastLines(second.said).filter((line) => OF_THE_MOVE.test(line))).toEqual([DELETE, OLD_ACCOUNT]);
+
+      const third = await setupOnce(world, { args: WITH_THE_STORE });
+
+      expect(third.said).toContain("Nothing to do: this repo's Fabrik install is complete.");
+      expect(third.said.filter((line) => OF_THE_MOVE.test(line))).toEqual([]);
+    });
+
+    it("names --repo jrey8343/fabrik-runs on every gh secret call for the store, and stores and deletes nothing of the Product repo's with them", async () => {
+      const world = aWorld();
+      await aStoreOnTheKitAt(world, "v0.9.1");
+
+      const first = await setupOnce(world, { args: WITH_THE_STORE });
+      mergeTheSetupPr(world);
+      const second = await setupOnce(world, { args: WITH_THE_STORE });
+
+      expect(secretCalls(first.log)).toEqual([
+        // What Setup reads of the store, before the plan and again after the wizard.
+        `gh secret list --repo ${STORE} --json name`,
+        "gh secret set FABRIK_OP_AGENT_TOKEN --env fabrik",
+        "gh secret set FABRIK_OP_IMPLEMENT_TOKEN --env fabrik",
+        "gh secret set FABRIK_OP_PUSH_TOKEN --env fabrik",
+        `gh secret set FABRIK_OP_PUSH_TOKEN --env fabrik --repo ${STORE}`,
+        `gh secret list --repo ${STORE} --json name`,
+        `gh secret list --env fabrik --repo ${STORE} --json name`,
+      ]);
+      expect(secretCalls(second.log)).toEqual([
+        `gh secret list --repo ${STORE} --json name`,
+        `gh secret list --env fabrik --repo ${STORE} --json name`,
+        `gh secret delete FABRIK_OP_PUSH_TOKEN --repo ${STORE}`,
+        `gh secret list --repo ${STORE} --json name`,
+        `gh secret list --env fabrik --repo ${STORE} --json name`,
+      ]);
+      expect([...world.secrets]).toEqual([]);
+      expect([...environmentOf(world)!.secrets]).toEqual(TOKENS);
+    });
+
+    it("for a store the run makes, writes its files, then holds its environment to the default branch their first commit made, then stores its token there, and never a repo-level secret", async () => {
+      const world = aWorld();
+      // The owner's setting names a new repo's first branch, whatever the Product repo's default branch is.
+      world.store.firstBranch = "trunk";
+
+      const { code, said, complaints, log } = await setupOnce(world, { args: WITH_THE_STORE });
+
+      expect(complaints).toEqual([]);
+      expect(code).toBe(0);
+      expect(planned(said).filter((line) => line.includes(STORE))).toEqual([
+        "- create jrey8343/fabrik-runs, private, to hold Run records, their transcripts and the Weekly summary",
+        "- write .github/workflows/weekly-summary.yml in jrey8343/fabrik-runs (the Weekly summary each Monday morning, pinning one Fabrik release)",
+        "- write .github/dependabot.yml in jrey8343/fabrik-runs (Dependabot bumps the Fabrik pin)",
+        "- create the fabrik environment in jrey8343/fabrik-runs, held to its default branch alone: only a run of its default branch is given its secrets",
+        '- create the read-only service account "fabrik-jrey8343-fabrik-runs-push-env" (reads "Fabrik App") and store it as FABRIK_OP_PUSH_TOKEN in the fabrik environment in jrey8343/fabrik-runs',
+      ]);
+      const RULES = `gh api ${STORE_ENVIRONMENT}/deployment-branch-policies?per_page=100`;
+      /** The environment read whole: its setting, then its rules. */
+      const READ = [`gh api ${STORE_ENVIRONMENT}`, RULES];
+      const BRANCH_NOW = `gh repo view ${STORE} --json defaultBranchRef`;
+      const steps = log.slice(index(log, /^gh repo create /));
+      expect(steps.slice(0, steps.indexOf(`gh secret set ${TOKEN} --env fabrik --repo ${STORE}`) + 1).filter((line) => line.includes(STORE) || line.startsWith("op service-account"))).toEqual([
+        expect.stringMatching(/^gh repo create jrey8343\/fabrik-runs --private /),
+        `gh api repos/${STORE}/contents/${STORE_CALLER}`,
+        `gh api --method PUT repos/${STORE}/contents/${STORE_CALLER} --input -`,
+        `gh api repos/${STORE}/contents/.github/dependabot.yml`,
+        `gh api --method PUT repos/${STORE}/contents/.github/dependabot.yml --input -`,
+        BRANCH_NOW,
+        `gh api --method PUT ${STORE_ENVIRONMENT} --input -`,
+        RULES,
+        `gh api --method POST ${STORE_ENVIRONMENT}/deployment-branch-policies -f name=trunk -f type=branch`,
+        ...READ,
+        BRANCH_NOW,
+        ...READ,
+        NEW_ACCOUNT,
+        `gh secret set ${TOKEN} --env fabrik --repo ${STORE}`,
+      ]);
+      expect(world.store).toMatchObject({ exists: true, private: true, defaultBranch: "trunk" });
+      expect(environmentOf(world, "fabrik", STORE)?.rules).toEqual([{ id: expect.any(Number), name: "trunk", type: "branch" }]);
+      expect([...environmentOf(world, "fabrik", STORE)!.secrets]).toEqual([TOKEN]);
+      expect([...world.store.secrets, ...world.secrets]).toEqual([]);
+      expect(said.filter((line) => OF_THE_MOVE.test(line))).toEqual([]);
+
+      mergeTheSetupPr(world);
+      expect((await setupOnce(world, { args: WITH_THE_STORE })).said).toContain("Nothing to do: this repo's Fabrik install is complete.");
+    });
+
+    it("stops when GitHub refuses the store's environment, with the no-fallback message naming the store, before it writes the store's caller or makes its account", async () => {
+      const world = aWorld();
+      await aStoreOnTheKitAt(world, "v0.9.1");
+      // The Product repo's own environment is held and holds its tokens, so the store's is the plan's first step.
+      anEnvironment(world, { rules: ["main"], secrets: TOKENS });
+      world.environmentRefusal = "gh: Not Found (HTTP 404)\n";
+
+      const { code, said, complaints, log } = await setupOnce(world, { args: WITH_THE_STORE });
+
+      expect(planned(said)[0]).toBe("- create the fabrik environment in jrey8343/fabrik-runs, held to trunk alone: only a run of trunk is given its secrets");
+      expect(code).toBe(1);
+      expect(complaints).toEqual([
+        "GitHub refused the fabrik environment on jrey8343/fabrik-runs: gh: Not Found (HTTP 404). A private repo needs a GitHub plan with environments: GitHub Pro for a personal account's repo, or GitHub Team for an organization's. The Kit keeps no fallback to repo-level secrets, so Setup stopped before changing anything else.",
+      ]);
+      expect(environmentOf(world, "fabrik", STORE)).toBeUndefined();
+      expect(world.store.files.get(STORE_CALLER)).toContain("weekly-summary.yml@v0.9.1");
+      expect(log.filter((line) => /^op service-account create |^gh secret (set|delete) |^gh api --method PUT repos\/jrey8343\/fabrik-runs\/contents\//.test(line))).toEqual([]);
+      expect([...world.store.secrets]).toEqual([TOKEN]);
+    });
+
+    it("without the Operator's time zone, reads the store's environment with the rest of the store and plans and changes nothing of it", async () => {
+      const world = aWorld();
+      await aStoreOnTheKitAt(world, "v0.9.1");
+
+      const { code, said, log } = await setupOnce(world);
+
+      expect(code).toBe(0);
+      expect(log).toEqual(expect.arrayContaining([`gh repo view ${STORE} --json defaultBranchRef`, `gh api ${STORE_ENVIRONMENT}`]));
+      expect(said.filter((line) => line.includes(STORE))).toEqual([]);
+      expect(log.filter((line) => line.includes(STORE) && /--method|secret (set|delete)|repo create/.test(line))).toEqual([]);
+      expect(environmentOf(world, "fabrik", STORE)).toBeUndefined();
+      expect([...world.store.secrets]).toEqual([TOKEN]);
+    });
+
+    it("reads no environment and no default branch of a store that doesn't exist", async () => {
+      const world = aWorld();
+
+      const { code, log } = await setupOnce(world);
+
+      expect(code).toBe(0);
+      expect(log.filter((line) => line.includes(STORE))).toEqual(expect.arrayContaining([`gh repo view ${STORE} --json visibility`]));
+      expect(log.filter((line) => line.includes(STORE) && !line.endsWith("--json visibility"))).toEqual([]);
+    });
+  });
+
   describe("holding admins to the default branch's rules", () => {
     const HELD = "- protect main: admins held to the rules: no → yes; every other setting stays as it is";
     const protectionPuts = (calls: { line: string; input?: string }[]) =>
@@ -1820,5 +2530,144 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     expect(said).toContain("Setup would:");
     expect(questions).toEqual([]);
     expect(log.filter((line) => /^git switch|^wizard$/.test(line))).toEqual([]);
+  });
+
+  describe("Setup's report on the repo's own credentials", () => {
+    const HEADING = "Setup's report:";
+    const COMPLETE = "Nothing to do: this repo's Fabrik install is complete.";
+    const RULE =
+      "- A credential that can reach production belongs in an environment held to main alone, or in a role taken by OIDC whose trust names that environment and not the whole repo. Only test and preview credentials sit at repo level.";
+    const OWN_SECRET = [HEADING, "- The repo-level Actions secret STRIPE_KEY can be read by a workflow run on any branch.", RULE];
+    const NONE_OF_ITS_OWN = "- This repo holds no repo-level Actions secret of its own.";
+
+    it("is said under the plan and again in the closing lines, after For the Operator, never in the setup PR, and on a merged install with nothing to apply however Setup is run", async () => {
+      // A repo already on the Kit, whose three tokens sit at repo level beside a secret of its own: the Kit's get no line.
+      const world = aWorld();
+      for (const name of ["STRIPE_KEY", ...TOKENS]) world.secrets.add(name);
+
+      const first = await setupOnce(world);
+
+      expect(first.code).toBe(0);
+      const [underThePlan, inTheLastLines] = first.said.flatMap((line, at) => (line === HEADING ? [at] : []));
+      expect(first.said.filter((line) => line === HEADING)).toHaveLength(2);
+      expect(first.said.slice(underThePlan, underThePlan! + 3)).toEqual(OWN_SECRET);
+      expect(underThePlan).toBeLessThan(first.said.indexOf(`On ${BRANCH}.`));
+      expect(first.said.slice(inTheLastLines! - 1, inTheLastLines! + 4)).toEqual(["", ...OWN_SECRET, ""]);
+      expect(first.said.lastIndexOf("For the Operator:")).toBeGreaterThan(first.said.indexOf("What setup did:"));
+      expect(inTheLastLines).toBeGreaterThan(first.said.lastIndexOf("For the Operator:"));
+      expect(first.said[inTheLastLines! + 4]).toMatch(/^Merge it yourself once its Required checks pass\./);
+      // The Kit's own three names, public in the caller workflow, are in the PR's note that they stay for now (#931), and no line of the report is.
+      expect(world.prs[0]!.body).not.toMatch(/STRIPE_KEY|Setup's report|can be read by a workflow run on any branch|A credential that can reach production/);
+      mergeTheSetupPr(world);
+
+      // The run made, changed and deleted no repo-level secret.
+      expect([...world.secrets].sort()).toEqual([...TOKENS, "STRIPE_KEY"]);
+      // The next run finds the new caller workflow on the default branch and deletes the Kit's three (#931), never the repo's own, which the report still names.
+      const deleting = await setupOnce(world);
+      expect(deleting.said.slice(deleting.said.lastIndexOf(HEADING))).toEqual([...OWN_SECRET, "", expect.stringMatching(/^Every file setup writes is already on main/)]);
+      expect([...world.secrets]).toEqual(["STRIPE_KEY"]);
+      for (const options of [{}, { args: [...FLAGS, "--plan"] }, { terminal: false }]) {
+        const { code, said, questions } = await setupOnce(world, { answers: [], ...options });
+
+        expect(code).toBe(0);
+        expect(questions).toEqual([]);
+        expect(said.indexOf(COMPLETE)).toBeGreaterThan(-1);
+        expect(said.indexOf(COMPLETE)).toBeLessThan(said.indexOf(HEADING));
+        expect(said.slice(said.indexOf(HEADING) - 1)).toEqual(["", ...OWN_SECRET]);
+      }
+      expect(world.prs).toHaveLength(1);
+    });
+
+    it("is said in the last lines of a repair that opens no setup PR, before where the run left the clone", async () => {
+      const world = aWorld();
+      await setupOnce(world);
+      mergeTheSetupPr(world);
+      world.labels.delete("needs-triage");
+
+      const { code, said } = await setupOnce(world);
+
+      expect(code).toBe(0);
+      const last = said.slice(said.lastIndexOf("What setup did:"));
+      expect(last.slice(0, 2)).toEqual(["What setup did:", "- create the label needs-triage"]);
+      expect(last.slice(last.indexOf(HEADING) - 1)).toEqual([
+        "",
+        HEADING,
+        NONE_OF_ITS_OWN,
+        "",
+        "Every file setup writes is already on main, so there's no setup PR to open. Setup switched back to main.",
+      ]);
+    });
+
+    it("says whether the environment the Kit config names for production is held to the default branch alone, once the checkout's Kit config names it, and changes nothing of it", async () => {
+      const world = aWorld();
+      anEnvironment(world, { rules: ["main"] }, "production");
+      const flags = ["--no-time-zone", "--no-second-subscription", "--no-paused", "--no-staging", "--production-url=https://clinic.example.com", "--production-environment=production"];
+
+      const first = await setupOnce(world, { args: flags });
+
+      expect(first.code).toBe(0);
+      // Under the plan the checkout holds no Kit config yet; the last lines are read from the setup branch's, which names it.
+      const [underThePlan, inTheLastLines] = first.said.flatMap((line, at) => (line === HEADING ? [at] : []));
+      expect(first.said.slice(underThePlan, underThePlan! + 3)).toEqual([HEADING, NONE_OF_ITS_OWN, ""]);
+      expect(first.said.slice(inTheLastLines, inTheLastLines! + 4)).toEqual([HEADING, NONE_OF_ITS_OWN, "- Production's environment, production, is held to main alone.", ""]);
+      expect(world.prs[0]!.body).not.toContain("Production's environment");
+      mergeTheSetupPr(world);
+
+      // Someone adds a tag rule on github.com.
+      environmentOf(world, "production")!.rules.push({ id: 900, name: "v*", type: "tag" });
+      const loosened = await setupOnce(world, { args: flags, answers: [] });
+
+      expect(loosened.said.slice(loosened.said.indexOf(HEADING))).toEqual([
+        HEADING,
+        NONE_OF_ITS_OWN,
+        "- Production's environment, production, isn't held to main alone (main, tag v*), so a run on another ref that names it is given its secrets.",
+      ]);
+      expect(loosened.said).toContain(COMPLETE);
+
+      world.environments.delete("acme/clinic/production");
+      const gone = await setupOnce(world, { args: flags, answers: [] });
+
+      expect(gone.said.at(-1)).toBe("- Production's environment, production, isn't on this repo.");
+      expect(gone.said).toContain(COMPLETE);
+      const onProduction = world.environmentCalls.filter((line) => line.includes("environments/production") || line.includes("--env production"));
+      expect(onProduction.length).toBeGreaterThan(0);
+      expect(onProduction.filter((line) => !/^gh api repos\/acme\/clinic\/environments\/production(\/deployment-branch-policies\?per_page=100)?$/.test(line))).toEqual([]);
+    });
+
+    it("carries on when GitHub refuses the read of production's environment, after the wizard and before the plan, and says it couldn't be read", async () => {
+      const world = aWorld();
+      anEnvironment(world, { rules: ["main"] }, "production").refusesRead = "gh: Resource not accessible by personal access token (HTTP 403)\n";
+      const flags = ["--no-time-zone", "--no-second-subscription", "--no-paused", "--no-staging", "--production-url=https://clinic.example.com", "--production-environment=production"];
+      const UNREAD =
+        "- Production's environment, production, couldn't be read (gh: Resource not accessible by personal access token (HTTP 403)), so Setup can't say whether it is held to main alone.";
+
+      // The first read of it is the one after the wizard, from the setup branch's Kit config.
+      const first = await setupOnce(world, { args: flags });
+
+      expect(first.complaints).toEqual([]);
+      expect(first.code).toBe(0);
+      expect(first.said.slice(first.said.lastIndexOf(HEADING), first.said.lastIndexOf(HEADING) + 4)).toEqual([HEADING, NONE_OF_ITS_OWN, UNREAD, ""]);
+      expect(world.prs).toHaveLength(1);
+      mergeTheSetupPr(world);
+
+      // On the next run the checkout's Kit config names it, so it is read before the plan.
+      const second = await setupOnce(world, { args: flags, answers: [] });
+
+      expect(second.complaints).toEqual([]);
+      expect(second.code).toBe(0);
+      expect(second.said.slice(second.said.indexOf(HEADING))).toEqual([HEADING, NONE_OF_ITS_OWN, UNREAD]);
+      expect(second.said).toContain(COMPLETE);
+    });
+
+    it("still stops when GitHub refuses the read of the fabrik environment with anything but a 404, naming its answer", async () => {
+      const world = aWorld();
+      anEnvironment(world, { rules: ["main"] }).refusesRead = "gh: Bad Gateway (HTTP 502)\n";
+
+      const { code, complaints, log } = await setupOnce(world);
+
+      expect(code).toBe(1);
+      expect(complaints.join("\n")).toContain("Reading the fabrik environment on acme/clinic failed: gh: Bad Gateway (HTTP 502)");
+      expect(log.filter((line) => /--method|^op service-account create |^gh secret set /.test(line))).toEqual([]);
+    });
   });
 });

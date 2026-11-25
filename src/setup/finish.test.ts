@@ -2,7 +2,7 @@
 // lines in the Operator's terminal, with the merge asked for only when nothing
 // holds it back.
 import { describe, expect, it } from "vitest";
-import { closingLines, prBody, setupCommand, withEarlierDone } from "./finish.ts";
+import { appliedLines, closingLines, prBody, setupCommand, withEarlierDone } from "./finish.ts";
 import { type BranchProtection, UNPROTECTED } from "./plan.ts";
 import { mergesFromConsole, type RunSummary, stepsDone } from "./oneRun.ts";
 
@@ -10,7 +10,15 @@ const SUMMARY: RunSummary = {
   done: ["write .github/workflows/fabrik.yml (the caller workflow)", "create the label needs-triage"],
   notes: ["main has no Required checks yet: list the CI checks that must pass in sandbox.checks in .fabrik/config.json, then run setup again."],
   blockers: [],
+  report: [],
 };
+/** Setup's report on a repo with a secret of its own, whose production environment lets every branch through. */
+const REPORT = [
+  "The repo-level Actions secret STRIPE_KEY can be read by a workflow run on any branch.",
+  "A credential that can reach production belongs in an environment held to main alone, or in a role taken by OIDC whose trust names that environment and not the whole repo. Only test and preview credentials sit at repo level.",
+  "Production's environment, production, isn't held to main alone (every branch), so a run on another ref that names it is given its secrets.",
+];
+const REPORTED: RunSummary = { ...SUMMARY, report: REPORT };
 const BLOCKED: RunSummary = { ...SUMMARY, blockers: ['the Claude token, in the "Fabrik" vault'] };
 const PAUSED: RunSummary = { ...SUMMARY, pausesDispatch: true };
 const BY_HAND = 'the "Claude backup" Subscription\'s token, in the "Fabrik" vault';
@@ -84,6 +92,20 @@ describe("The setup PR's body", () => {
     expect(prBody({ release: "v1.4.2", defaultBranch: "main", summary: { ...SUMMARY, mergesFromConsole: false } })).toBe(today);
   });
 
+  it("holds none of Setup's report, whatever the summary carries, so a public repo's PR never shows a secret's name", () => {
+    const inputs = { release: "v1.4.2", defaultBranch: "main" };
+    const summaries: RunSummary[] = [SUMMARY, BLOCKED, PAUSED, { ...BLOCKED, storeByHand: [BY_HAND] }, { ...SUMMARY, mergesFromConsole: true, appInstalledOn: "acme/clinic" }];
+
+    for (const summary of summaries) {
+      const body = prBody({ ...inputs, summary: { ...summary, report: REPORT } });
+
+      expect(body).toBe(prBody({ ...inputs, summary }));
+      for (const line of REPORT) expect(body).not.toContain(line);
+      expect(body).not.toContain("STRIPE_KEY");
+      expect(body).not.toContain("Setup's report");
+    }
+  });
+
   it("keeps what an earlier run did, so a run that picks up the same PR adds to its list", () => {
     const earlier = prBody({ release: "v1.4.2", defaultBranch: "main", summary: BLOCKED });
 
@@ -123,6 +145,48 @@ describe("The closing lines", () => {
     expect(lines).toContain("The setup PR: https://github.com/acme/clinic/pull/7");
     expect(lines).toContain("- create the label needs-triage");
     expect(lines).toContain(`- ${SUMMARY.notes[0]}`);
+  });
+
+  it("say Setup's report again under its heading, after For the Operator and before the merge is asked for", () => {
+    const lines = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary: REPORTED });
+
+    const start = lines.indexOf("For the Operator:");
+    expect(lines.slice(start, start + 8)).toEqual([
+      "For the Operator:",
+      `- ${SUMMARY.notes[0]}`,
+      "",
+      "Setup's report:",
+      ...REPORT.map((line) => `- ${line}`),
+      "",
+    ]);
+    expect(lines[start + 8]).toMatch(/^Merge it yourself once its Required checks pass\./);
+  });
+
+  it("with no note for the Operator, say Setup's report after what setup did", () => {
+    const summary = { ...REPORTED, notes: [] };
+    const lines = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary });
+
+    expect(lines.slice(2, 10)).toEqual([
+      "What setup did:",
+      "- write .github/workflows/fabrik.yml (the caller workflow)",
+      "- create the label needs-triage",
+      "",
+      "Setup's report:",
+      ...REPORT.map((line) => `- ${line}`),
+    ]);
+    expect(lines).not.toContain("For the Operator:");
+  });
+
+  it("say everything else as they would with no report, the ask for the merge and what holds it back included", () => {
+    const inputs = { release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7" };
+    const summaries: RunSummary[] = [SUMMARY, BLOCKED, PAUSED, { ...BLOCKED, storeByHand: [BY_HAND] }, { ...SUMMARY, mergesFromConsole: true }];
+
+    for (const summary of summaries) {
+      const reported = closingLines({ ...inputs, summary: { ...summary, report: REPORT } });
+      const section = reported.indexOf("Setup's report:");
+
+      expect(reported.toSpliced(section - 1, REPORT.length + 2)).toEqual(closingLines({ ...inputs, summary }));
+    }
   });
 
   it("ask for the merge once nothing holds it back", () => {
@@ -202,6 +266,35 @@ describe("The closing lines", () => {
     const text = closingLines({ release: "v1.4.2", defaultBranch: "main", url: "https://github.com/acme/clinic/pull/7", summary: PAUSED }).join("\n");
 
     expect(text).toContain("- Dispatch is paused, so no Implementer starts until you set max_in_flight in .fabrik/config.json above 0.");
+  });
+});
+
+describe("The last lines of a run that opened no setup PR", () => {
+  it("say Setup's report again under its heading, after For the Operator and before where the run left the clone", () => {
+    expect(appliedLines("main", { ...REPORTED, done: ["create the label needs-triage"] })).toEqual([
+      "What setup did:",
+      "- create the label needs-triage",
+      "",
+      "For the Operator:",
+      `- ${SUMMARY.notes[0]}`,
+      "",
+      "Setup's report:",
+      ...REPORT.map((line) => `- ${line}`),
+      "",
+      "Every file setup writes is already on main, so there's no setup PR to open. Setup switched back to main.",
+    ]);
+  });
+
+  it("with no note for the Operator and nothing new done, say Setup's report after what setup did", () => {
+    expect(appliedLines("main", { done: [], notes: [], blockers: [], report: ["This repo holds no repo-level Actions secret of its own."] })).toEqual([
+      "What setup did:",
+      "- nothing new in this run",
+      "",
+      "Setup's report:",
+      "- This repo holds no repo-level Actions secret of its own.",
+      "",
+      "Every file setup writes is already on main, so there's no setup PR to open. Setup switched back to main.",
+    ]);
   });
 });
 

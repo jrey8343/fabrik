@@ -99,11 +99,15 @@ export function aReadyOperator(productDir: string, release = "v1.4.2"): Record<s
     "git merge-tree --write-tree": { code: 128, stderr: "fatal: not something we can merge" },
     // The default branch holds no Kit config.
     "git cat-file -e": { code: 128, stderr: "fatal: path '.fabrik/config.json' does not exist" },
+    // Nor a caller workflow.
+    [`git show ${HEAD_SHA}:.github/workflows/fabrik.yml`]: { code: 128, stderr: `fatal: path '.github/workflows/fabrik.yml' does not exist in '${HEAD_SHA}'` },
     "op account list --format json": { stdout: JSON.stringify([PERSONAL]) },
     "op vault list --format json": { stdout: "[]" },
     // What setup gathers about the repo and the fabrik-runs store.
     "gh label list --limit 1000 --json name": { stdout: "[]" },
     "gh secret list --json name": { stdout: "[]" },
+    // The repo has no fabrik environment.
+    "gh api repos/acme/clinic/environments/fabrik": { code: 1, stderr: "gh: Not Found (HTTP 404)" },
     "gh api repos/acme/clinic/branches/main/protection": { code: 1, stderr: "gh: Branch not protected (HTTP 404)" },
     "gh api repos/acme/clinic/rulesets?includes_parents=false": { stdout: "[]" },
     "gh repo view jrey8343/fabrik-runs --json visibility": { code: 1, stderr: "GraphQL: Could not resolve to a Repository" },

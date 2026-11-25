@@ -1,8 +1,13 @@
 // GitHub and 1Password as the setup program's one run sees them, kept as
 // state: what one run creates, a later run finds. Its script answers every gh
-// and op command the run makes for acme/clinic, and git runs for real.
+// and op command the run makes for acme/clinic and for the fabrik-runs store,
+// and git runs for real.
+import { createHash } from "node:crypto";
+import { KIT_ENVIRONMENT } from "../kit/environment.ts";
+import { RUN_STORE_REPO } from "../kit/runStore.ts";
+import type { Ran } from "../setup/exec.ts";
 import type { Allowances, BranchProtection } from "../setup/plan.ts";
-import { type Answer, type CannedDeployment, deploymentsOf } from "./setupCommands.ts";
+import { type Answer, type Call, type CannedDeployment, deploymentsOf } from "./setupCommands.ts";
 
 export interface PullRequest {
   readonly number: number;
@@ -21,9 +26,47 @@ export interface PullRequest {
   forcePushedFrom?: string[];
 }
 
+/** One of a repo's environments, as GitHub holds it. */
+export interface WorldEnvironment {
+  /** Its `deployment_branch_policy`, as GitHub's GET answers it: null is every branch, as GitHub makes one a workflow names. */
+  policy: { protected_branches: boolean; custom_branch_policies: boolean } | null;
+  /** Its rules, each with the id GitHub gave it. A PUT of the environment leaves them as they are. */
+  rules: { id: number; name: string; type: "branch" | "tag" }[];
+  /** Its secrets' names. */
+  readonly secrets: Set<string>;
+  /** GitHub answers a new rule's POST as taken and keeps no rule, so the rules never read back as the one. */
+  dropsNewRules?: boolean;
+  /** What GitHub answers a read of it with when it refuses the read, as for a token that may not read environments. */
+  refusesRead?: string;
+}
+
+/** The fabrik-runs store, as GitHub holds it. Its environments are among the world's, under its name. */
+export interface WorldStore {
+  /** Whether the repo exists. `gh repo create` makes it, private and with no commit. */
+  exists: boolean;
+  private: boolean;
+  /** Its default branch's name, or null while it has no commit. */
+  defaultBranch: string | null;
+  /** The name GitHub gives the branch a repo's first commit makes, which is the owner's setting. */
+  firstBranch: string;
+  /** The text of each file on its default branch, by path. */
+  readonly files: Map<string, string>;
+  /** Its repo-level Actions secrets' names. */
+  readonly secrets: Set<string>;
+}
+
 export interface World {
   readonly labels: Set<string>;
+  /** The repo-level Actions secrets' names. */
   readonly secrets: Set<string>;
+  /** The fabrik-runs store, which doesn't exist until a run or a test makes it. */
+  readonly store: WorldStore;
+  /** Every repo's environments, each under `environmentKey`. */
+  readonly environments: Map<string, WorldEnvironment>;
+  /** What GitHub answers a PUT of an environment with when it refuses it, as on a plan that has none, or null when it takes it. */
+  environmentRefusal: string | null;
+  /** Every gh call that read or changed an environment, its rules or its secrets, as gh was given it, in the order made. */
+  readonly environmentCalls: string[];
   readonly vaults: Set<string>;
   /** Each vault's item titles. */
   readonly items: Map<string, Set<string>>;
@@ -43,6 +86,10 @@ export function aWorld(): World {
   return {
     labels: new Set(),
     secrets: new Set(),
+    store: { exists: false, private: true, defaultBranch: null, firstBranch: "main", files: new Map(), secrets: new Set() },
+    environments: new Map(),
+    environmentRefusal: null,
+    environmentCalls: [],
     vaults: new Set(),
     items: new Map(),
     protection: null,
@@ -59,6 +106,129 @@ export function store(world: World, vault: string, title: string): void {
   const items = world.items.get(vault) ?? new Set<string>();
   items.add(title);
   world.items.set(vault, items);
+}
+
+/** The repo the world's script answers for, where a call names none. */
+const PRODUCT_REPO = "acme/clinic";
+
+/** Where the world keeps a repo's environment. */
+export function environmentKey(name: string = KIT_ENVIRONMENT, repo: string = PRODUCT_REPO): string {
+  return `${repo}/${name}`;
+}
+
+/** A repo's environment as the world holds it, acme/clinic's `fabrik` environment unless told another, or undefined when the repo has none. */
+export function environmentOf(world: World, name: string = KIT_ENVIRONMENT, repo: string = PRODUCT_REPO): WorldEnvironment | undefined {
+  return world.environments.get(environmentKey(name, repo));
+}
+
+/**
+ * Puts an environment in the world, acme/clinic's `fabrik` environment unless
+ * told another: every branch, with no rule and no secret, as GitHub makes one
+ * a workflow names, then the overrides. A rule is given by its name, and by
+ * its type when it isn't a branch rule.
+ */
+export function anEnvironment(
+  world: World,
+  { policy = null, rules = [], secrets = [] }: { policy?: "all" | "protected" | "selected" | null; rules?: readonly (string | { name: string; type: "branch" | "tag" })[]; secrets?: readonly string[] } = {},
+  name: string = KIT_ENVIRONMENT,
+  repo: string = PRODUCT_REPO,
+): WorldEnvironment {
+  const setting = rules.length > 0 ? "selected" : (policy ?? "all");
+  const environment: WorldEnvironment = {
+    policy: setting === "all" ? null : { protected_branches: setting === "protected", custom_branch_policies: setting === "selected" },
+    rules: [],
+    secrets: new Set(secrets),
+  };
+  world.environments.set(environmentKey(name, repo), environment);
+  for (const rule of rules) environment.rules.push({ id: nextRuleId(world), ...(typeof rule === "string" ? { name: rule, type: "branch" } : rule) });
+  return environment;
+}
+
+/** An id no rule in the world has. */
+function nextRuleId(world: World): number {
+  return Math.max(100, ...[...world.environments.values()].flatMap((environment) => environment.rules.map((rule) => rule.id))) + 1;
+}
+
+const NOT_FOUND = { code: 1, stdout: '{"message":"Not Found","status":"404"}', stderr: "gh: Not Found (HTTP 404)" };
+
+/** `gh api`'s method and path: an environment, its rules, or one rule by its id. */
+const ENVIRONMENT_PATH = /^repos\/([^/]+\/[^/]+)\/environments\/([^/?]+)(\/deployment-branch-policies(?:\?per_page=100|\/(\d+))?)?$/;
+
+/**
+ * GitHub's answer to a `gh api` call on an environment, as #846 saw it answer
+ * the Operator's gh, or null when the call isn't one. Each call is recorded
+ * in the world's environmentCalls.
+ */
+function environmentAnswer(world: World, { args, input, line }: Call): Partial<Ran> | null {
+  const method = args[1] === "--method" ? (args[2] ?? "") : "GET";
+  const rest = method === "GET" ? args.slice(1) : args.slice(3);
+  const matched = ENVIRONMENT_PATH.exec(rest[0] ?? "");
+  if (matched === null) return null;
+  world.environmentCalls.push(line);
+  const [, repo, name, rules, ruleId] = matched;
+  const key = environmentKey(name, repo);
+  const environment = world.environments.get(key);
+  if (rules === undefined) {
+    if (method === "PUT") {
+      if (world.environmentRefusal !== null) return { code: 1, stderr: world.environmentRefusal };
+      // Makes it, or sets which refs it lets through: its rules and its secrets are untouched.
+      const { deployment_branch_policy: policy = null } = JSON.parse(input ?? "{}") as { deployment_branch_policy?: WorldEnvironment["policy"] };
+      if (environment === undefined) world.environments.set(key, { policy, rules: [], secrets: new Set() });
+      else environment.policy = policy;
+      return json({ name, deployment_branch_policy: policy });
+    }
+    if (method !== "GET") throw new Error(`The world has no answer for: ${line}`);
+    if (environment?.refusesRead !== undefined) return { code: 1, stderr: environment.refusesRead };
+    return environment === undefined ? NOT_FOUND : json({ id: 1, name, protection_rules: [], deployment_branch_policy: environment.policy });
+  }
+  if (environment === undefined) return NOT_FOUND;
+  if (method === "GET" && ruleId === undefined) return json({ total_count: environment.rules.length, branch_policies: environment.rules });
+  if (method === "POST" && ruleId === undefined) {
+    const field = (key: string) => rest.find((arg) => arg.startsWith(`${key}=`))?.slice(key.length + 1) ?? "";
+    const rule = { name: field("name"), type: field("type") === "tag" ? ("tag" as const) : ("branch" as const) };
+    // The same POST a second time is taken, and still leaves one rule.
+    const has = environment.rules.some((existing) => existing.name === rule.name && existing.type === rule.type);
+    if (!has && environment.dropsNewRules !== true) environment.rules.push({ id: nextRuleId(world), ...rule });
+    return json(rule);
+  }
+  if (method === "DELETE" && ruleId !== undefined) {
+    if (!environment.rules.some((rule) => String(rule.id) === ruleId)) return NOT_FOUND;
+    environment.rules = environment.rules.filter((rule) => String(rule.id) !== ruleId);
+    return {};
+  }
+  throw new Error(`The world has no answer for: ${line}`);
+}
+
+const NO_STORE = { code: 1, stderr: `GraphQL: Could not resolve to a Repository with the name '${RUN_STORE_REPO}'. (repository)` };
+
+/** `gh api`'s path for a file on the store's default branch. */
+const STORE_FILE_PATH = new RegExp(`^repos/${RUN_STORE_REPO}/contents/(.+)$`);
+
+/** The sha GitHub's Contents API gives a file, which an update of it must name: here, one that changes whenever its text does. */
+const blobSha = (text: string) => createHash("sha1").update(text).digest("hex");
+
+/**
+ * GitHub's answer to a `gh api` call on a file of the store's, through the
+ * Contents API, or null when the call isn't one. A PUT commits the file
+ * straight to the store's default branch, and the first one makes that branch.
+ */
+function storeFileAnswer({ store }: World, { args, input, line }: Call): Partial<Ran> | null {
+  const method = args[1] === "--method" ? (args[2] ?? "") : "GET";
+  const path = STORE_FILE_PATH.exec((method === "GET" ? args[1] : args[3]) ?? "")?.[1];
+  if (path === undefined) return null;
+  if (!store.exists) return NOT_FOUND;
+  const current = store.files.get(path);
+  if (method === "GET") {
+    if (store.defaultBranch === null) return { code: 1, stderr: "gh: This repository is empty. (HTTP 404)" };
+    return current === undefined ? NOT_FOUND : json({ content: Buffer.from(current, "utf8").toString("base64"), sha: blobSha(current) });
+  }
+  if (method !== "PUT") throw new Error(`The world has no answer for: ${line}`);
+  const body = JSON.parse(input ?? "{}") as { content?: string; sha?: string };
+  // An update that doesn't name the file's sha is refused.
+  if (current !== undefined && body.sha !== blobSha(current)) return { code: 1, stderr: `gh: ${path} does not match ${body.sha ?? "no sha"} (HTTP 409)` };
+  store.files.set(path, Buffer.from(body.content ?? "", "base64").toString("utf8"));
+  store.defaultBranch ??= store.firstBranch;
+  return {};
 }
 
 /** A protection as a PUT wrote it, in the shape GitHub's GET answers with: each switch an `{ enabled }`, each allowance an object. */
@@ -110,6 +280,12 @@ export interface Origin {
 }
 
 export function worldScript(world: World, origin?: Origin): Record<string, Answer> {
+  /** The repo-level secrets a `gh secret` call with no --env names: the checkout's repo's, or with --repo the store's. The world holds no other repo's. */
+  const repoLevelSecrets = (args: readonly string[], line: string): Set<string> => {
+    if (!args.includes("--repo")) return world.secrets;
+    if (valueOf(args, "--repo") !== RUN_STORE_REPO || !world.store.exists) throw new Error(`The world has no answer for: ${line}`);
+    return world.store.secrets;
+  };
   return {
     "gh label list --limit 1000 --json name": () => names(world.labels),
     "gh label create": ({ args }) => {
@@ -119,10 +295,43 @@ export function worldScript(world: World, origin?: Origin): Record<string, Answe
     },
     "gh issue list": () => json(Array.from({ length: world.readyForAgent }, (_, i) => ({ number: i + 1 }))),
     "gh secret list --json name": () => names(world.secrets),
-    "gh secret set": ({ args }) => {
-      world.secrets.add(args[2]!);
+    // An environment's secrets, by name: the checkout's repo's, or with --repo another's.
+    "gh secret list --env": ({ args, line }) => {
+      world.environmentCalls.push(line);
+      const environment = environmentOf(world, valueOf(args, "--env"), args.includes("--repo") ? valueOf(args, "--repo") : PRODUCT_REPO);
+      return environment === undefined ? { code: 1, stderr: "failed to get secrets: HTTP 404: Not Found" } : names(environment.secrets);
+    },
+    // The ready Operator's script answers this one line too, so the world answers it by name.
+    [`gh api repos/${PRODUCT_REPO}/environments/${KIT_ENVIRONMENT}`]: (call) => environmentAnswer(world, call) ?? {},
+    // With --env the secret is that environment's, of the checkout's repo or with --repo another's, and never a repo-level one.
+    // With none it is a repo-level one, of the checkout's repo or with --repo the store's.
+    "gh secret set": ({ args, line }) => {
+      if (!args.includes("--env")) {
+        repoLevelSecrets(args, line).add(args[2]!);
+        return {};
+      }
+      world.environmentCalls.push(line);
+      const environment = environmentOf(world, valueOf(args, "--env"), args.includes("--repo") ? valueOf(args, "--repo") : PRODUCT_REPO);
+      if (environment === undefined) return { code: 1, stderr: "failed to fetch public key: HTTP 404: Not Found" };
+      environment.secrets.add(args[2]!);
       return {};
     },
+    // A repo-level secret of the checkout's repo, or with --repo the store's, and never an environment's.
+    "gh secret delete": ({ args, line }) => {
+      if (args.length !== (args.includes("--repo") ? 5 : 3)) throw new Error(`The world has no answer for: ${line}`);
+      return repoLevelSecrets(args, line).delete(args[2]!) ? {} : { code: 1, stderr: `failed to delete secret ${args[2]}: HTTP 404: Not Found` };
+    },
+    // The fabrik-runs store: whether it is there, its default branch and its repo-level secrets. Its files and its environment are `gh api`'s.
+    [`gh repo view ${RUN_STORE_REPO} --json visibility`]: () => (world.store.exists ? json({ visibility: world.store.private ? "PRIVATE" : "PUBLIC" }) : NO_STORE),
+    // gh prints an empty name for a repo with no commit.
+    [`gh repo view ${RUN_STORE_REPO} --json defaultBranchRef`]: () =>
+      world.store.exists ? json({ defaultBranchRef: { name: world.store.defaultBranch ?? "" } }) : NO_STORE,
+    [`gh repo create ${RUN_STORE_REPO} --private`]: () => {
+      if (world.store.exists) return { code: 1, stderr: "GraphQL: Name already exists on this account (createRepository)" };
+      Object.assign(world.store, { exists: true, private: true });
+      return {};
+    },
+    [`gh secret list --repo ${RUN_STORE_REPO} --json name`]: () => (world.store.exists ? names(world.store.secrets) : NO_STORE),
     "op vault list --format json": () => names(world.vaults),
     "op vault create": ({ args }) => {
       world.vaults.add(args.slice(2).join(" "));
@@ -147,8 +356,13 @@ export function worldScript(world: World, origin?: Origin): Record<string, Answe
       return {};
     },
     // The compare's two commits follow its endpoint with no space, so no longer key can name it, and so do the Deployments' query and id.
+    // An environment's calls name any repo and any environment, so they are answered here too, as are the store's files.
     "gh api": (call) => {
       const { args } = call;
+      const environment = environmentAnswer(world, call);
+      if (environment !== null) return environment;
+      const storeFile = storeFileAnswer(world, call);
+      if (storeFile !== null) return storeFile;
       const deployed = deploymentsOf("acme/clinic", world.deployments)[call.line];
       if (deployed !== undefined) return typeof deployed === "function" ? deployed(call) : deployed;
       const compared = /^repos\/acme\/clinic\/compare\/(\w+)\.\.\.(\w+)$/.exec(args[1] ?? "");
