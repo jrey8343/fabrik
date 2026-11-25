@@ -22,7 +22,7 @@ const REPORTED: RunSummary = { ...SUMMARY, report: REPORT };
 const BLOCKED: RunSummary = { ...SUMMARY, blockers: ['the Claude token, in the "Fabrik" vault'] };
 const PAUSED: RunSummary = { ...SUMMARY, pausesDispatch: true };
 const BY_HAND = 'the "Claude backup" Subscription\'s token, in the "Fabrik" vault';
-const COMMAND = "curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
+const COMMAND = "curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/v1.4.2/setup.sh | bash -s -- v1.4.2";
 
 describe("The setup PR's body", () => {
   it("lists what setup did and every note, and says the Operator merges it", () => {

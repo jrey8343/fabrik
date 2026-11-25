@@ -5,9 +5,9 @@
 // again, which the setup PR's body never holds.
 import type { RunSummary, StepsDone } from "./oneRun.ts";
 
-/** The command that runs setup, at this release. */
+/** The command that runs setup at this release: it fetches setup.sh at the release's tag, never from main, and names the release to it. */
 export function setupCommand(release: string): string {
-  return `curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- ${release}`;
+  return `curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/${release}/setup.sh | bash -s -- ${release}`;
 }
 
 export interface PrBodyInputs {

@@ -1062,7 +1062,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
   describe("on a merged install with nothing to apply, but 1Password lacking what a wizard stage stores", () => {
     const COMPLETE = "Nothing to do: this repo's Fabrik install is complete.";
     const WALK = "Walk the wizard now? [y/N] ";
-    const COMMAND = "curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
+    const COMMAND = "curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/v1.4.2/setup.sh | bash -s -- v1.4.2";
 
     const unstore = (world: World, vault: string, title: string) => void world.items.get(vault)?.delete(title);
 
@@ -1747,7 +1747,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
 
     const STAY =
       "- The repo-level Actions secrets FABRIK_OP_AGENT_TOKEN, FABRIK_OP_IMPLEMENT_TOKEN and FABRIK_OP_PUSH_TOKEN stay for now, since the Kit main pins names no environment and reads them. " +
-      "Once the setup PR is merged, run setup again and it deletes them: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
+      "Once the setup PR is merged, run setup again and it deletes them: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/v1.4.2/setup.sh | bash -s -- v1.4.2";
     const OLD_ACCOUNTS =
       "- Once the repo-level secrets are deleted, delete the old service accounts fabrik-acme-clinic-agent, fabrik-acme-clinic-implement and fabrik-acme-clinic-push on 1Password's site. " +
       "Their tokens still work until you do, though they sit nowhere on GitHub.";
@@ -1880,7 +1880,7 @@ describe("One run of the setup program", { timeout: 30_000 }, () => {
     const NEW_ACCOUNT = "op service-account create fabrik-jrey8343-fabrik-runs-push-env --vault Fabrik App:read_items --raw";
     const STAYS =
       "- jrey8343/fabrik-runs: The repo-level Actions secret FABRIK_OP_PUSH_TOKEN stays for now, since the caller workflow setup found there pins no Kit that names the fabrik environment. " +
-      "Once setup has written the one that does, run setup again and it deletes it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
+      "Once setup has written the one that does, run setup again and it deletes it: curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/v1.4.2/setup.sh | bash -s -- v1.4.2";
     const OLD_ACCOUNT =
       "- jrey8343/fabrik-runs: Once the repo-level secret is deleted, delete the old service account fabrik-jrey8343-fabrik-runs-push on 1Password's site. " +
       "Its token still works until you do, though it sits nowhere on GitHub.";

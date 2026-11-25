@@ -20,7 +20,7 @@ export const KIT_REPO = "jrey8343/fabrik";
 const FABRIK_USES = /^\s*(?:-\s+)?uses:\s*["']?jrey8343\/fabrik(\/[^@\s"']*)?@([^\s"'#]+)["']?\s*(?:#.*)?$/;
 
 /** An exact semver release tag, such as v1.2.3 or v1.2.3-pre.1. */
-const EXACT_RELEASE = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+export const EXACT_RELEASE = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /**
  * The caller workflow's job keys (templates/fabrik.yml). Each Kit job they
