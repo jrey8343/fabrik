@@ -671,6 +671,23 @@ describe("The repo-level tokens, deleted once the default branch's Kit names the
   const callerAt = (release: string) => pinCaller(kit.templates.caller, release);
   const deletions = (actions: readonly SetupAction[]) => actions.flatMap((a) => (a.kind === "delete-repo-secret" ? [a] : []));
   const accounts = (actions: readonly SetupAction[]) => actions.flatMap((a) => (a.kind === "create-service-account" ? [a] : []));
+  const COMMAND = "curl -fsSL https://raw.githubusercontent.com/jrey8343/fabrik/main/setup.sh | bash -s -- v1.4.2";
+  const STAY = `The repo-level Actions secrets FABRIK_OP_AGENT_TOKEN, FABRIK_OP_IMPLEMENT_TOKEN and FABRIK_OP_PUSH_TOKEN stay for now, since the Kit main pins names no environment and reads them. Once the setup PR is merged, run setup again and it deletes them: ${COMMAND}`;
+  const OLD_ACCOUNTS =
+    "Once the repo-level secrets are deleted, delete the old service accounts fabrik-acme-clinic-agent, fabrik-acme-clinic-implement and fabrik-acme-clinic-push on 1Password's site. Their tokens still work until you do, though they sit nowhere on GitHub.";
+
+  it("on a repo on an earlier major with its three tokens at repo level, plans the environment and three new accounts, deletes nothing, and says the repo-level secrets stay until the setup PR is merged", () => {
+    const earlier = callerAt("v0.9.1");
+    const onTheKit = aCleanProduct({ files: { ".github/workflows/fabrik.yml": earlier }, defaultBranchCaller: earlier, secrets: [...TOKENS, "STRIPE_KEY"] });
+
+    const { actions, notes } = planSetup(onTheKit, kit);
+
+    expect(actions[0]?.kind).toBe("hold-environment");
+    expect(accounts(actions).map((a) => a.name)).toEqual(["fabrik-acme-clinic-agent-env", "fabrik-acme-clinic-implement-env", "fabrik-acme-clinic-push-env"]);
+    expect(deletions(actions)).toEqual([]);
+    expect(notes).toContain(STAY);
+    expect(notes).not.toContain(OLD_ACCOUNTS);
+  });
 
   it("once the setup PR is merged, plans deleting each of the three at repo level, names the three old accounts, and plans no new account", () => {
     const moved = aCleanProduct({ secrets: [...TOKENS, "STRIPE_KEY"], environment: held(TOKENS), defaultBranchCaller: callerAt("v1.4.2") });
@@ -687,10 +704,135 @@ describe("The repo-level tokens, deleted once the default branch's Kit names the
       "delete the repo-level Actions secret FABRIK_OP_IMPLEMENT_TOKEN: the Kit main pins reads the fabrik environment's",
       "delete the repo-level Actions secret FABRIK_OP_PUSH_TOKEN: the Kit main pins reads the fabrik environment's",
     ]);
-    expect(notes).toContain(
-      "Once the repo-level secrets are deleted, delete the old service accounts fabrik-acme-clinic-agent, fabrik-acme-clinic-implement and fabrik-acme-clinic-push on 1Password's site. Their tokens still work until you do, though they sit nowhere on GitHub.",
-    );
+    expect(notes).toContain(OLD_ACCOUNTS);
+    expect(notes).not.toContain(STAY);
     expect(accounts(actions)).toEqual([]);
+  });
+
+  /** A repo whose environment holds the three tokens, with all three at repo level too, and this caller workflow on its default branch. */
+  const withCallerOnTheDefaultBranch = (caller: string | null) =>
+    planSetup(aCleanProduct({ secrets: TOKENS, environment: held(TOKENS), defaultBranchCaller: caller }), kit);
+
+  it.each([
+    ["Setup's own release", "v1.4.2"],
+    ["an earlier release of Setup's major", "v1.0.0"],
+    ["a later release of Setup's major, as Dependabot bumps it", "v1.6.0"],
+    ["a later major", "v2.0.0"],
+  ])("counts a default branch whose caller pins %s as naming the environment, and deletes", (_, release) => {
+    const { actions, notes } = withCallerOnTheDefaultBranch(callerAt(release));
+
+    expect(deletions(actions).map((a) => a.secret)).toEqual(TOKENS);
+    expect(notes).toContain(OLD_ACCOUNTS);
+  });
+
+  it.each<[string, () => string | null]>([
+    ["has no caller workflow", () => null],
+    ["pins an earlier major", () => callerAt("v0.9.1")],
+    ["pins two releases", () => callerAt("v1.4.2").replace("schedule.yml@v1.4.2", "schedule.yml@v1.4.3")],
+    ["pins a branch, which is no release", () => callerAt("main")],
+    ["names Fabrik in no uses: line", () => "on: push\njobs: {}\n"],
+  ])("doesn't count a default branch that %s, deletes nothing, and says the repo-level secrets stay", (_, caller) => {
+    const { actions, notes } = withCallerOnTheDefaultBranch(caller());
+
+    expect(deletions(actions)).toEqual([]);
+    expect(notes).toContain(STAY);
+  });
+
+  it("reads the default branch's caller workflow, never the checkout's own, which can be the setup branch's", () => {
+    const tokens = { secrets: TOKENS, environment: held(TOKENS) };
+    const onTheSetupBranch = aCleanProduct({ ...tokens, files: { ".github/workflows/fabrik.yml": callerAt("v1.4.2") }, defaultBranchCaller: callerAt("v0.9.1") });
+    const merged = aCleanProduct({ ...tokens, files: { ".github/workflows/fabrik.yml": callerAt("v0.9.1") }, defaultBranchCaller: callerAt("v1.4.2") });
+
+    expect(deletions(planSetup(onTheSetupBranch, kit).actions)).toEqual([]);
+    expect(deletions(planSetup(merged, kit).actions)).toHaveLength(3);
+  });
+
+  it("with only one Kit secret at repo level, deletes only it and names only its role's old account", () => {
+    const state = aCleanProduct({ secrets: ["FABRIK_OP_IMPLEMENT_TOKEN", "STRIPE_KEY"], environment: held(TOKENS), defaultBranchCaller: callerAt("v1.4.2") });
+
+    const { actions, notes } = planSetup(state, kit);
+
+    expect(deletions(actions)).toEqual([
+      { kind: "delete-repo-secret", secret: "FABRIK_OP_IMPLEMENT_TOKEN", account: "fabrik-acme-clinic-implement", environment: "fabrik", branch: "main" },
+    ]);
+    expect(notes.filter((note) => note.includes("old service account"))).toEqual([
+      "Once the repo-level secret is deleted, delete the old service account fabrik-acme-clinic-implement on 1Password's site. Its token still works until you do, though it sits nowhere on GitHub.",
+    ]);
+  });
+
+  it("names two old accounts with an and between them", () => {
+    const state = aCleanProduct({ secrets: ["FABRIK_OP_PUSH_TOKEN", "FABRIK_OP_AGENT_TOKEN"], environment: held(TOKENS), defaultBranchCaller: callerAt("v1.4.2") });
+
+    expect(planSetup(state, kit).notes).toContain(
+      "Once the repo-level secrets are deleted, delete the old service accounts fabrik-acme-clinic-agent and fabrik-acme-clinic-push on 1Password's site. Their tokens still work until you do, though they sit nowhere on GitHub.",
+    );
+  });
+
+  it("while they stay, names only those that sit at repo level", () => {
+    const stays = (secrets: readonly string[]) =>
+      planSetup(aCleanProduct({ secrets, environment: held(TOKENS), defaultBranchCaller: callerAt("v0.9.1") }), kit).notes.filter((note) => note.includes("for now"));
+
+    expect(stays(["STRIPE_KEY", "FABRIK_OP_PUSH_TOKEN"])).toEqual([
+      `The repo-level Actions secret FABRIK_OP_PUSH_TOKEN stays for now, since the Kit main pins names no environment and reads it. Once the setup PR is merged, run setup again and it deletes it: ${COMMAND}`,
+    ]);
+    expect(stays(["FABRIK_OP_IMPLEMENT_TOKEN", "FABRIK_OP_AGENT_TOKEN"])).toEqual([
+      `The repo-level Actions secrets FABRIK_OP_AGENT_TOKEN and FABRIK_OP_IMPLEMENT_TOKEN stay for now, since the Kit main pins names no environment and reads them. Once the setup PR is merged, run setup again and it deletes them: ${COMMAND}`,
+    ]);
+  });
+
+  it.each<[string, () => string | null]>([
+    ["names the environment", () => callerAt("v1.4.2")],
+    ["names none", () => callerAt("v0.9.1")],
+    ["isn't there", () => null],
+  ])("on a repo with no Kit secret at repo level, whose default branch's caller %s, plans no deletion and gives no note of one", (_, caller) => {
+    const state = aCleanProduct({ secrets: ["STRIPE_KEY", "FABRIK_OP_TOKEN"], environment: held(TOKENS), defaultBranchCaller: caller() });
+
+    const { actions, notes } = planSetup(state, kit);
+
+    expect(deletions(actions)).toEqual([]);
+    expect(notes.filter((note) => /repo-level|old service account/.test(note))).toEqual([]);
+  });
+
+  it("never deletes a repo-level secret of any other name, whatever the default branch pins", () => {
+    const own = ["STRIPE_KEY", "FABRIK_OP_TOKEN", "OP_PUSH_TOKEN", "fabrik_op_push_token_old", "FABRIK_OP_PUSH_TOKEN_2"];
+    for (const caller of [callerAt("v1.4.2"), callerAt("v0.9.1"), null]) {
+      const { actions } = planSetup(aCleanProduct({ secrets: [...own, ...TOKENS], defaultBranchCaller: caller }), kit);
+
+      expect(deletions(actions).filter((a) => !TOKENS.includes(a.secret))).toEqual([]);
+    }
+  });
+
+  it("plans each deletion after every new account, the one for its own name included, so the environment holds the name first", () => {
+    const state = aCleanProduct({ secrets: TOKENS, environment: held(["FABRIK_OP_AGENT_TOKEN"]), defaultBranchCaller: callerAt("v1.4.2") });
+
+    const steps = planSetup(state, kit).actions.flatMap((a) => (a.kind === "create-service-account" || a.kind === "delete-repo-secret" ? [`${a.kind} ${a.secret}`] : []));
+
+    expect(steps).toEqual([
+      "create-service-account FABRIK_OP_IMPLEMENT_TOKEN",
+      "create-service-account FABRIK_OP_PUSH_TOKEN",
+      "delete-repo-secret FABRIK_OP_AGENT_TOKEN",
+      "delete-repo-secret FABRIK_OP_IMPLEMENT_TOKEN",
+      "delete-repo-secret FABRIK_OP_PUSH_TOKEN",
+    ]);
+  });
+
+  it("is gone from repo level once its step is applied, so the next run plans nothing and names no old account again", () => {
+    const state = aCleanProduct({ secrets: [...TOKENS, "STRIPE_KEY"], defaultBranchCaller: callerAt("v1.4.2") });
+    const installed = afterApplying(state, planSetup(state, kit));
+
+    const { actions, notes } = planSetup(installed, kit);
+
+    expect(installed.secrets).toEqual(["STRIPE_KEY"]);
+    expect(installed.environment?.secrets).toEqual(TOKENS);
+    expect(actions).toEqual([]);
+    expect(notes.filter((note) => /repo-level|old service account/.test(note))).toEqual([]);
+  });
+
+  it("treats each 0.x minor as its own major, as semver does", () => {
+    const state = aCleanProduct({ secrets: TOKENS, environment: held(TOKENS), defaultBranchCaller: callerAt("v0.1.9") });
+
+    expect(deletions(planSetup(state, { ...kit, release: "v0.2.0" }).actions)).toEqual([]);
+    expect(deletions(planSetup(state, { ...kit, release: "v0.1.0" }).actions)).toHaveLength(3);
   });
 });
 

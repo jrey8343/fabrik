@@ -977,6 +977,14 @@ function secrets(state: ProductState, kit: SetupKit, notes: string[]): SetupActi
     const deletions = deleteRepoSecrets(atRepoLevel, KIT_ENVIRONMENT, state.repo.defaultBranch);
     actions.push(...deletions);
     notes.push(...oldAccountsNotes(deletions));
+  } else if (atRepoLevel.length > 0) {
+    // The Kit the default branch pins names no environment, so its jobs are given the repo-level values, on every ref (#846).
+    const one = atRepoLevel.length === 1;
+    const [them, stay] = one ? ["it", "secret"] : ["them", "secrets"];
+    notes.push(
+      `The repo-level Actions ${stay} ${listed(atRepoLevel.map(({ secret }) => secret))} ${one ? "stays" : "stay"} for now, since the Kit ${state.repo.defaultBranch} pins names no environment and reads ${them}. ` +
+        `Once the setup PR is merged, run setup again and it deletes ${them}: ${setupCommand(kit.release)}`,
+    );
   }
   return actions;
 }
@@ -1025,8 +1033,10 @@ export function deleteRepoSecrets(tokens: readonly RepoLevelToken[], environment
 export function oldAccountsNotes(actions: readonly SetupAction[]): string[] {
   const accounts = actions.flatMap((action) => (action.kind === "delete-repo-secret" ? [action.account] : []));
   if (accounts.length === 0) return [];
+  const one = accounts.length === 1;
   return [
-    `Once the repo-level secrets are deleted, delete the old service accounts ${listed(accounts)} on 1Password's site. Their tokens still work until you do, though they sit nowhere on GitHub.`,
+    `Once the repo-level ${one ? "secret is" : "secrets are"} deleted, delete the old service ${one ? "account" : "accounts"} ${listed(accounts)} on 1Password's site. ` +
+      `${one ? "Its token still works" : "Their tokens still work"} until you do, though ${one ? "it sits" : "they sit"} nowhere on GitHub.`,
   ];
 }
 

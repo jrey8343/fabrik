@@ -66,6 +66,10 @@ export function afterApplying(state: ProductState, plan: SetupPlan): ProductStat
         // The Product repo's go into its environment, which the plan's first step holds, and never to repo level.
         else if (next.environment !== null) next = { ...next, environment: { ...next.environment, secrets: [...next.environment.secrets, action.secret] } };
         break;
+      case "delete-repo-secret":
+        if (action.repo !== undefined) next = { ...next, store: { ...next.store, secrets: next.store.secrets.filter((name) => name !== action.secret) } };
+        else next = { ...next, secrets: next.secrets.filter((name) => name !== action.secret) };
+        break;
       case "protect-branch":
         next = { ...next, protection: action.protection };
         break;
