@@ -1,9 +1,11 @@
 // What setup reads before planning, with the Operator's own gh and op: the
 // Product repo's files, labels, secrets, fabrik environment, branch protection
 // and Merge gate, the 1Password account's vaults, and the fabrik-runs store.
-// It only reads.
+// For Setup's report it reads production's environment too, when the Kit
+// config names one. It only reads.
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { KIT_CONFIG_PATH } from "../kit/config.ts";
 import { KIT_ENVIRONMENT } from "../kit/environment.ts";
 import { RUN_STORE_REPO } from "../kit/runStore.ts";
 import { READY_FOR_AGENT } from "../loop/labels.ts";
@@ -18,6 +20,8 @@ import {
   FABRIK_VAULT,
   MERGE_GATE_RULESET,
   type MergeGateRuleset,
+  type ProductionEnvironment,
+  productionEnvironmentIn,
   type ProductState,
   type RunStoreState,
 } from "./plan.ts";
@@ -41,7 +45,19 @@ export async function gatherState(run: Run, productDir: string, repo: ProductSta
     gatherStore(run, cwd),
   ]);
   const readyForAgent = await gatherReadyForAgent(run, cwd, labels);
-  return { repo, files, labels, secrets, environment, vaults, fabrikItems, protection, mergeGate, store, readyForAgent };
+  const production = await gatherProduction(run, cwd, `${repo.owner}/${repo.name}`, files[KIT_CONFIG_PATH] ?? null);
+  return { repo, files, labels, secrets, environment, production, vaults, fabrikItems, protection, mergeGate, store, readyForAgent };
+}
+
+/**
+ * Production's environment, for Setup's report: the one the checkout's Kit
+ * config's `production` block names, and which refs it lets through, never its
+ * secrets' names. Null, with no environment read, when the Kit config names
+ * none. The repo is `owner/name`.
+ */
+async function gatherProduction(run: Run, cwd: string, repo: string, kitConfig: string | null): Promise<ProductionEnvironment | null> {
+  const name = productionEnvironmentIn(kitConfig);
+  return name === null ? null : { name, policy: await readEnvironmentPolicy(run, cwd, repo, name) };
 }
 
 /**
@@ -71,7 +87,8 @@ export async function gatherEnvironment(
  * naming GitHub's answer.
  */
 export async function readEnvironmentPolicy(run: Run, cwd: string, repo: string, name: string): Promise<EnvironmentPolicy | null> {
-  const read = await run("gh", ["api", `repos/${repo}/environments/${name}`], { cwd });
+  // The name is one segment of the path: a Product repo's own may hold a space or a slash.
+  const read = await run("gh", ["api", `repos/${repo}/environments/${encodeURIComponent(name)}`], { cwd });
   if (read.code !== 0) {
     if (/HTTP 404/.test(read.stderr + read.stdout)) return null;
     throw new Error(`Reading the ${name} environment on ${repo} failed: ${read.stderr.trim() || `exit ${read.code}`}`);
@@ -93,7 +110,7 @@ interface EnvironmentResponse {
  * rule and again once it has.
  */
 export async function readEnvironmentRules(run: Run, cwd: string, repo: string, name: string): Promise<EnvironmentRule[]> {
-  const path = `repos/${repo}/environments/${name}/deployment-branch-policies?per_page=100`;
+  const path = `repos/${repo}/environments/${encodeURIComponent(name)}/deployment-branch-policies?per_page=100`;
   const listed = JSON.parse(await ok(run, "gh", ["api", path], { cwd })) as { branch_policies?: { id: number; name: string; type?: string }[] };
   // A rule made before GitHub's rules had a type is a branch rule.
   return (listed.branch_policies ?? []).map(({ id, name: ruleName, type }) => ({ id, name: ruleName, type: type === "tag" ? "tag" : "branch" }));
