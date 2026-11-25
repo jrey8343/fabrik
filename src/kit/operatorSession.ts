@@ -10,6 +10,12 @@ import type { KitConfig } from "./config.ts";
 export const BARE_SESSION_ENVIRONMENT = "operator-sessions";
 
 /**
+ * Where a Product repo says, in prose, what its Operator sessions can reach.
+ * Only an Operator session reads it, and no Kit code acts on what it says.
+ */
+export const OPERATOR_SESSION_PATH = ".fabrik/operator-session.md";
+
+/**
  * The name of the Session environment a repo's Operator sessions open in: its
  * Kit config's `console.session_environment` when it names one, and the bare
  * one's otherwise. A reader passes null for a Kit config it didn't read, that
