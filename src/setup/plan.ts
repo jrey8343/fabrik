@@ -729,8 +729,10 @@ function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupA
   const consoleApp = config.ok ? config.config.console.appId : null;
   const current = state.protection;
   const found = current ?? UNPROTECTED;
-  const required = [...new Set([...requiredChecks(found), ...listedChecks, ...(consoleApp === null ? [] : [CONSOLE_CHECK])])];
-  if (required.filter((context) => context !== CONSOLE_CHECK).length === 0) {
+  // The Required checks: the branch's, then those the Kit config lists. The
+  // Console check is never one, though the branch may already require it.
+  const wantedRequiredChecks = [...new Set([...requiredChecks(found), ...listedChecks])].filter((context) => context !== CONSOLE_CHECK);
+  if (wantedRequiredChecks.length === 0) {
     notes.push(
       `${state.repo.defaultBranch} has no Required checks yet: list the CI checks that must pass in sandbox.checks in ${KIT_CONFIG_PATH}, then run setup again.`,
     );
@@ -751,6 +753,10 @@ function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupA
     );
   }
   const checks = found.required_status_checks;
+  // What the step requires: the branch's checks where they are, the Console
+  // check among them, then the Required checks it adds, then the Console check
+  // where Setup first requires it.
+  const wantedChecks = [...new Set([...requiredChecks(found), ...wantedRequiredChecks, ...(consoleApp === null ? [] : [CONSOLE_CHECK])])];
   const entry = (context: string) =>
     context === CONSOLE_CHECK && consoleApp !== null
       ? { context, app_id: consoleApp }
@@ -762,11 +768,11 @@ function protection(state: ProductState, kit: SetupKit, notes: string[]): SetupA
     ...found,
     enforce_admins: true,
     required_status_checks:
-      required.length === 0
+      wantedChecks.length === 0
         ? null
         : {
             strict: checks?.strict ?? false,
-            checks: required.map(entry),
+            checks: wantedChecks.map(entry),
           },
     required_pull_request_reviews: {
       ...reviews,
