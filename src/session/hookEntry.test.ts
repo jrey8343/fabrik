@@ -3,11 +3,11 @@
 // git told by the environment to read `https://github.com/` from a local folder
 // that holds a stand-in Fabrik.
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { aRepository, git, gitHubFrom, tempDir } from "../__fixtures__/skillsArchive.ts";
+import { aRepository, aSkillsSource, git, gitHubFrom, tempDir } from "../__fixtures__/skillsArchive.ts";
 
 const run = promisify(execFile);
 const TEMPLATE = resolve(import.meta.dirname, "..", "..", "templates", "claude-settings.json");
@@ -119,5 +119,78 @@ describe("The SessionStart hook entry", () => {
 
     expect(settings.hooks.SessionStart[0]?.hooks[0]?.timeout).toBe(120);
     expect(settings.enabledPlugins).toEqual({ "mattpocock-skills@claude-plugins-official": false });
+  });
+});
+
+const FABRIK = resolve(import.meta.dirname, "..", "..");
+
+describe("fabrik's own SessionStart hook entry", () => {
+  /**
+   * A stand-in fabrik checkout, its src/ this one's, whose skills.lock.json pins
+   * a mattpocock/skills held in the stand-in for github.com, with skills of its
+   * own and no caller workflow.
+   */
+  async function aFabrikCheckout(github: string): Promise<string> {
+    const { sha } = await aSkillsSource({ "skills/engineering/grilling": "# grilling" }, { at: join(github, "mattpocock/skills") });
+    const fabrik = await tempDir("fabrik");
+    await symlink(join(FABRIK, "src"), join(fabrik, "src"));
+    await writeFile(join(fabrik, "skills.lock.json"), JSON.stringify({ repository: "mattpocock/skills", sha }));
+    await mkdir(join(fabrik, "skills/fabrik-pair"), { recursive: true });
+    await writeFile(join(fabrik, "skills/fabrik-pair/SKILL.md"), "---\nname: fabrik-pair\n---\n# Pair");
+    return fabrik;
+  }
+
+  async function ownSettings(): Promise<HookSettings> {
+    return JSON.parse(await readFile(join(FABRIK, ".claude/settings.json"), "utf8")) as HookSettings;
+  }
+
+  it("is one SessionStart hook that runs src/session/start.ts --kit on fabrik's own checkout, with two minutes, and turns the skills plugin off", async () => {
+    const settings = await ownSettings();
+
+    expect(settings.hooks.SessionStart).toEqual([
+      {
+        hooks: [
+          {
+            type: "command",
+            command: 'node "$CLAUDE_PROJECT_DIR/src/session/start.ts" --kit "$CLAUDE_PROJECT_DIR"',
+            timeout: 120,
+          },
+        ],
+      },
+    ]);
+    expect(settings.enabledPlugins).toEqual({ "mattpocock-skills@claude-plugins-official": false });
+  });
+
+  it("installs the Base skills the checkout pins and its own skills/ into its .claude/skills/, downloading no Fabrik, and asks Claude Code to reload them", async () => {
+    const github = await tempDir("github");
+    const fabrik = await aFabrikCheckout(github);
+    const [hook] = (await ownSettings()).hooks.SessionStart[0]?.hooks ?? [];
+
+    const { stdout } = await run("sh", ["-c", hook?.command ?? "exit 1"], {
+      env: { ...process.env, CLAUDE_PROJECT_DIR: fabrik, HOME: await tempDir("home"), CLAUDE_CONFIG_DIR: "", ...gitHubFrom(github) },
+    });
+    const output = JSON.parse(stdout) as { hookSpecificOutput: { additionalContext: string; reloadSkills: boolean }; systemMessage?: string };
+
+    expect(output.systemMessage).toBeUndefined();
+    expect(output.hookSpecificOutput.reloadSkills).toBe(true);
+    expect(output.hookSpecificOutput.additionalContext.split("\n")[0]).toMatch(/^This checkout is Fabrik itself\. /);
+    expect(await readFile(join(fabrik, ".claude/skills/grilling/SKILL.md"), "utf8")).toBe("# grilling");
+    expect(await readFile(join(fabrik, ".claude/skills/fabrik-pair/SKILL.md"), "utf8")).toContain("# Pair");
+  });
+
+  it("names both forms when it's run with neither", async () => {
+    const failed = await run("node", [join(FABRIK, "src/session/start.ts"), "--kit"]).catch((error: { code: number; stderr: string }) => error);
+
+    expect(failed).toMatchObject({ code: 2 });
+    expect((failed as { stderr: string }).stderr.trim()).toBe(
+      "Usage: node src/session/start.ts <product checkout> <release>\n       node src/session/start.ts --kit <fabrik checkout>",
+    );
+  });
+
+  it("leaves nothing it installs to be committed: fabrik's .gitignore ignores .claude/skills/, beside .claude/worktrees/", async () => {
+    const ignored = (await readFile(join(FABRIK, ".gitignore"), "utf8")).split("\n");
+
+    expect(ignored).toContain(".claude/skills/");
+    expect(ignored).toContain(".claude/worktrees/");
   });
 });
