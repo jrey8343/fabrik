@@ -5,7 +5,7 @@ import { GitHubError } from "../github/client.ts";
 import { implementRunFailedIn, researchRunFailedIn } from "../github/threads.ts";
 import { aTicket, dispatchSnapshotOf, kitConfig } from "../__fixtures__/snapshots.ts";
 import { planFor } from "../loop/rules.ts";
-import { claimLanding, jobFailureReport, landingFailedOf, landingFailureMention, landingFailureReport, pushLanding } from "./landingFailure.ts";
+import { claimLanding, claimTargetOf, jobFailureReport, landingFailedOf, landingFailureMention, landingFailureReport, pushLanding } from "./landingFailure.ts";
 import type { PushJobInput } from "./pushJob.ts";
 
 const RUN = "https://github.com/acme/shop/actions/runs/9001/attempts/1";
@@ -45,6 +45,27 @@ describe("What a push job or claim job is landing, and where its failure is said
 
   it("a claim goes on the issue the run is for", () => {
     expect(claimLanding(12, RUN)).toMatchObject({ job: "claim", target: 12, doing: "the claim of #12, taking its trigger label off as its run starts" });
+  });
+
+  it.each([
+    ["a label's run: the issue its event names", "issues", { action: "labeled", issue: { number: 12 }, label: { name: "agent:implement" } }, 12],
+    ["a review's own run: the pull request its event names", "pull_request_review", { action: "submitted", pull_request: { number: 45 }, review: { id: 123 } }, 45],
+    ["a hand-off's run: the pull request its inputs name", "workflow_dispatch", { inputs: { pull_request: "45", review: "123" } }, 45],
+    ["a dispatch that is no hand-off: nowhere", "workflow_dispatch", { inputs: { pull_request: "45abc", review: "123" } }, null],
+    ["a manual dispatch with no inputs: nowhere", "workflow_dispatch", { inputs: null }, null],
+    ["an event that names neither: nowhere", "schedule", {}, null],
+  ])("a claim on %s", (_case, eventName, payload, target) => {
+    expect(claimTargetOf(eventName, payload)).toBe(target);
+    expect(claimLanding(claimTargetOf(eventName, payload), RUN).target).toBe(target);
+  });
+
+  it("a claim that fails on a hand-off's run is said on the pull request its inputs name", () => {
+    const landing = claimLanding(claimTargetOf("workflow_dispatch", { inputs: { pull_request: "45", review: "123" } }), RUN);
+
+    const { comment } = landingFailureReport(landing, { kind: "error", error: new GitHubError("GitHub POST failed: 502", 502, { request: "POST /repos/acme/shop/issues/45/labels", body: "Bad Gateway" }) });
+
+    expect(comment?.issue).toBe(45);
+    expect(comment?.body).toContain("the claim of #45");
   });
 });
 
