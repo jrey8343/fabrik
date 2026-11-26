@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { CALLER_JOBS, callerWorkflowPath, checkCallerWorkflow, checkKit } from "./caller.ts";
+import { CALLER_JOBS, callerWorkflowPath, checkCallerWorkflow, checkKit, kitReleaseOf } from "./caller.ts";
 import { resolveKitConfig } from "./config.ts";
 import { handOffFrom } from "../github/events.ts";
 import { AUDIT_LABEL, DESIGN_LABEL, DISPATCH_LABEL, KIT_ISSUE_LABELS, NEEDS_DESIGN, RESEARCH_LABEL, REPLAY_TRIGGER_LABEL, RETRO_LABEL, REVIEW_LABEL } from "../loop/labels.ts";
@@ -239,5 +239,17 @@ describe("Every run's Kit check, before any agent starts", () => {
       ".github/workflows/fabrik.yml",
     );
     expect(() => callerWorkflowPath("other/repo/.github/workflows/fabrik.yml@main", { owner: "acme", name: "shop" })).toThrow();
+  });
+
+  it("reads the release a Kit workflow was called at as the bare tag the caller pins, from the full ref GitHub gives", () => {
+    expect(kitReleaseOf("jrey8343/fabrik/.github/workflows/schedule.yml@refs/tags/v5.0.0")).toBe("v5.0.0");
+    expect(kitReleaseOf("jrey8343/fabrik/.github/workflows/schedule.yml@v5.0.0")).toBe("v5.0.0");
+  });
+
+  it("takes a Kit workflow ref of any other shape as it is, never as a release tag", () => {
+    expect(kitReleaseOf("jrey8343/fabrik/.github/workflows/schedule.yml@refs/heads/v5.0.0")).toBe("refs/heads/v5.0.0");
+    expect(kitReleaseOf("jrey8343/fabrik/.github/workflows/schedule.yml@0376e8fb05e5afc51d2d063d7c24d0d4d8499902")).toBe("0376e8fb05e5afc51d2d063d7c24d0d4d8499902");
+    expect(kitReleaseOf("no ref here")).toBeNull();
+    expect(kitReleaseOf("")).toBeNull();
   });
 });
