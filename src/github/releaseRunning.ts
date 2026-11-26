@@ -6,7 +6,7 @@
 // Fabrik App token. Nothing here fails the Tick: a read or write GitHub
 // refuses comes back as the step summary's line, and the next Tick tries
 // again, which the plan's marker makes safe.
-import { splitWorkflowRef } from "../kit/caller.ts";
+import { kitReleaseOf } from "../kit/caller.ts";
 import { type PinMove, type PullComment, releaseRunningPlan } from "../kit/releaseRunning.ts";
 import { CALLER_PATH } from "../setup/shims.ts";
 import { allPages, type GitHub, type Repo, whyUnread } from "./client.ts";
@@ -16,7 +16,7 @@ export interface ReleaseRunningRun {
   readonly repo: Repo;
   /** The main commit this Tick ran on, GITHUB_SHA. */
   readonly headSha: string;
-  /** The Kit workflow ref the caller pinned, such as `jrey8343/fabrik/.github/workflows/schedule.yml@v1.4.0`. */
+  /** The Kit workflow ref the caller pinned, as the OIDC token words it, such as `jrey8343/fabrik/.github/workflows/schedule.yml@refs/tags/v1.4.0`. */
   readonly kitRef: string;
   /** The Fabrik App's login, `<slug>[bot]`, which tells its comments from anyone else's. */
   readonly appLogin: string;
@@ -39,7 +39,7 @@ interface IssueComment {
 
 /** Says on the pin move's pull request that this Tick's release is running, unless it says so already; the step summary's line. Never throws a GitHub failure. */
 export async function confirmReleaseRunning(github: Pick<GitHub, "rest" | "fileText">, run: ReleaseRunningRun): Promise<string> {
-  const running = splitWorkflowRef(run.kitRef)?.ref ?? run.kitRef;
+  const running = kitReleaseOf(run.kitRef) ?? run.kitRef;
   const path = `/repos/${run.repo.owner}/${run.repo.name}`;
   try {
     const move = await newestPinMove(github, run);

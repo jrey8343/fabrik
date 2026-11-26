@@ -23,8 +23,8 @@ import { excerptsPassedOut, type FailureExcerpt } from "../review/failureExcerpt
 describe("A scheduled tick", () => {
   const NOW = new Date("2026-11-11T06:17:00Z");
 
-  it("knows the release it runs on from the Kit workflow ref it was called at", () => {
-    expect(loopEventFrom("schedule", {}, NOW, "jrey8343/fabrik/.github/workflows/schedule.yml@v1.1.0")).toEqual({
+  it("knows the release it runs on from the Kit workflow ref it was called at, as the bare tag", () => {
+    expect(loopEventFrom("schedule", {}, NOW, "jrey8343/fabrik/.github/workflows/schedule.yml@refs/tags/v1.1.0")).toEqual({
       kind: "scheduled-tick",
       now: "2026-11-11T06:17:00.000Z",
       release: "v1.1.0",

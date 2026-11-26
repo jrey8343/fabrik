@@ -77,6 +77,19 @@ export function splitWorkflowRef(workflowRef: string): { readonly workflow: stri
   return at === -1 ? null : { workflow: workflowRef.slice(0, at), ref: workflowRef.slice(at + 1) };
 }
 
+/**
+ * The release a Kit workflow ref was called at, in the form the caller pins
+ * it: the ref after the last `@`, with a leading `refs/tags/` dropped, since
+ * the OIDC token's `job_workflow_ref` claim gives the full ref
+ * (`...schedule.yml@refs/tags/v5.0.0`) where the caller pins `v5.0.0` (#906).
+ * A ref of any other shape, a branch or a SHA, comes back as it is, so it never
+ * matches a pin. Null when the ref has no `@`.
+ */
+export function kitReleaseOf(kitRef: string): string | null {
+  const ref = splitWorkflowRef(kitRef)?.ref;
+  return ref === undefined ? null : ref.replace(/^refs\/tags\//, "");
+}
+
 /** The caller workflow's path in the Product repo, from GITHUB_WORKFLOW_REF: `owner/repo/<path>@<ref>`. */
 export function callerWorkflowPath(workflowRef: string, repo: { readonly owner: string; readonly name: string }): string {
   const prefix = `${repo.owner}/${repo.name}/`;

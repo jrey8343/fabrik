@@ -42,7 +42,7 @@ jobs:
       id-token: write
     outputs:
       sha: ${{ steps.commit.outputs.sha }}
-      # The ref the caller pinned, such as ...schedule.yml@v1.1.0, which the Tick names its release from.
+      # The ref the caller pinned, as the OIDC claim words it, such as ...schedule.yml@refs/tags/v1.1.0; the Tick names its release from it as the bare tag, v1.1.0 (kitReleaseOf).
       ref: ${{ steps.kit.outputs.workflow-ref }}
       started-at: ${{ steps.kit.outputs.started-at }}
     steps:

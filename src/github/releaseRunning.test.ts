@@ -45,7 +45,8 @@ function repoWith(callerCommits: readonly CallerCommit[], options: { comments?: 
 const run = (running: string) => ({
   repo: REPO,
   headSha: "head0",
-  kitRef: `jrey8343/fabrik/.github/workflows/schedule.yml@${running}`,
+  // As the OIDC token's job_workflow_ref claim gives it, the full ref (#906).
+  kitRef: `jrey8343/fabrik/.github/workflows/schedule.yml@refs/tags/${running}`,
   appLogin: APP,
   runUrl: "https://github.com/acme/shop/actions/runs/42",
   startedAt: "2026-11-13T04:17:09Z",
@@ -88,6 +89,15 @@ describe("Confirming on the pin move's pull request that its release is running"
 
     expect(github.posted).toEqual([]);
     expect(line).toBe("Fabrik v1.4.0 is running here, but commit c1, which moved the pin to it, came from no pull request, so nothing is posted.");
+  });
+
+  it("takes a Kit ref that is no release tag, a branch named like one, as no match for the pin", async () => {
+    const github = repoWith([{ sha: "c1", caller: callerAt("v1.4.0"), pulls: [{ number: 32, merged_at: "2026-11-13T03:00:00Z" }] }]);
+
+    const line = await confirmReleaseRunning(github, { ...run("v1.4.0"), kitRef: "jrey8343/fabrik/.github/workflows/schedule.yml@refs/heads/v1.4.0" });
+
+    expect(github.posted).toEqual([]);
+    expect(line).toBe("This Tick runs on Fabrik refs/heads/v1.4.0, but the newest pin move on main, commit c1, pins v1.4.0, so nothing is posted.");
   });
 
   it.each([
