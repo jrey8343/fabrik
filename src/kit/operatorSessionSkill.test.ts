@@ -103,3 +103,19 @@ describe("The Kit's text for cloud sessions, skills/fabrik-operator-session/ (#9
     expect(skill).toContain(`So a short list of acts that can't be undone is never yours: ${adrList}.`);
   });
 });
+
+describe("The connector check before any work (#996)", () => {
+  const step = /\n3\. \*\*Connectors\.\*\* ([^\n]+)/.exec(skill)?.[1] ?? "";
+
+  it("names Claude Docs, by its tools, as the connector that comes with the account and stops no session", () => {
+    expect(step).toContain("Claude Docs (`mcp__Claude_Docs__*`) comes with every Claude account and can't be disconnected, so it stops nothing");
+  });
+
+  it("still stops on any other connector the repo's file doesn't name", () => {
+    expect(step).toContain("If the list holds any other connector's tools and this repo's `.fabrik/operator-session.md` doesn't name that connector, say which as your first words and do no work until the Operator says to go on or starts again.");
+  });
+
+  it("calls the tools of no connector the file doesn't name, Claude Docs' included", () => {
+    expect(step).toContain("Call none of the tools of a connector the file doesn't name, Claude Docs' included, either way.");
+  });
+});
