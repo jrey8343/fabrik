@@ -118,6 +118,10 @@ describe("the checklist, on each Subscription", () => {
     }
   });
 
+  it("says Claude Docs can't be disconnected and stops no session, though a session calls none of its tools (#996)", () => {
+    expect(checklist).toContain("Claude Docs comes with every Claude account and can't be disconnected there. It stops no session, and a session calls none of its tools.");
+  });
+
   it("names the bare one as the read library does, and sets its variable to that name", () => {
     expect(/the bare Session environment from the environment selector under the message box: named `([^`]+)`/.exec(checklist)?.[1]).toBe(BARE_SESSION_ENVIRONMENT);
     expect(checklist).toContain(`one variable, \`FABRIK_SESSION_ENVIRONMENT=${BARE_SESSION_ENVIRONMENT}\`, and no setup script`);
